@@ -83,7 +83,6 @@ extension ListView: UIScrollViewDelegate {
 
     public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
         _delegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: decelerate)
-        if isContentSizeUpdateSkipped { setNeedsLayout() }
     }
 
     public func scrollViewWillBeginDecelerating(_ scrollView: UIScrollView) {

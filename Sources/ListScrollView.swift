@@ -6,61 +6,6 @@
 import UIKit
 
 open class ListScrollView: UIScrollView {
-    struct SpringBack {
-        var lambda: Double
-        var c1: Double
-        var c2: Double
-
-        init(initialVelocity velocity: Double, distance: Double) {
-            lambda = 2 * .pi / 0.575
-            c1 = distance
-            c2 = velocity * 1e3 + lambda * distance
-        }
-
-        func velocity(at time: Double) -> Double {
-            (c2 - lambda * (c1 + c2 * time)) * exp(-lambda * time) / 1e3
-        }
-
-        func value(at time: Double) -> Double? {
-            let offset = (c1 + c2 * time) * exp(-lambda * time)
-            let velocity = velocity(at: time)
-            if abs(offset) < 0.1, abs(velocity) < 1e-2 {
-                return nil
-            } else {
-                return offset
-            }
-        }
-    }
-
-    struct ScrollingProperty {
-        var target: CGFloat
-        var springBack: SpringBack
-        let startTime = CACurrentMediaTime()
-
-        var isFinished: Bool = false
-
-        init?(target: CGFloat, current: CGFloat) {
-            if target == current {
-                return nil
-            }
-            self.target = target
-
-            let distance = Double(target - current)
-            springBack = .init(initialVelocity: -distance / 100, distance: distance)
-        }
-
-        mutating func value(at time: Double) -> CGFloat {
-            if isFinished {
-                return target
-            }
-            guard let value = springBack.value(at: time - startTime) else {
-                isFinished = true
-                return target
-            }
-            return target - value
-        }
-    }
-
     var scrollingDisplayLink: CADisplayLink?
     var xScrollingProperty: ScrollingProperty?
     var yScrollingProperty: ScrollingProperty?
@@ -79,6 +24,26 @@ open class ListScrollView: UIScrollView {
         )
     }
 
+    override open var contentSize: CGSize {
+        get { super.contentSize }
+        set {
+            let currentOffset = contentOffset
+            super.contentSize = newValue
+            contentOffset = currentOffset
+            let suppose = nearestScrollLocationInBounds(offset: currentOffset)
+            scroll(to: suppose, animated: true)
+        }
+    }
+
+    func nearestScrollLocationInBounds(offset: CGPoint) -> CGPoint {
+        let min = minimumContentOffset
+        let max = maximumContentOffset
+        return .init(
+            x: CGFloat.minimum(CGFloat.maximum(min.x, offset.x), max.x),
+            y: CGFloat.minimum(CGFloat.maximum(min.y, offset.y), max.y)
+        )
+    }
+
     /// Scrolls the position of the scroll view to the content offset you provide.
     public func scroll(to offset: CGPoint, animated: Bool = false) {
         if !animated {
@@ -87,7 +52,6 @@ open class ListScrollView: UIScrollView {
             return
         }
 
-        var shouldScrolling = false
         let currentContentOffset = contentOffset
         if bounds.width > 0 {
             if var property = xScrollingProperty {
@@ -96,7 +60,6 @@ open class ListScrollView: UIScrollView {
             } else {
                 xScrollingProperty = .init(target: offset.x, current: currentContentOffset.x)
             }
-            shouldScrolling = true
         }
         if bounds.height > 0 {
             if var property = yScrollingProperty {
@@ -105,10 +68,10 @@ open class ListScrollView: UIScrollView {
             } else {
                 yScrollingProperty = .init(target: offset.y, current: currentContentOffset.y)
             }
-            shouldScrolling = true
         }
 
-        if shouldScrolling, scrollingDisplayLink == nil {
+        if xScrollingProperty != nil || yScrollingProperty != nil, scrollingDisplayLink == nil {
+            print("[*] scroll from \(contentOffset) to \(offset) animated: \(animated)")
             scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
             if #available(iOS 15.0, macCatalyst 15.0, *) {
                 scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 60, maximum: 120, preferred: 120)
@@ -128,53 +91,27 @@ open class ListScrollView: UIScrollView {
     @objc
     func handleScrollingAnimation(_ sender: CADisplayLink) {
         if isTracking || (xScrollingProperty == nil && yScrollingProperty == nil) {
-            // No animation is currently in progress,
-            // releasing the display link.
+            // if user is handling dragging or animation is finished
             sender.invalidate()
             scrollingDisplayLink = nil
             return
         }
 
-        func clamp<T>(_ value: T, min: T, max: T, clamped: inout Bool) -> T where T: Comparable {
-            clamped = value < min || value > max
-            return Swift.min(Swift.max(value, min), max)
-        }
-
         let time = CACurrentMediaTime()
         var targetContentOffset = contentOffset
-        let min = minimumContentOffset
-        let max = maximumContentOffset
+
         if var property = xScrollingProperty {
-            defer {
-                if property.isFinished {
-                    xScrollingProperty = nil
-                } else {
-                    xScrollingProperty = property
-                }
-            }
-            var x = property.value(at: time)
-            var isClamped = false
-            x = clamp(x, min: min.x, max: max.x, clamped: &isClamped)
-            if isClamped {
-                property.isFinished = true
-            }
-            targetContentOffset.x = x
+            targetContentOffset.x = property.value(at: time)
         }
+        if abs(targetContentOffset.x - contentOffset.x) < 1 {
+            xScrollingProperty = nil
+        }
+
         if var property = yScrollingProperty {
-            defer {
-                if property.isFinished {
-                    yScrollingProperty = nil
-                } else {
-                    yScrollingProperty = property
-                }
-            }
-            var y = property.value(at: time)
-            var isClamped = false
-            y = clamp(y, min: min.y, max: max.y, clamped: &isClamped)
-            if isClamped {
-                property.isFinished = true
-            }
-            targetContentOffset.y = y
+            targetContentOffset.y = property.value(at: time)
+        }
+        if abs(targetContentOffset.y - contentOffset.y) < 1 {
+            yScrollingProperty = nil
         }
 
         setContentOffset(targetContentOffset, animated: false)

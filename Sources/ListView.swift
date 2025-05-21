@@ -25,8 +25,6 @@ open class ListView: ListScrollView, Identifiable {
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
 
-    var isContentSizeUpdateSkipped: Bool = false
-
     public var verticalExtendingSpacer: CGFloat = 0 {
         didSet { setNeedsLayout() }
     }
@@ -44,21 +42,28 @@ open class ListView: ListScrollView, Identifiable {
         fatalError()
     }
 
+    var supposedContentSize: CGSize {
+        .init(width: frame.width, height: layoutCache.contentHeight + verticalExtendingSpacer)
+    }
+
+    override open var frame: CGRect {
+        get { super.frame }
+        set {
+            if super.frame != newValue {
+                // prevent scroll animation being canceled
+                super.frame = newValue
+            }
+        }
+    }
+
     override open func layoutSubviews() {
         super.layoutSubviews()
 
         let bounds = bounds
+        let boundsWidthChanged = layoutCache.contentBounds.width != bounds.width
         layoutCache.contentBounds = bounds
 
-        if !isTracking {
-            contentSize = .init(
-                width: frame.width,
-                height: layoutCache.contentHeight + verticalExtendingSpacer
-            )
-            isContentSizeUpdateSkipped = false
-        } else {
-            isContentSizeUpdateSkipped = true
-        }
+        if boundsWidthChanged { contentSize = supposedContentSize }
 
         let contentOffsetY = contentOffset.y
         let minimumContentOffsetY = minimumContentOffset.y
@@ -92,10 +97,7 @@ open class ListView: ListScrollView, Identifiable {
     func updateVisibleItemsLayout() {
         let bounds = bounds
         layoutCache.contentBounds = bounds
-        contentSize = .init(
-            width: ceil(frame.width),
-            height: layoutCache.contentHeight + verticalExtendingSpacer
-        )
+        contentSize = supposedContentSize
 
         for (id, rowView) in visibleRows {
             rowView.frame = rectForRow(with: id)

@@ -5,7 +5,6 @@
 //  Created by 秋星桥 on 5/21/25.
 //
 
-import AlertController
 import ListViewKit
 import UIKit
 
@@ -148,6 +147,8 @@ extension ViewController: ListViewAdapter {
     }
 
     func listView(_ listView: ListView, onEvent event: ListViewEvent) {
-        print("[*] listView \(listView.id.uuidString.components(separatedBy: "-").first!) received an event \(event)")
+        _ = listView
+        _ = event
+//        print("[*] listView \(listView.id.uuidString.components(separatedBy: "-").first!) received an event \(event)")
     }
 }
