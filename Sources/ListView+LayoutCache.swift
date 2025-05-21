@@ -106,7 +106,6 @@ extension ListView {
 
         func requestInvalidateHeights<S>(for identifiers: S) where S: Sequence, S.Element: Hashable {
             for id in identifiers {
-                print("Requesting invalidate height for \(id)")
                 heightCache.removeValue(forKey: id)
             }
             identifiers

@@ -110,8 +110,20 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
                 listView.reconfigureRowView(for: identifier)
             }
         }
-        listView.prepareVisibleRows()
 
+        let reordered = diffResult.reordered
+        listView.layoutCache.requestInvalidateHeights(for: reordered.map(\.identifier))
+        for reorderInfo in reordered {
+            let identifier = reorderInfo.identifier
+            // Force update/reconfigure for reordered items as requested
+            if let newRowView = listView.updateRowKindIfNeeded(for: identifier) {
+                _ = newRowView
+            } else {
+                listView.reconfigureRowView(for: identifier)
+            }
+        }
+
+        listView.prepareVisibleRows()
         listView.layoutCache.finalizeInvalidationRequests()
 
         if animatingDifferences {
@@ -156,14 +168,21 @@ extension ListViewDiffableDataSource {
             let identifier: T
         }
 
+        struct ReorderIndex {
+            let oldIndex: Int
+            let newIndex: Int
+            let identifier: T
+        }
+
         let removed: [Index]
         let added: [Index]
         let updated: [Index]
+        let reordered: [ReorderIndex]
 
         let elements: OrderedDictionary<T, Item>
 
         var isEmpty: Bool {
-            removed.isEmpty && added.isEmpty && updated.isEmpty
+            removed.isEmpty && added.isEmpty && updated.isEmpty && reordered.isEmpty
         }
     }
 
@@ -175,27 +194,63 @@ extension ListViewDiffableDataSource {
             snapshot.count == other.count,
             "Duplicate identifiers found in the new collection."
         )
-        let removed = elements.keys.subtracting(snapshot.keys).map { identifier in
+
+        let oldKeys = Set(elements.keys)
+        let newKeys = Set(snapshot.keys)
+        let removedKeys = oldKeys.subtracting(newKeys)
+        let addedKeys = newKeys.subtracting(oldKeys)
+        let commonKeys = oldKeys.intersection(newKeys)
+
+        var oldIndexMap = [Item.ID: Int]()
+        var newIndexMap = [Item.ID: Int]()
+
+        for identifier in commonKeys {
+            oldIndexMap[identifier] = elements.index(forKey: identifier)!
+            newIndexMap[identifier] = snapshot.index(forKey: identifier)!
+        }
+
+        let removed = removedKeys.map { identifier in
             SequenceDiffResult<Item.ID>.Index(
                 index: elements.index(forKey: identifier)!,
                 identifier: identifier
             )
         }
-        let added = snapshot.keys.subtracting(elements.keys).map { identifier in
+
+        let added = addedKeys.map { identifier in
             SequenceDiffResult<Item.ID>.Index(
                 index: snapshot.index(forKey: identifier)!,
                 identifier: identifier
             )
         }
-        let updated = snapshot.keys.intersection(elements.keys).filter { identifier in
-            snapshot[identifier] != elements[identifier]
-        }.map { identifier in
-            SequenceDiffResult<Item.ID>.Index(
-                index: snapshot.index(forKey: identifier)!,
-                identifier: identifier
-            )
+
+        var updated = [SequenceDiffResult<Item.ID>.Index]()
+        var reordered = [SequenceDiffResult<Item.ID>.ReorderIndex]()
+
+        for identifier in commonKeys {
+            let oldIndex = oldIndexMap[identifier]!
+            let newIndex = newIndexMap[identifier]!
+
+            if elements[identifier] != snapshot[identifier] {
+                updated.append(.init(
+                    index: newIndex,
+                    identifier: identifier
+                ))
+            } else if oldIndex != newIndex {
+                reordered.append(.init(
+                    oldIndex: oldIndex,
+                    newIndex: newIndex,
+                    identifier: identifier
+                ))
+            }
         }
-        return .init(removed: removed, added: added, updated: updated, elements: snapshot)
+
+        return .init(
+            removed: removed,
+            added: added,
+            updated: updated,
+            reordered: reordered,
+            elements: snapshot
+        )
     }
 }
 

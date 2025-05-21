@@ -61,7 +61,10 @@ class ViewController: UIViewController {
         }
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
 
-        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem))
+        navigationItem.rightBarButtonItems = [
+            UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(shuffle)),
+            UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem)),
+        ]
     }
 
     @objc func addItem() {
@@ -78,6 +81,23 @@ class ViewController: UIViewController {
             dataSource.applySnapshot(snapshot, animatingDifferences: true)
         }
         present(alert, animated: true)
+    }
+
+    @objc func shuffle() {
+        var snapshot = dataSource.snapshot()
+        var items: [ViewModel] = []
+        while true {
+            if let item = snapshot.remove(at: 0) {
+                items.append(item)
+            } else {
+                break
+            }
+        }
+        assert(snapshot.isEmpty)
+        for item in items.shuffled() {
+            snapshot.append(item)
+        }
+        dataSource.applySnapshot(snapshot, animatingDifferences: true)
     }
 
     override func viewWillLayoutSubviews() {
@@ -102,7 +122,7 @@ extension ViewController: ListViewAdapter {
         ViewModel.RowKind.text
     }
 
-    func makeListRowView(for _: RowKind) -> ListRowView {
+    func listViewMakeRow(for _: RowKind) -> ListRowView {
         let textView = ListRowView(frame: .init(x: 0, y: 0, width: 50, height: 50))
         let label = UILabel(frame: textView.bounds.insetBy(dx: 16, dy: 16))
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -119,11 +139,7 @@ extension ViewController: ListViewAdapter {
         return textView
     }
 
-    func listView(
-        _: ListView,
-        willDisplayContextMenuAt _: CGPoint,
-        for _: ItemType,
-        at _: Int,
-        view _: ListRowView
-    ) {}
+    func listView(_: ListView, onEvent event: ListViewEvent, for _: ItemType, at _: Int, rowView _: ListRowView) {
+        print(event)
+    }
 }

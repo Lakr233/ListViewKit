@@ -15,7 +15,7 @@ open class ListView: ListScrollView {
     public weak var dataSource: DataSource?
     public weak var adapter: (any Adapter)?
 
-    private var _delegate: (any UIScrollViewDelegate)?
+    private(set) var _delegate: (any UIScrollViewDelegate)?
     override open var delegate: (any UIScrollViewDelegate)? {
         set { _delegate = newValue }
         get { _delegate }
@@ -39,7 +39,7 @@ open class ListView: ListScrollView {
     private(set) lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     private lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
     /// A Boolean value that indicates whether the content size update was skipped.
-    private var isContentSizeUpdateSkipped: Bool = false
+    private(set) var isContentSizeUpdateSkipped: Bool = false
 
     public var verticalExtendingSpacer: CGFloat = 0 {
         didSet { setNeedsLayout() }
@@ -246,7 +246,7 @@ extension ListView {
                 let row: ListRowView = if let reusedRow = pool.popFirst() {
                     reusedRow
                 } else {
-                    adapter.makeListRowView(for: kind)
+                    adapter.listViewMakeRow(for: kind)
                 }
                 row.rowKind = kind
                 configureRowView(row, for: item, at: index)
@@ -283,10 +283,6 @@ extension ListView {
         guard let item = dataSource.item(at: index, in: self) else { return }
         rowView.prepareForReuse()
         adapter.listView(self, configureRowView: rowView, for: item, at: index)
-        rowView._contextMenuInteractionCallback = { [unowned self] _, location in
-            let converted = rowView.contentView.convert(location, to: self)
-            adapter.listView(self, willDisplayContextMenuAt: converted, for: item, at: index, view: rowView)
-        }
     }
 
     private func recycleAllVisibleRows() {
@@ -360,68 +356,5 @@ extension ListView {
         // The kind of the row has changed.
         recycleRow(with: identifier)
         return ensureRowView(for: index)
-    }
-}
-
-// MARK: Delegate Forwarding
-
-extension ListView: UIScrollViewDelegate {
-    public func scrollViewDidScroll(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidScroll?(scrollView)
-    }
-
-    public func scrollViewDidZoom(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidZoom?(scrollView)
-    }
-
-    public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewWillBeginDragging?(scrollView)
-    }
-
-    public func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
-        _delegate?.scrollViewWillEndDragging?(scrollView, withVelocity: velocity, targetContentOffset: targetContentOffset)
-    }
-
-    public func scrollViewDidEndDragging(_ scrollView: UIScrollView, willDecelerate decelerate: Bool) {
-        _delegate?.scrollViewDidEndDragging?(scrollView, willDecelerate: decelerate)
-        if isContentSizeUpdateSkipped {
-            setNeedsLayout()
-        }
-    }
-
-    public func scrollViewWillBeginDecelerating(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewWillBeginDecelerating?(scrollView)
-    }
-
-    public func scrollViewDidEndDecelerating(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidEndDecelerating?(scrollView)
-    }
-
-    public func scrollViewDidEndScrollingAnimation(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidEndScrollingAnimation?(scrollView)
-    }
-
-    public func viewForZooming(in scrollView: UIScrollView) -> UIView? {
-        _delegate?.viewForZooming?(in: scrollView)
-    }
-
-    public func scrollViewWillBeginZooming(_ scrollView: UIScrollView, with view: UIView?) {
-        _delegate?.scrollViewWillBeginZooming?(scrollView, with: view)
-    }
-
-    public func scrollViewDidEndZooming(_ scrollView: UIScrollView, with view: UIView?, atScale scale: CGFloat) {
-        _delegate?.scrollViewDidEndZooming?(scrollView, with: view, atScale: scale)
-    }
-
-    public func scrollViewShouldScrollToTop(_ scrollView: UIScrollView) -> Bool {
-        _delegate?.scrollViewShouldScrollToTop?(scrollView) ?? true
-    }
-
-    public func scrollViewDidScrollToTop(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidScrollToTop?(scrollView)
-    }
-
-    public func scrollViewDidChangeAdjustedContentInset(_ scrollView: UIScrollView) {
-        _delegate?.scrollViewDidChangeAdjustedContentInset?(scrollView)
     }
 }
