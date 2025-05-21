@@ -18,10 +18,10 @@ extension ViewController: ListViewAdapter {
         let textView = rowView as! SimpleRow
         textView.configure(with: vm.text)
         textView.contextMenu = .init(children: [
-            UIAction(title: "Copy") { _ in
+            UIAction(title: "Copy", image: UIImage(systemName: "document.on.document")) { _ in
                 UIPasteboard.general.string = vm.text
             },
-            UIAction(title: "Delete") { [weak self] _ in
+            UIAction(title: "Delete", image: UIImage(systemName: "trash")) { [weak self] _ in
                 guard let self else { return }
                 var snapshot = dataSource.snapshot()
                 snapshot.remove(at: index)
