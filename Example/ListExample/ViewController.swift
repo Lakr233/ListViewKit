@@ -81,7 +81,7 @@ class ViewController: UIViewController {
         ].randomElement()!
         let vm = ViewModel(text: content)
         var snapshot = dataSource.snapshot()
-        snapshot.append(vm)
+        snapshot.insert(vm, at: (0 ..< snapshot.count).randomElement() ?? 0)
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
     }
 
