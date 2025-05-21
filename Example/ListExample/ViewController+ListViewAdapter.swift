@@ -35,8 +35,10 @@ extension ViewController: ListViewAdapter {
         ViewModel.RowKind.text
     }
 
-    func listViewMakeRow(for _: RowKind) -> ListRowView {
-        SimpleRow()
+    func listViewMakeRow(for rowKind: RowKind) -> ListRowView {
+        switch rowKind as! ViewModel.RowKind {
+        case .text: SimpleRow()
+        }
     }
 
     func listView(_ listView: ListView, onEvent event: ListViewEvent) {
