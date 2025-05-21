@@ -6,7 +6,6 @@
 import UIKit
 
 public enum ListViewEvent {
-    case didLongPressItem(location: CGPoint)
     case didUpdateContentOffset(offset: CGPoint)
 }
 
@@ -20,5 +19,5 @@ public protocol ListViewAdapter: AnyObject {
     func listView(_ list: ListView, heightFor item: ItemType, at index: Int) -> CGFloat
     func listView(_ list: ListView, configureRowView rowView: ListRowView, for item: ItemType, at index: Int)
 
-    func listView(_ list: ListView, onEvent event: ListViewEvent, for item: ItemType, at index: Int, rowView: ListRowView)
+    func listView(_ list: ListView, onEvent event: ListViewEvent)
 }

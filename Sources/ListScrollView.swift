@@ -6,10 +6,10 @@
 import UIKit
 
 open class ListScrollView: UIScrollView {
-    private struct SpringBack {
-        private var lambda: Double
-        private var c1: Double
-        private var c2: Double
+    struct SpringBack {
+        var lambda: Double
+        var c1: Double
+        var c2: Double
 
         init(initialVelocity velocity: Double, distance: Double) {
             lambda = 2 * .pi / 0.575
@@ -32,10 +32,10 @@ open class ListScrollView: UIScrollView {
         }
     }
 
-    private struct ScrollingProperty {
+    struct ScrollingProperty {
         var target: CGFloat
         var springBack: SpringBack
-        private let startTime = CACurrentMediaTime()
+        let startTime = CACurrentMediaTime()
 
         var isFinished: Bool = false
 
@@ -61,9 +61,9 @@ open class ListScrollView: UIScrollView {
         }
     }
 
-    private var scrollingDisplayLink: CADisplayLink?
-    private var xScrollingProperty: ScrollingProperty?
-    private var yScrollingProperty: ScrollingProperty?
+    var scrollingDisplayLink: CADisplayLink?
+    var xScrollingProperty: ScrollingProperty?
+    var yScrollingProperty: ScrollingProperty?
 
     /// The minimum point (in content view coordinates) that the view can be scrolled.
     public var minimumContentOffset: CGPoint {
@@ -118,7 +118,7 @@ open class ListScrollView: UIScrollView {
     }
 
     /// Cancels any current scrolling animations.
-    private func cancelCurrentScrolling() {
+    func cancelCurrentScrolling() {
         xScrollingProperty = nil
         yScrollingProperty = nil
         scrollingDisplayLink?.invalidate()
@@ -126,7 +126,7 @@ open class ListScrollView: UIScrollView {
     }
 
     @objc
-    private func handleScrollingAnimation(_ sender: CADisplayLink) {
+    func handleScrollingAnimation(_ sender: CADisplayLink) {
         if isTracking || (xScrollingProperty == nil && yScrollingProperty == nil) {
             // No animation is currently in progress,
             // releasing the display link.

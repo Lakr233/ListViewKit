@@ -59,28 +59,30 @@ class ViewController: UIViewController {
         ] {
             snapshot.append(content)
         }
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        dataSource.applySnapshot(snapshot, animatingDifferences: false)
 
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(shuffle)),
             UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem)),
+            UIBarButtonItem(barButtonSystemItem: .trash, target: self, action: #selector(removeItem)),
         ]
     }
 
     @objc func addItem() {
-        let alert = AlertInputViewController(
-            title: "Add Text",
-            placeholder: "...",
-            text: "你好我是卢本伟",
-            cancelButtonText: "Cancel",
-            doneButtonText: "Insert"
-        ) { [weak self] text in
-            guard let self, !text.isEmpty else { return }
-            var snapshot = dataSource.snapshot()
-            snapshot.append(ViewModel(text: text))
-            dataSource.applySnapshot(snapshot, animatingDifferences: true)
-        }
-        present(alert, animated: true)
+        let content = [
+            "若遺憾遺憾",
+            "若心酸心酸",
+            "又不是非要圓滿",
+            "來年秋風亂",
+            "笑看紅葉轉",
+            "深情",
+            "只好",
+            "淺談",
+        ].randomElement()!
+        let vm = ViewModel(text: content)
+        var snapshot = dataSource.snapshot()
+        snapshot.append(vm)
+        dataSource.applySnapshot(snapshot, animatingDifferences: true)
     }
 
     @objc func shuffle() {
@@ -97,6 +99,12 @@ class ViewController: UIViewController {
         for item in items.shuffled() {
             snapshot.append(item)
         }
+        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+    }
+
+    @objc func removeItem() {
+        var snapshot = dataSource.snapshot()
+        snapshot.remove(at: (0 ..< snapshot.count).randomElement() ?? 0)
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
     }
 
@@ -139,7 +147,7 @@ extension ViewController: ListViewAdapter {
         return textView
     }
 
-    func listView(_: ListView, onEvent event: ListViewEvent, for _: ItemType, at _: Int, rowView _: ListRowView) {
-        print(event)
+    func listView(_ listView: ListView, onEvent event: ListViewEvent) {
+        print("[*] listView \(listView.id.uuidString.components(separatedBy: "-").first!) received an event \(event)")
     }
 }

@@ -8,7 +8,6 @@
 
 /* Begin PBXBuildFile section */
 		50DDAF502DDE177300351E46 /* ListViewKit in Frameworks */ = {isa = PBXBuildFile; productRef = 50DDAF4F2DDE177300351E46 /* ListViewKit */; };
-		50DDAF832DDE245800351E46 /* AlertController in Frameworks */ = {isa = PBXBuildFile; productRef = 50DDAF822DDE245800351E46 /* AlertController */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -42,7 +41,6 @@
 			buildActionMask = 2147483647;
 			files = (
 				50DDAF502DDE177300351E46 /* ListViewKit in Frameworks */,
-				50DDAF832DDE245800351E46 /* AlertController in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -94,7 +92,6 @@
 			name = ListExample;
 			packageProductDependencies = (
 				50DDAF4F2DDE177300351E46 /* ListViewKit */,
-				50DDAF822DDE245800351E46 /* AlertController */,
 			);
 			productName = ListExample;
 			productReference = 50DDAF162DDE16FA00351E46 /* ListExample.app */;
@@ -124,7 +121,6 @@
 			mainGroup = 50DDAF0D2DDE16FA00351E46;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				50DDAF812DDE245800351E46 /* XCRemoteSwiftPackageReference "AlertController" */,
 			);
 			preferredProjectObjectVersion = 77;
 			projectDirPath = "";
@@ -358,26 +354,10 @@
 		};
 /* End XCConfigurationList section */
 
-/* Begin XCRemoteSwiftPackageReference section */
-		50DDAF812DDE245800351E46 /* XCRemoteSwiftPackageReference "AlertController" */ = {
-			isa = XCRemoteSwiftPackageReference;
-			repositoryURL = "https://github.com/Lakr233/AlertController";
-			requirement = {
-				kind = upToNextMajorVersion;
-				minimumVersion = 1.1.0;
-			};
-		};
-/* End XCRemoteSwiftPackageReference section */
-
 /* Begin XCSwiftPackageProductDependency section */
 		50DDAF4F2DDE177300351E46 /* ListViewKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ListViewKit;
-		};
-		50DDAF822DDE245800351E46 /* AlertController */ = {
-			isa = XCSwiftPackageProductDependency;
-			package = 50DDAF812DDE245800351E46 /* XCRemoteSwiftPackageReference "AlertController" */;
-			productName = AlertController;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

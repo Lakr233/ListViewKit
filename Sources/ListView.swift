@@ -6,40 +6,26 @@
 import DequeModule
 import UIKit
 
-/// A view that presents data using rows in a single column.
-open class ListView: ListScrollView {
+open class ListView: ListScrollView, Identifiable {
+    public var id: UUID = .init()
+
     public typealias DataSource = ListViewDataSource
     public typealias Adapter = ListViewAdapter
 
-    /// The object that acts as the data source of the list view.
     public weak var dataSource: DataSource?
     public weak var adapter: (any Adapter)?
 
-    private(set) var _delegate: (any UIScrollViewDelegate)?
+    var _delegate: (any UIScrollViewDelegate)?
     override open var delegate: (any UIScrollViewDelegate)? {
         set { _delegate = newValue }
         get { _delegate }
     }
 
-    /// An array of indices, each identifying a visible row in the list view.
-    public var indicesForVisibleRows: [Int] {
-        let visibleRect = CGRect(origin: contentOffset, size: bounds.size)
-        return layoutCache.allFrames()
-            .filter { $0.value.intersects(visibleRect) }
-            .map(\.key)
-            .sorted()
-    }
+    lazy var layoutCache: LayoutCache = .init(self)
+    lazy var visibleRows: [AnyHashable: ListRowView] = [:]
+    lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
 
-    /// The row views that are visible in the list view.
-    public var visibleRowViews: [ListRowView] {
-        visibleRows.values.map(\.self)
-    }
-
-    private(set) lazy var layoutCache: LayoutCache = .init(self)
-    private(set) lazy var visibleRows: [AnyHashable: ListRowView] = [:]
-    private lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
-    /// A Boolean value that indicates whether the content size update was skipped.
-    private(set) var isContentSizeUpdateSkipped: Bool = false
+    var isContentSizeUpdateSkipped: Bool = false
 
     public var verticalExtendingSpacer: CGFloat = 0 {
         didSet { setNeedsLayout() }
@@ -99,10 +85,10 @@ open class ListView: ListScrollView {
                 maxY = row.frame.maxY
             }
         #endif
+
         removeUnusedRowsFromSuperview()
     }
 
-    /// Crafted for animating contents already on screen
     func updateVisibleItemsLayout() {
         let bounds = bounds
         layoutCache.contentBounds = bounds
@@ -118,99 +104,11 @@ open class ListView: ListScrollView {
 
         removeUnusedRowsFromSuperview()
     }
-
-    public func invaliateLayout() {
-        layoutCache.invalidateAll()
-        setNeedsLayout()
-    }
-
-    /// Returns the row view at the index you specify.
-    public func rowView(at index: Int) -> ListRowView? {
-        guard let identifier = dataSource?.itemIdentifier(at: index, in: self) else {
-            return nil
-        }
-        return visibleRows[AnyHashable(identifier)]
-    }
-
-    /// Returns the drawing area for a row that an index path identifies.
-    public func rectForRow(at index: Int) -> CGRect {
-        layoutCache.frame(for: index) ?? .zero
-    }
-
-    /// Returns the drawing area for a row that an identifier identifies.
-    public func rectForRow(with identifier: some Hashable) -> CGRect {
-        guard let index = dataSource?.itemIndex(for: identifier, in: self) else {
-            return .zero
-        }
-        return rectForRow(at: index)
-    }
-
-    /// Reloads all rows of the list view.
-    public func reloadData() {
-        visibleRows.forEach { $0.value.removeFromSuperview() }
-        visibleRows.removeAll()
-        removeUnusedRowsFromSuperview()
-        reusableRows.removeAll()
-        invaliateLayout()
-    }
 }
 
-public extension ListView {
-    /// The position in the list view (top, middle, bottom) to scroll a specified row to.
-    enum ScrollPosition {
-        /// The list view scrolls the row of interest to be fully visible with a minimum of movement.
-        case none
-        /// The list view scrolls the row of interest to the top of the visible table view.
-        case top
-        /// The list view scrolls the row of interest to the middle of the visible table view.
-        case middle
-        /// The list view scrolls the row of interest to the bottom of the visible table view.
-        case bottom
-    }
-
-    /// Scrolls through the list view until a row that an index path identifies is at a particular location on the screen.
-    func scrollToRow(at index: Int, at scrollPosition: ScrollPosition, animated: Bool) {
-        let targetRect = rectForRow(at: index)
-        let targetContentOffsetY: CGFloat = {
-            switch scrollPosition {
-            case .none:
-                let visibleRect = CGRect(origin: contentOffset, size: bounds.size)
-                if targetRect.height > visibleRect.height {
-                    return targetRect.minY
-                }
-
-                if visibleRect.contains(targetRect) {
-                    // The `targetRect` is already visible.
-                    return contentOffset.y
-                }
-
-                return if targetRect.minY < visibleRect.minY {
-                    // The `targetRect` is above `visibleRect`
-                    targetRect.minY
-                } else {
-                    // The `targetRect` is below `visibleRect`
-                    targetRect.maxY - bounds.height
-                }
-            case .top:
-                return targetRect.minY
-            case .middle:
-                return targetRect.midY - bounds.midY
-            case .bottom:
-                return targetRect.maxY - bounds.height
-            }
-        }()
-        scroll(
-            to: .init(
-                x: 0,
-                y: min(max(minimumContentOffset.y, targetContentOffsetY), maximumContentOffset.y)
-            ),
-            animated: animated
-        )
-    }
-}
-
+// internal api
 extension ListView {
-    private func reusableDequeRef(for kind: AnyHashable) -> Reference<Deque<ListRowView>> {
+    func reusableDequeRef(for kind: AnyHashable) -> Reference<Deque<ListRowView>> {
         if let ref = reusableRows[kind] {
             return ref
         }
@@ -220,7 +118,7 @@ extension ListView {
     }
 
     @discardableResult
-    private func ensureRowView(for index: Int) -> ListRowView {
+    func ensureRowView(for index: Int) -> ListRowView {
         guard let identifier = dataSource?.itemIdentifier(at: index, in: self) else {
             assertionFailure()
             return .init()
@@ -285,7 +183,7 @@ extension ListView {
         adapter.listView(self, configureRowView: rowView, for: item, at: index)
     }
 
-    private func recycleAllVisibleRows() {
+    func recycleAllVisibleRows() {
         let visibleRect = CGRect(origin: contentOffset, size: bounds.size)
         var identifiersNeedsRecycled: Set<AnyHashable> = .init()
         for (id, _) in visibleRows {
@@ -321,7 +219,7 @@ extension ListView {
             .modifying { $0.append(rowView) }
     }
 
-    private func removeUnusedRowsFromSuperview() {
+    func removeUnusedRowsFromSuperview() {
         for dequeRef in reusableRows.values {
             for item in dequeRef.wrappedValue {
                 item.removeFromSuperview()

@@ -6,8 +6,8 @@
 import UIKit
 
 open class ListRowView: UIView {
-    public internal(set) var rowKind: (any Hashable)?
-    public private(set) var contentView: UIView = .init()
+    public var rowKind: (any Hashable)?
+    public var contentView: UIView = .init()
 
     open func prepareForReuse() {}
 
@@ -28,14 +28,5 @@ open class ListRowView: UIView {
         super.layoutSubviews()
 
         contentView.frame = bounds
-    }
-
-    func withAnimation(_ animation: @escaping () -> Void, completion: ((Bool) -> Void)? = nil) {
-        guard window != nil, frame != .zero else {
-            animation()
-            completion?(true)
-            return
-        }
-        withListAnimation(animation, completion: completion)
     }
 }

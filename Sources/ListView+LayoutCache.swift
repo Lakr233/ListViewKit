@@ -7,12 +7,12 @@ import UIKit
 
 extension ListView {
     final class LayoutCache {
-        private weak var listView: ListView?
+        weak var listView: ListView?
 
-        private var heightCache: [AnyHashable: CGFloat] = [:]
-        private var frameCache: [Int: CGRect] = [:]
-        private var contentHeightCache: CGFloat?
-        private var isCacheInvalid: Bool {
+        var heightCache: [AnyHashable: CGFloat] = [:]
+        var frameCache: [Int: CGRect] = [:]
+        var contentHeightCache: CGFloat?
+        var isCacheInvalid: Bool {
             numberOfItems != heightCache.count
         }
 
@@ -39,11 +39,11 @@ extension ListView {
             return contentHeightCache ?? 0
         }
 
-        private var numberOfItems: Int {
+        var numberOfItems: Int {
             listView?.dataSource?.numberOfItems(in: listView!) ?? 0
         }
 
-        private func rebuild() {
+        func rebuild() {
             guard let listView else { return }
             guard let adapter = listView.adapter else { return }
             guard let dataSource = listView.dataSource else { return }
@@ -64,7 +64,7 @@ extension ListView {
             contentHeightCache = rebuildFrame(listView: listView, count: count)
         }
 
-        private func rebuildFrame(listView: ListView, count: Int) -> CGFloat {
+        func rebuildFrame(listView: ListView, count: Int) -> CGFloat {
             let contentWidth = listView.bounds.width
             var usedHeight: CGFloat = 0
             for index in 0 ..< count {
@@ -77,13 +77,13 @@ extension ListView {
             return usedHeight
         }
 
-        private func identifier(for index: Int) -> AnyHashable? {
+        func identifier(for index: Int) -> AnyHashable? {
             guard let listView else { return nil }
             let identifier = listView.dataSource?.itemIdentifier(at: index, in: listView)
             return identifier.flatMap { .init($0) }
         }
 
-        private func index(for identifier: AnyHashable) -> Int? {
+        func index(for identifier: AnyHashable) -> Int? {
             guard let listView else { return nil }
             return listView.dataSource?.itemIndex(for: identifier, in: listView)
         }
