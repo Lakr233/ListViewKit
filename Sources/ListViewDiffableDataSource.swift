@@ -18,6 +18,8 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
 
     public init(listView: ListView) {
         self.listView = listView
+        super.init()
+        listView.dataSource = self
     }
 
     public func snapshot() -> Snapshot {

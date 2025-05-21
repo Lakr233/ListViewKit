@@ -33,7 +33,6 @@ class ViewController: UIViewController {
         view.addSubview(listView)
 
         listView.translatesAutoresizingMaskIntoConstraints = false
-        listView.dataSource = dataSource
         listView.verticalExtendingSpacer = 500
 
         NSLayoutConstraint.activate([
