@@ -8,16 +8,42 @@
 import ListViewKit
 import UIKit
 
-class ViewController: UIViewController {
-    struct ViewModel: Identifiable, Hashable {
-        var id: UUID = .init()
-        var text: String = ""
+struct ViewModel: Identifiable, Hashable {
+    var id: UUID = .init()
+    var text: String = ""
 
-        enum RowKind: Hashable {
-            case text
-        }
+    enum RowKind: Hashable {
+        case text
+    }
+}
+
+class SimpleRow: ListRowView {
+    let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.textAlignment = .left
+        label.textColor = .label
+        label.numberOfLines = 0
+        contentView.addSubview(label)
+        setNeedsUpdateConstraints()
     }
 
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        label.frame = contentView.bounds.insetBy(dx: 16, dy: 8)
+    }
+
+    func configure(with text: String) {
+        label.text = text
+    }
+
+    static func height(for _: String, width _: CGFloat) -> CGFloat {
+        64
+    }
+}
+
+class ViewController: UIViewController {
     let listView: ListView
     let dataSource: ListViewDiffableDataSource<ViewModel>
 
@@ -120,8 +146,8 @@ extension ViewController: ListViewAdapter {
 
     func listView(_: ListView, configureRowView rowView: ListRowView, for item: ItemType, at index: Int) {
         let vm = item as! ViewModel
-        let label = rowView.subviews.first?.subviews.first as! UILabel
-        label.text = vm.text
+        let textView = rowView as! SimpleRow
+        textView.configure(with: vm.text)
         rowView.backgroundColor = index % 2 == 1 ? .systemGray.withAlphaComponent(0.025) : .clear
     }
 
@@ -130,25 +156,11 @@ extension ViewController: ListViewAdapter {
     }
 
     func listViewMakeRow(for _: RowKind) -> ListRowView {
-        let textView = ListRowView(frame: .init(x: 0, y: 0, width: 50, height: 50))
-        let label = UILabel(frame: textView.bounds.insetBy(dx: 16, dy: 16))
-        label.translatesAutoresizingMaskIntoConstraints = false
-        label.textAlignment = .left
-        label.textColor = .label
-        label.numberOfLines = 0
-        textView.contentView.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.leadingAnchor.constraint(equalTo: textView.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: textView.trailingAnchor, constant: -16),
-            label.topAnchor.constraint(equalTo: textView.topAnchor, constant: 16),
-            label.bottomAnchor.constraint(equalTo: textView.bottomAnchor, constant: -16),
-        ])
-        return textView
+        SimpleRow()
     }
 
     func listView(_ listView: ListView, onEvent event: ListViewEvent) {
         _ = listView
         _ = event
-//        print("[*] listView \(listView.id.uuidString.components(separatedBy: "-").first!) received an event \(event)")
     }
 }

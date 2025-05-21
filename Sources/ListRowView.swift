@@ -9,13 +9,15 @@ open class ListRowView: UIView {
     public var rowKind: (any Hashable)?
     public var contentView: UIView = .init()
 
+    // called when this row is going to be used for a different item
     open func prepareForReuse() {}
+
+    // called when a list view is moving
+    // ideal for cancel context menu if presented before via long press gestures
+    open func prepareForMove() {}
 
     override public init(frame: CGRect) {
         super.init(frame: frame)
-
-        contentView.translatesAutoresizingMaskIntoConstraints = false
-        contentView.autoresizingMask = []
         addSubview(contentView)
     }
 

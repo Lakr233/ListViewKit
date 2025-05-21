@@ -75,6 +75,7 @@ extension ListView: UIScrollViewDelegate {
 
     public func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
         _delegate?.scrollViewWillBeginDragging?(scrollView)
+        visibleRowViews.forEach { $0.prepareForMove() }
     }
 
     public func scrollViewWillEndDragging(_ scrollView: UIScrollView, withVelocity velocity: CGPoint, targetContentOffset: UnsafeMutablePointer<CGPoint>) {
