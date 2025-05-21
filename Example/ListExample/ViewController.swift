@@ -8,61 +8,6 @@
 import ListViewKit
 import UIKit
 
-struct ViewModel: Identifiable, Hashable {
-    var id: UUID = .init()
-    var text: String = ""
-
-    enum RowKind: Hashable {
-        case text
-    }
-}
-
-class SimpleRow: ListRowView, UIContextMenuInteractionDelegate {
-    let label = UILabel()
-    let selectionView = UIView()
-
-    override init(frame: CGRect) {
-        super.init(frame: frame)
-        addSubview(selectionView)
-        label.textAlignment = .left
-        label.textColor = .label
-        label.numberOfLines = 0
-        addSubview(label)
-        interactions.append(UIContextMenuInteraction(delegate: self))
-    }
-
-    override func layoutSubviews() {
-        super.layoutSubviews()
-        selectionView.frame = bounds
-        label.frame = bounds.insetBy(dx: 16, dy: 8)
-    }
-
-    func configure(with text: String) {
-        label.text = text
-    }
-
-    static func height(for _: String, width _: CGFloat) -> CGFloat {
-        64
-    }
-
-    override func prepareForMove() {
-        super.prepareForMove()
-        withAnimation { [self] in
-            selectionView.backgroundColor = .clear
-        }
-    }
-
-    func contextMenuInteraction(
-        _: UIContextMenuInteraction,
-        configurationForMenuAtLocation _: CGPoint
-    ) -> UIContextMenuConfiguration? {
-        withAnimation { [self] in
-            selectionView.backgroundColor = .systemGreen.withAlphaComponent(0.1)
-        }
-        return nil
-    }
-}
-
 class ViewController: UIViewController {
     let listView: ListView
     let dataSource: ListViewDiffableDataSource<ViewModel>
@@ -87,8 +32,16 @@ class ViewController: UIViewController {
         view.backgroundColor = .systemBackground
         view.addSubview(listView)
 
+        listView.translatesAutoresizingMaskIntoConstraints = false
         listView.dataSource = dataSource
         listView.verticalExtendingSpacer = 500
+
+        NSLayoutConstraint.activate([
+            listView.topAnchor.constraint(equalTo: view.topAnchor),
+            listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+        ])
 
         var snapshot = dataSource.snapshot()
         for content in [
@@ -109,7 +62,6 @@ class ViewController: UIViewController {
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(shuffle)),
             UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem)),
-            UIBarButtonItem(barButtonSystemItem: .trash, target: self, action: #selector(removeItem)),
         ]
     }
 
@@ -145,42 +97,5 @@ class ViewController: UIViewController {
             snapshot.append(item)
         }
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
-    }
-
-    @objc func removeItem() {
-        var snapshot = dataSource.snapshot()
-        snapshot.remove(at: (0 ..< snapshot.count).randomElement() ?? 0)
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
-    }
-
-    override func viewWillLayoutSubviews() {
-        super.viewWillLayoutSubviews()
-        listView.frame = view.bounds
-    }
-}
-
-extension ViewController: ListViewAdapter {
-    func listView(_: ListView, heightFor _: ItemType, at _: Int) -> CGFloat {
-        64
-    }
-
-    func listView(_: ListView, configureRowView rowView: ListRowView, for item: ItemType, at index: Int) {
-        let vm = item as! ViewModel
-        let textView = rowView as! SimpleRow
-        textView.configure(with: vm.text)
-        rowView.backgroundColor = index % 2 == 1 ? .systemGray.withAlphaComponent(0.025) : .clear
-    }
-
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> RowKind {
-        ViewModel.RowKind.text
-    }
-
-    func listViewMakeRow(for _: RowKind) -> ListRowView {
-        SimpleRow()
-    }
-
-    func listView(_ listView: ListView, onEvent event: ListViewEvent) {
-        _ = listView
-        _ = event
     }
 }
