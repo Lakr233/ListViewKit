@@ -17,21 +17,24 @@ struct ViewModel: Identifiable, Hashable {
     }
 }
 
-class SimpleRow: ListRowView {
+class SimpleRow: ListRowView, UIContextMenuInteractionDelegate {
     let label = UILabel()
+    let selectionView = UIView()
 
     override init(frame: CGRect) {
         super.init(frame: frame)
+        addSubview(selectionView)
         label.textAlignment = .left
         label.textColor = .label
         label.numberOfLines = 0
-        contentView.addSubview(label)
-        setNeedsUpdateConstraints()
+        addSubview(label)
+        interactions.append(UIContextMenuInteraction(delegate: self))
     }
 
     override func layoutSubviews() {
         super.layoutSubviews()
-        label.frame = contentView.bounds.insetBy(dx: 16, dy: 8)
+        selectionView.frame = bounds
+        label.frame = bounds.insetBy(dx: 16, dy: 8)
     }
 
     func configure(with text: String) {
@@ -40,6 +43,23 @@ class SimpleRow: ListRowView {
 
     static func height(for _: String, width _: CGFloat) -> CGFloat {
         64
+    }
+
+    override func prepareForMove() {
+        super.prepareForMove()
+        withAnimation { [self] in
+            selectionView.backgroundColor = .clear
+        }
+    }
+
+    func contextMenuInteraction(
+        _: UIContextMenuInteraction,
+        configurationForMenuAtLocation _: CGPoint
+    ) -> UIContextMenuConfiguration? {
+        withAnimation { [self] in
+            selectionView.backgroundColor = .systemGreen.withAlphaComponent(0.1)
+        }
+        return nil
     }
 }
 

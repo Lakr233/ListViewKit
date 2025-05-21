@@ -7,7 +7,18 @@ import UIKit
 
 open class ListRowView: UIView {
     public var rowKind: (any Hashable)?
-    public var contentView: UIView = .init()
+
+    public var superListView: ListView? {
+        // find up
+        var view: UIView? = self
+        while view != nil {
+            if let listView = view as? ListView {
+                return listView
+            }
+            view = view?.superview
+        }
+        return nil
+    }
 
     // called when this row is going to be used for a different item
     open func prepareForReuse() {}
@@ -16,9 +27,13 @@ open class ListRowView: UIView {
     // ideal for cancel context menu if presented before via long press gestures
     open func prepareForMove() {}
 
+    // using the same animation as list view
+    open func withAnimation(_ block: @escaping () -> Void) {
+        withListAnimation(block)
+    }
+
     override public init(frame: CGRect) {
         super.init(frame: frame)
-        addSubview(contentView)
     }
 
     @available(*, unavailable)
@@ -28,7 +43,5 @@ open class ListRowView: UIView {
 
     override open func layoutSubviews() {
         super.layoutSubviews()
-
-        contentView.frame = bounds
     }
 }
