@@ -5,6 +5,7 @@
 //  Created by 秋星桥 on 5/21/25.
 //
 
+import AlertController
 import ListViewKit
 import UIKit
 
@@ -12,7 +13,7 @@ class ViewController: UIViewController {
     struct ViewModel: Identifiable, Hashable {
         var id: UUID = .init()
         var text: String = ""
-        
+
         enum RowKind: Hashable {
             case text
         }
@@ -55,8 +56,28 @@ class ViewController: UIViewController {
             ViewModel(text: "像涓涓温柔途经过百川"),
             ViewModel(text: "若遗憾是遗憾"),
             ViewModel(text: "若故事没说完"),
-        ] { snapshot.append(content) }
+        ] {
+            snapshot.append(content)
+        }
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
+
+        navigationItem.rightBarButtonItem = UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem))
+    }
+
+    @objc func addItem() {
+        let alert = AlertInputViewController(
+            title: "Add Text",
+            placeholder: "...",
+            text: "你好我是卢本伟",
+            cancelButtonText: "Cancel",
+            doneButtonText: "Insert"
+        ) { [weak self] text in
+            guard let self, !text.isEmpty else { return }
+            var snapshot = dataSource.snapshot()
+            snapshot.append(ViewModel(text: text))
+            dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        }
+        present(alert, animated: true)
     }
 
     override func viewWillLayoutSubviews() {
