@@ -7,6 +7,8 @@ import UIKit
 
 public enum ListViewEvent {
     case didUpdateContentOffset(offset: CGPoint)
+
+    // to be continued...
 }
 
 public protocol ListViewAdapter: AnyObject {
