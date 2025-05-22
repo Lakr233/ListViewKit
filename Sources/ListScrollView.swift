@@ -27,9 +27,10 @@ open class ListScrollView: UIScrollView {
     override open var contentSize: CGSize {
         get { super.contentSize }
         set {
+            guard super.contentSize != newValue else { return }
             let currentOffset = contentOffset
             super.contentSize = newValue
-            contentOffset = currentOffset
+            setContentOffset(currentOffset, animated: false)
             let suppose = nearestScrollLocationInBounds(offset: currentOffset)
             scroll(to: suppose, animated: true)
         }
@@ -46,6 +47,7 @@ open class ListScrollView: UIScrollView {
 
     /// Scrolls the position of the scroll view to the content offset you provide.
     public func scroll(to offset: CGPoint, animated: Bool = false) {
+        print("[*] scrolling from \(contentOffset) to \(offset) \(animated ? "animated" : "--")")
         if !animated {
             cancelCurrentScrolling()
             setContentOffset(offset, animated: false)
