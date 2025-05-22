@@ -27,8 +27,8 @@ open class ListScrollView: UIScrollView {
     public var maximumContentOffset: CGPoint {
         let min = minimumContentOffset
         return .init(
-            x: max(min.x, contentSize.width - bounds.width + adjustedContentInset.right),
-            y: max(min.y, contentSize.height - bounds.height + adjustedContentInset.bottom)
+            x: ceil(max(min.x, contentSize.width - bounds.width + adjustedContentInset.right)),
+            y: ceil(max(min.y, contentSize.height - bounds.height + adjustedContentInset.bottom))
         )
     }
 
@@ -50,7 +50,10 @@ open class ListScrollView: UIScrollView {
         get { super.contentOffset }
         set {
             guard super.contentOffset != newValue else { return }
-            super.contentOffset = newValue
+            super.contentOffset = .init(
+                x: ceil(newValue.x),
+                y: ceil(newValue.y)
+            )
         }
     }
 
@@ -74,13 +77,13 @@ open class ListScrollView: UIScrollView {
     public func scroll(to offset: CGPoint) {
         // update the context, but we need to keep the velocity
         scrollingContext.setCurrent(
-            .init(x: contentOffset.x, y: contentOffset.y),
+            .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
             vel: .init(
                 x: scrollingContext.x.context.currentVel,
                 y: scrollingContext.y.context.currentVel
             )
         )
-        scrollingContext.setTarget(.init(x: offset.x, y: offset.y))
+        scrollingContext.setTarget(.init(x: ceil(offset.x), y: ceil(offset.y)))
 
         guard scrollingDisplayLink == nil else { return }
         scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
