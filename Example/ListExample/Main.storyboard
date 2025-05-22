@@ -13,8 +13,8 @@
         <scene sceneID="3cd-Aa-72n">
             <objects>
                 <navigationController extendedLayoutIncludesOpaqueBars="YES" id="bhb-6H-yaP" sceneMemberID="viewController">
-                    <navigationBar key="navigationBar" contentMode="scaleToFill" translucent="NO" largeTitles="YES" id="kR9-Wj-3wn">
-                        <rect key="frame" x="0.0" y="118" width="393" height="96"/>
+                    <navigationBar key="navigationBar" contentMode="scaleToFill" translucent="NO" id="kR9-Wj-3wn">
+                        <rect key="frame" x="0.0" y="118" width="393" height="44"/>
                         <autoresizingMask key="autoresizingMask"/>
                     </navigationBar>
                     <connections>
@@ -30,7 +30,7 @@
             <objects>
                 <viewController storyboardIdentifier="ViewController" useStoryboardIdentifierAsRestorationIdentifier="YES" id="9Ie-oR-mFg" customClass="ViewController" customModule="ListExample" customModuleProvider="target" sceneMemberID="viewController">
                     <view key="view" contentMode="scaleToFill" id="481-gm-VML">
-                        <rect key="frame" x="0.0" y="0.0" width="393" height="638"/>
+                        <rect key="frame" x="0.0" y="0.0" width="393" height="690"/>
                         <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
                         <viewLayoutGuide key="safeArea" id="6dl-n9-C7q"/>
                         <color key="backgroundColor" systemColor="systemBackgroundColor"/>
