@@ -62,10 +62,8 @@ open class ListView: ListScrollView, Identifiable {
         super.layoutSubviews()
 
         let bounds = bounds
-        let boundsWidthChanged = layoutCache.contentBounds.width != bounds.width
         layoutCache.contentBounds = bounds
-
-        if boundsWidthChanged { contentSize = supposedContentSize }
+        contentSize = supposedContentSize
 
         let contentOffsetY = contentOffset.y
         let minimumContentOffsetY = minimumContentOffset.y
