@@ -94,7 +94,7 @@ open class ListScrollView: UIScrollView {
         scrollingDisplayLink?.add(to: .main, forMode: .common)
     }
 
-    func cancelCurrentScrolling() {
+    public func cancelCurrentScrolling() {
         let currentContentOffset = contentOffset
         scrollingContext.setCurrent(
             .init(x: currentContentOffset.x, y: currentContentOffset.y),
@@ -105,8 +105,7 @@ open class ListScrollView: UIScrollView {
         scrollingDisplayLink = nil
     }
 
-    @objc
-    func handleScrollingAnimation(_: CADisplayLink) {
+    @objc func handleScrollingAnimation(_: CADisplayLink) {
         if isTracking || scrollingContext.completed {
             cancelCurrentScrolling()
             return
