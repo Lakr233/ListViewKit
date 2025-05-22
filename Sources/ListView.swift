@@ -87,7 +87,7 @@ open class ListView: ListScrollView, Identifiable {
                 }
             var maxY: CGFloat = 0
             for row in sortedRows {
-                assert(row.frame.minY >= maxY)
+                assert(row.frame.minY >= maxY) // float precision error
                 maxY = row.frame.maxY
             }
         #endif

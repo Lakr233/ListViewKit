@@ -53,7 +53,8 @@ extension ListView {
                 guard let key = identifier(for: index) else { continue }
                 guard heightCache[key] == nil else { continue }
                 guard let item = dataSource.item(at: index, in: listView) else { continue }
-                heightCache[key] = adapter.listView(listView, heightFor: item, at: index)
+                let getHeight = adapter.listView(listView, heightFor: item, at: index)
+                heightCache[key] = ceil(getHeight)
             }
             heightCache.keys.filter {
                 guard let index = index(for: $0) else { return false }

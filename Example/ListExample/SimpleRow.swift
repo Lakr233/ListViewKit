@@ -37,17 +37,13 @@ class SimpleRow: ListRowView, UIContextMenuInteractionDelegate {
     }
 
     static func height(for text: String, width: CGFloat) -> CGFloat {
-        let contentWidth = width - 32
-        let attributes: [NSAttributedString.Key: Any] = [
-            .font: UIFont.preferredFont(forTextStyle: .body),
-        ]
-        let size = text.boundingRect(
-            with: CGSize(width: contentWidth, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin],
-            attributes: attributes,
-            context: nil
-        )
-        return size.height + 32
+        let label = UILabel(frame: .init(x: 0, y: 0, width: width - 32, height: 100))
+        label.textAlignment = .left
+        label.textColor = .label
+        label.numberOfLines = 0
+        label.text = text
+        label.sizeToFit()
+        return label.frame.height + 32
     }
 
     override func prepareForMove() {
