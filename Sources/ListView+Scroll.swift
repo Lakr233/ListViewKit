@@ -21,7 +21,7 @@ public extension ListView {
     }
 
     /// Scrolls through the list view until a row that an index path identifies is at a particular location on the screen.
-    func scrollToRow(at index: Int, at scrollPosition: ScrollPosition, animated: Bool) {
+    func scrollToRow(at index: Int, at scrollPosition: ScrollPosition, animated _: Bool) {
         let targetRect = rectForRow(at: index)
         let targetContentOffsetY: CGFloat = {
             switch scrollPosition {
@@ -55,8 +55,7 @@ public extension ListView {
             to: .init(
                 x: 0,
                 y: min(max(minimumContentOffset.y, targetContentOffsetY), maximumContentOffset.y)
-            ),
-            animated: animated
+            )
         )
     }
 }
@@ -67,6 +66,7 @@ extension ListView: UIScrollViewDelegate {
     public func scrollViewDidScroll(_ scrollView: UIScrollView) {
         _delegate?.scrollViewDidScroll?(scrollView)
         adapter?.listView(self, onEvent: .didUpdateContentOffset(offset: scrollView.contentOffset))
+        if isTracking { cancelCurrentScrolling() }
     }
 
     public func scrollViewDidZoom(_ scrollView: UIScrollView) {

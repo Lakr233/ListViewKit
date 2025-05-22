@@ -8,7 +8,7 @@
 import Foundation
 import OrderedCollections
 
-public struct ListViewDataSourceSnapshot<Item> where Item: Identifiable & Hashable {
+public struct ListViewDataSourceSnapshot<Item> where Item: Identifiable {
     var elements: [Item]
 
     public var count: Int { elements.count }
@@ -37,8 +37,15 @@ public struct ListViewDataSourceSnapshot<Item> where Item: Identifiable & Hashab
         elements.append(item)
     }
 
+    public mutating func updateItem(_ item: Item) {
+        let index = elements.firstIndex { $0.id == item.id }
+        guard let index else { return }
+        elements[index] = item
+    }
+
     public mutating func updateItem(_ item: Item, at index: Int) {
         if index < 0 || index >= elements.count {
+            assertionFailure()
             return
         }
         elements[index] = item

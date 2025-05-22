@@ -15,6 +15,7 @@ open class ListView: ListScrollView, Identifiable {
     public weak var dataSource: DataSource? {
         didSet { assert(oldValue == nil) }
     }
+
     public weak var adapter: (any Adapter)?
 
     var _delegate: (any UIScrollViewDelegate)?

@@ -3,12 +3,20 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
+import SpringInterpolation
 import UIKit
 
 open class ListScrollView: UIScrollView {
     var scrollingDisplayLink: CADisplayLink?
-    var xScrollingProperty: ScrollingProperty?
-    var yScrollingProperty: ScrollingProperty?
+    var scrollingContext: SpringInterpolation2D = .init(
+        .init(
+            angularFrequency: 8,
+            dampingRatio: 1,
+            threshold: 1,
+            stopWhenHitTarget: true
+        )
+    )
+    var scrollingTik: CFTimeInterval = .init()
 
     /// The minimum point (in content view coordinates) that the view can be scrolled.
     public var minimumContentOffset: CGPoint {
@@ -31,9 +39,27 @@ open class ListScrollView: UIScrollView {
             let currentOffset = contentOffset
             super.contentSize = newValue
             setContentOffset(currentOffset, animated: false)
-            let suppose = nearestScrollLocationInBounds(offset: currentOffset)
-            scroll(to: suppose, animated: true)
+            if !isContentOffsetWithinBounds(offset: currentOffset) {
+                let suppose = nearestScrollLocationInBounds(offset: currentOffset)
+                scroll(to: suppose)
+            }
         }
+    }
+
+    override open var contentOffset: CGPoint {
+        get { super.contentOffset }
+        set {
+            guard super.contentOffset != newValue else { return }
+            super.contentOffset = newValue
+        }
+    }
+
+    func isContentOffsetWithinBounds(offset: CGPoint) -> Bool {
+        let min = minimumContentOffset
+        let max = maximumContentOffset
+        return true
+            && offset.x >= min.x && offset.x <= max.x
+            && offset.y >= min.y && offset.y <= max.y
     }
 
     func nearestScrollLocationInBounds(offset: CGPoint) -> CGPoint {
@@ -45,75 +71,55 @@ open class ListScrollView: UIScrollView {
         )
     }
 
-    /// Scrolls the position of the scroll view to the content offset you provide.
-    public func scroll(to offset: CGPoint, animated: Bool = false) {
-        if !animated {
-            cancelCurrentScrolling()
-            setContentOffset(offset, animated: false)
-            return
-        }
+    public func scroll(to offset: CGPoint) {
+        // update the context, but we need to keep the velocity
+        scrollingContext.setCurrent(
+            .init(x: contentOffset.x, y: contentOffset.y),
+            vel: .init(
+                x: scrollingContext.x.context.currentVel,
+                y: scrollingContext.y.context.currentVel
+            )
+        )
+        scrollingContext.setTarget(.init(x: offset.x, y: offset.y))
 
-        let currentContentOffset = contentOffset
-        if bounds.width > 0 {
-            if var property = xScrollingProperty {
-                property.target = offset.x
-                xScrollingProperty = property
-            } else {
-                xScrollingProperty = .init(target: offset.x, current: currentContentOffset.x)
-            }
+        guard scrollingDisplayLink == nil else { return }
+        scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
+        if #available(iOS 15.0, macCatalyst 15.0, *) {
+            scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 80, maximum: 120, preferred: 120)
+            scrollingTik = CACurrentMediaTime()
         }
-        if bounds.height > 0 {
-            if var property = yScrollingProperty {
-                property.target = offset.y
-                yScrollingProperty = property
-            } else {
-                yScrollingProperty = .init(target: offset.y, current: currentContentOffset.y)
-            }
-        }
-
-        if xScrollingProperty != nil || yScrollingProperty != nil, scrollingDisplayLink == nil {
-            scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
-            if #available(iOS 15.0, macCatalyst 15.0, *) {
-                scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 80, maximum: 120, preferred: 120)
-            }
-            scrollingDisplayLink?.add(to: .main, forMode: .common)
-        }
+        scrollingDisplayLink?.add(to: .main, forMode: .common)
     }
 
-    /// Cancels any current scrolling animations.
     func cancelCurrentScrolling() {
-        xScrollingProperty = nil
-        yScrollingProperty = nil
+        let currentContentOffset = contentOffset
+        scrollingContext.setCurrent(
+            .init(x: currentContentOffset.x, y: currentContentOffset.y),
+            vel: .init(x: 0, y: 0)
+        )
+        scrollingContext.setTarget(.init(x: 0, y: 0))
         scrollingDisplayLink?.invalidate()
         scrollingDisplayLink = nil
     }
 
     @objc
-    func handleScrollingAnimation(_ sender: CADisplayLink) {
-        if isTracking || (xScrollingProperty == nil && yScrollingProperty == nil) {
-            // if user is handling dragging or animation is finished
-            sender.invalidate()
-            scrollingDisplayLink = nil
+    func handleScrollingAnimation(_: CADisplayLink) {
+        if isTracking || scrollingContext.completed {
+            cancelCurrentScrolling()
             return
         }
-
         let time = CACurrentMediaTime()
-        var targetContentOffset = contentOffset
+        let delta = min(1 / 30, time - scrollingTik)
+        scrollingContext.update(withDeltaTime: delta)
+        let loc = CGPoint(
+            x: scrollingContext.x.value,
+            y: scrollingContext.y.value
+        )
+        setContentOffset(loc, animated: false)
+    }
 
-        if var property = xScrollingProperty {
-            targetContentOffset.x = property.value(at: time)
-        }
-        if abs(targetContentOffset.x - contentOffset.x) < 1 {
-            xScrollingProperty = nil
-        }
-
-        if var property = yScrollingProperty {
-            targetContentOffset.y = property.value(at: time)
-        }
-        if abs(targetContentOffset.y - contentOffset.y) < 1 {
-            yScrollingProperty = nil
-        }
-
-        setContentOffset(targetContentOffset, animated: false)
+    override open func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
+        assert(!animated)
+        super.setContentOffset(contentOffset, animated: false)
     }
 }

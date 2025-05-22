@@ -6,33 +6,20 @@
 //
 
 import Foundation
+import SpringInterpolation
 import UIKit
 
 extension ListScrollView {
-    struct ScrollingProperty {
-        var target: CGFloat
-        var springBack: SpringBack
-        let startTime = CACurrentMediaTime()
+    struct ScrollAnimationContext {
+        var engine: SpringInterpolation = .init()
 
-        var isFinished: Bool = false
-
-        init?(target: CGFloat, current: CGFloat) {
-            if target == current {
-                return nil
-            }
-            self.target = target
-
-            let distance = Double(target - current)
-            springBack = .init(initialVelocity: -distance / 100, distance: distance)
+        var target: CGFloat {
+            get { engine.context.targetPos }
+            set { engine.context.targetPos = newValue }
         }
 
-        mutating func value(at time: Double) -> CGFloat {
-            if isFinished { return target }
-            guard let value = springBack.value(at: time - startTime) else {
-                isFinished = true
-                return target
-            }
-            return target - value
+        var isFinished: Bool {
+            engine.completed
         }
     }
 }

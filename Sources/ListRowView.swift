@@ -34,6 +34,7 @@ open class ListRowView: UIView {
 
     override public init(frame: CGRect) {
         super.init(frame: frame)
+        clipsToBounds = true
     }
 
     @available(*, unavailable)

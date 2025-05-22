@@ -58,6 +58,9 @@ class ViewController: UIViewController {
         }
         dataSource.applySnapshot(snapshot, animatingDifferences: false)
 
+        navigationItem.leftBarButtonItems = [
+            UIBarButtonItem(barButtonSystemItem: .compose, target: self, action: #selector(compose)),
+        ]
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(shuffle)),
             UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem)),
@@ -96,5 +99,28 @@ class ViewController: UIViewController {
             snapshot.append(item)
         }
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
+    }
+
+    @objc func compose() {
+        var snapshot = dataSource.snapshot()
+        var composeItem = ViewModel()
+        snapshot.append(composeItem)
+        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+
+        let text = """
+        Eiusmod officia consequat reprehenderit Lorem eu ut id exercitation veniam veniam nulla. Nisi et reprehenderit nostrud. Cillum aliqua dolore reprehenderit non cupidatat velit Lorem. Laborum dolor voluptate aliquip labore aliquip et aliqua proident quis magna cupidatat minim labore. Qui in cupidatat aliqua et dolor minim ullamco est veniam consectetur cillum ad. Nulla nisi Lorem labore ullamco in sunt non laborum enim aliquip.
+        """
+        DispatchQueue.global().async {
+            for char in text {
+                composeItem.text += String(char)
+                DispatchQueue.main.async {
+                    var snapshot = self.dataSource.snapshot()
+                    snapshot.updateItem(composeItem)
+                    self.dataSource.applySnapshot(snapshot, animatingDifferences: true)
+                    self.listView.scroll(to: self.listView.maximumContentOffset)
+                }
+                usleep(5000)
+            }
+        }
     }
 }
