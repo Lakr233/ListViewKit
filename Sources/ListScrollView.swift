@@ -47,7 +47,6 @@ open class ListScrollView: UIScrollView {
 
     /// Scrolls the position of the scroll view to the content offset you provide.
     public func scroll(to offset: CGPoint, animated: Bool = false) {
-        print("[*] scrolling from \(contentOffset) to \(offset) \(animated ? "animated" : "--")")
         if !animated {
             cancelCurrentScrolling()
             setContentOffset(offset, animated: false)
