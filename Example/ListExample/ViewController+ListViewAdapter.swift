@@ -12,7 +12,7 @@ extension ViewController: ListViewAdapter {
     func text(for vm: ViewModel, index: Int) -> String {
         "\(index)\n\n\(vm.text)"
     }
-    
+
     func listView(_ listView: ListView, heightFor item: ItemType, at index: Int) -> CGFloat {
         SimpleRow.height(
             for: text(for: item as! ViewModel, index: index),

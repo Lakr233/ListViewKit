@@ -5,10 +5,6 @@
 
 import UIKit
 
-public enum ListViewEvent {
-    // to be continued...
-}
-
 public protocol ListViewAdapter: AnyObject {
     typealias ItemType = (any Identifiable)
     typealias RowKind = (any Hashable)
