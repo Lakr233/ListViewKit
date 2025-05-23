@@ -71,7 +71,11 @@ open class ListScrollView: UIScrollView {
         )
     }
 
-    public func scroll(to offset: CGPoint) {
+    /// scroll to an offset
+    /// - Parameters:
+    ///   - offset: where
+    ///   - angularFrequency: bigger value will handle animation faster
+    public func scroll(to offset: CGPoint, angularFrequency: Double? = nil) {
         // update the context, but we need to keep the velocity
         scrollingContext.setCurrent(
             .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
@@ -80,6 +84,11 @@ open class ListScrollView: UIScrollView {
                 y: scrollingContext.y.context.currentVel
             )
         )
+        if let angularFrequency {
+            assert(angularFrequency > 0)
+            scrollingContext.x.config.angularFrequency = angularFrequency
+            scrollingContext.y.config.angularFrequency = angularFrequency
+        }
         scrollingContext.setTarget(.init(x: ceil(offset.x), y: ceil(offset.y)))
 
         guard scrollingDisplayLink == nil else { return }

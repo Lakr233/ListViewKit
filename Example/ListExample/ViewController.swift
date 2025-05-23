@@ -48,11 +48,6 @@ class ViewController: UIViewController {
             ViewModel(text: "若故事没说完"),
             ViewModel(text: "回头看"),
             ViewModel(text: "梨花已落千山"),
-            ViewModel(text: "我至少听过"),
-            ViewModel(text: "你说的喜欢"),
-            ViewModel(text: "像涓涓温柔途经过百川"),
-            ViewModel(text: "若遗憾是遗憾"),
-            ViewModel(text: "若故事没说完"),
         ] {
             snapshot.append(content)
         }
@@ -69,14 +64,11 @@ class ViewController: UIViewController {
 
     @objc func addItem() {
         let content = [
-            "若遺憾遺憾",
-            "若心酸心酸",
-            "又不是非要圓滿",
-            "來年秋風亂",
-            "笑看紅葉轉",
-            "深情",
-            "只好",
-            "淺談",
+            "我至少听过",
+            "你说的喜欢",
+            "像涓涓温柔途经过百川",
+            "若遗憾是遗憾",
+            "若故事没说完",
         ].randomElement()!
         let vm = ViewModel(text: content)
         var snapshot = dataSource.snapshot()
