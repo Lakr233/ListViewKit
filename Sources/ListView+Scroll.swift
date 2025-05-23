@@ -21,7 +21,7 @@ public extension ListView {
     }
 
     /// Scrolls through the list view until a row that an index path identifies is at a particular location on the screen.
-    func scrollToRow(at index: Int, at scrollPosition: ScrollPosition, animated _: Bool) {
+    func scrollToRow(at index: Int, at scrollPosition: ScrollPosition, animated: Bool = true) {
         let targetRect = rectForRow(at: index)
         let targetContentOffsetY: CGFloat = {
             switch scrollPosition {
@@ -51,11 +51,10 @@ public extension ListView {
                 return targetRect.maxY - bounds.height
             }
         }()
-        scroll(
-            to: .init(
-                x: 0,
-                y: min(max(minimumContentOffset.y, targetContentOffsetY), maximumContentOffset.y)
-            )
-        )
+        if animated {
+            scroll(to: .init(x: 0, y: targetContentOffsetY))
+        } else {
+            setContentOffset(.init(x: 0, y: targetContentOffsetY), animated: false)
+        }
     }
 }

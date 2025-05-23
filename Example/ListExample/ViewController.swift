@@ -33,8 +33,8 @@ class ViewController: UIViewController {
         view.addSubview(listView)
 
         listView.translatesAutoresizingMaskIntoConstraints = false
-        listView.topInset = 128
-        listView.bottomInset = 233
+        listView.topInset = 0
+        listView.bottomInset = 0
 
         NSLayoutConstraint.activate([
             listView.topAnchor.constraint(equalTo: view.topAnchor),
@@ -76,7 +76,8 @@ class ViewController: UIViewController {
         let index = (0 ..< snapshot.count).randomElement() ?? 0
         snapshot.insert(vm, at: index)
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
-        listView.scrollToRow(at: index, at: .middle, animated: true)
+        print("[*] inserted at \(index)")
+        listView.scrollToRow(at: index, at: .none)
     }
 
     @objc func shuffle() {
