@@ -10,7 +10,7 @@ open class ListScrollView: UIScrollView {
     var scrollingDisplayLink: CADisplayLink?
     var scrollingContext: SpringInterpolation2D = .init(
         .init(
-            angularFrequency: 8,
+            angularFrequency: 6,
             dampingRatio: 1,
             threshold: 0.05,
             stopWhenHitTarget: true
