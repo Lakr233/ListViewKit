@@ -12,7 +12,7 @@ open class ListScrollView: UIScrollView {
         .init(
             angularFrequency: 8,
             dampingRatio: 1,
-            threshold: 1,
+            threshold: 0.05,
             stopWhenHitTarget: true
         )
     )
@@ -50,10 +50,7 @@ open class ListScrollView: UIScrollView {
         get { super.contentOffset }
         set {
             guard super.contentOffset != newValue else { return }
-            super.contentOffset = .init(
-                x: ceil(newValue.x),
-                y: ceil(newValue.y)
-            )
+            super.contentOffset = newValue
         }
     }
 
