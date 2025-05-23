@@ -22,7 +22,11 @@ open class ListView: ListScrollView, Identifiable {
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
 
-    public var verticalExtendingSpacer: CGFloat = 0 {
+    public var topInset: CGFloat = 0 {
+        didSet { setNeedsLayout() }
+    }
+
+    public var bottomInset: CGFloat = 0 {
         didSet { setNeedsLayout() }
     }
 
@@ -39,7 +43,10 @@ open class ListView: ListScrollView, Identifiable {
     }
 
     var supposedContentSize: CGSize {
-        .init(width: frame.width, height: layoutCache.contentHeight + verticalExtendingSpacer)
+        .init(
+            width: frame.width,
+            height: layoutCache.contentHeight + topInset + bottomInset
+        )
     }
 
     override open var frame: CGRect {

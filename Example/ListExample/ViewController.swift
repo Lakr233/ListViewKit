@@ -33,7 +33,8 @@ class ViewController: UIViewController {
         view.addSubview(listView)
 
         listView.translatesAutoresizingMaskIntoConstraints = false
-        listView.verticalExtendingSpacer = 233
+        listView.topInset = 128
+        listView.bottomInset = 233
 
         NSLayoutConstraint.activate([
             listView.topAnchor.constraint(equalTo: view.topAnchor),

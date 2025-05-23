@@ -9,14 +9,21 @@ import ListViewKit
 import UIKit
 
 extension ViewController: ListViewAdapter {
-    func listView(_ listView: ListView, heightFor item: ItemType, at _: Int) -> CGFloat {
-        SimpleRow.height(for: (item as! ViewModel).text, width: listView.frame.width)
+    func text(for vm: ViewModel, index: Int) -> String {
+        "\(index)\n\n\(vm.text)"
+    }
+    
+    func listView(_ listView: ListView, heightFor item: ItemType, at index: Int) -> CGFloat {
+        SimpleRow.height(
+            for: text(for: item as! ViewModel, index: index),
+            width: listView.frame.width
+        )
     }
 
     func listView(_: ListView, configureRowView rowView: ListRowView, for item: ItemType, at index: Int) {
         let vm = item as! ViewModel
         let textView = rowView as! SimpleRow
-        textView.configure(with: vm.text)
+        textView.configure(with: text(for: vm, index: index))
         textView.contextMenu = .init(children: [
             UIAction(title: "Copy", image: UIImage(systemName: "document.on.document")) { _ in
                 UIPasteboard.general.string = vm.text

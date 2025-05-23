@@ -14,7 +14,11 @@ public extension ListView {
     }
 
     var indicesForVisibleRows: [Int] {
-        let visibleRect = CGRect(origin: contentOffset, size: bounds.size)
+        let offset = contentOffset
+        let visibleRect = CGRect(
+            origin: .init(x: offset.x, y: offset.y - topInset),
+            size: bounds.size
+        )
         return layoutCache.allFrames()
             .filter { $0.value.intersects(visibleRect) }
             .map(\.key)
@@ -34,7 +38,11 @@ public extension ListView {
     }
 
     func rectForRow(at index: Int) -> CGRect {
-        layoutCache.frame(for: index) ?? .zero
+        if var location = layoutCache.frame(for: index) {
+            location.origin.y += topInset
+            return location
+        }
+        return .zero
     }
 
     func rectForRow(with identifier: some Hashable) -> CGRect {
