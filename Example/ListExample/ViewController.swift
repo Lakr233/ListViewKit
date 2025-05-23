@@ -73,8 +73,10 @@ class ViewController: UIViewController {
         ].randomElement()!
         let vm = ViewModel(text: content)
         var snapshot = dataSource.snapshot()
-        snapshot.insert(vm, at: (0 ..< snapshot.count).randomElement() ?? 0)
+        let index =  (0 ..< snapshot.count).randomElement() ?? 0
+        snapshot.insert(vm, at: index)
         dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        listView.scrollToRow(at: index, at: .middle, animated: true)
     }
 
     @objc func shuffle() {
