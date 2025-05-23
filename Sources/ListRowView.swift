@@ -23,10 +23,6 @@ open class ListRowView: UIView {
     // called when this row is going to be used for a different item
     open func prepareForReuse() {}
 
-    // called when a list view is moving
-    // ideal for cancel context menu if presented before via long press gestures
-    open func prepareForMove() {}
-
     // using the same animation as list view
     open func withAnimation(_ block: @escaping () -> Void) {
         withListAnimation(block)

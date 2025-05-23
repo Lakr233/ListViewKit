@@ -46,10 +46,6 @@ class SimpleRow: ListRowView, UIContextMenuInteractionDelegate {
         return label.frame.height + 32
     }
 
-    override func prepareForMove() {
-        super.prepareForMove()
-    }
-
     func contextMenuInteraction(
         _: UIContextMenuInteraction,
         configurationForMenuAtLocation _: CGPoint

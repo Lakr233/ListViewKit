@@ -18,12 +18,6 @@ open class ListView: ListScrollView, Identifiable {
 
     public weak var adapter: (any Adapter)?
 
-    var _delegate: (any UIScrollViewDelegate)?
-    override open var delegate: (any UIScrollViewDelegate)? {
-        set { _delegate = newValue }
-        get { _delegate }
-    }
-
     lazy var layoutCache: LayoutCache = .init(self)
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
@@ -37,7 +31,6 @@ open class ListView: ListScrollView, Identifiable {
 
         alwaysBounceVertical = true
         clipsToBounds = true
-        super.delegate = self
     }
 
     @available(*, unavailable)

@@ -40,9 +40,4 @@ extension ViewController: ListViewAdapter {
         case .text: SimpleRow()
         }
     }
-
-    func listView(_ listView: ListView, onEvent event: ListViewEvent) {
-        _ = listView
-        _ = event
-    }
 }
