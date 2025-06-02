@@ -113,10 +113,8 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
         listView.layoutCache.finalizeInvalidationRequests()
 
         if animatingDifferences {
-            listView.updateVisibleItemsLayout()
-            listView.setNeedsLayout()
-            listView.layoutIfNeeded()
             withListAnimation {
+                listView.updateVisibleItemsLayout()
                 for identifier in addedItemIdentifiers {
                     guard let itemIndexInNewLayout = self.elements.index(forKey: identifier) else { continue }
                     if let rowView = listView.rowView(at: itemIndexInNewLayout) {

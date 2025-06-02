@@ -177,6 +177,8 @@ extension ListView {
             return
         }
         configureRowView(view, for: item, at: index)
+        view.setNeedsLayout()
+        view.layoutIfNeeded()
     }
 
     func configureRowView(_ rowView: ListRowView, for _: any Identifiable, at index: Int) {
