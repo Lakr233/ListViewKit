@@ -30,17 +30,19 @@ class ViewController: UIViewController {
 
         edgesForExtendedLayout = []
         view.backgroundColor = .systemBackground
-        view.addSubview(listView)
 
-        listView.translatesAutoresizingMaskIntoConstraints = false
         listView.topInset = 0
         listView.bottomInset = 0
 
+        let animationBlockView = AnimationBlockView(install: listView)
+        view.addSubview(animationBlockView)
+        animationBlockView.translatesAutoresizingMaskIntoConstraints = false
+
         NSLayoutConstraint.activate([
-            listView.topAnchor.constraint(equalTo: view.topAnchor),
-            listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            animationBlockView.topAnchor.constraint(equalTo: view.topAnchor),
+            animationBlockView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            animationBlockView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            animationBlockView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
         var snapshot = dataSource.snapshot()

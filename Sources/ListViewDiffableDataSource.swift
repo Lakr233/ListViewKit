@@ -57,7 +57,6 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
 
         let diffResult = difference(with: snapshot.elements)
         if diffResult.isEmpty { return }
-
         let addedItemIdentifiers = diffResult.added.map(\.identifier)
 
         let removed = diffResult.removed
