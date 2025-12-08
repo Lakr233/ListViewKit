@@ -17,6 +17,7 @@ open class ListScrollView: UIScrollView {
         )
     )
     var scrollingTik: CFTimeInterval = .init()
+    private var scrollingTarget: CGPoint?
 
     /// The minimum point (in content view coordinates) that the view can be scrolled.
     public var minimumContentOffset: CGPoint {
@@ -39,9 +40,14 @@ open class ListScrollView: UIScrollView {
             let currentOffset = contentOffset
             super.contentSize = newValue
             setContentOffset(currentOffset, animated: false)
-            if !isContentOffsetWithinBounds(offset: currentOffset) {
-                let suppose = nearestScrollLocationInBounds(offset: currentOffset)
-                scroll(to: suppose)
+            let clampedOffset = nearestScrollLocationInBounds(offset: currentOffset)
+            let clampedTarget = scrollingTarget.map { nearestScrollLocationInBounds(offset: $0) }
+            if clampedOffset != currentOffset {
+                scroll(to: clampedOffset, preserveVelocity: false)
+            } else if let clampedTarget, clampedTarget != scrollingTarget {
+                scroll(to: clampedTarget, preserveVelocity: false)
+            } else if let clampedTarget {
+                scrollingTarget = clampedTarget
             }
         }
     }
@@ -75,21 +81,33 @@ open class ListScrollView: UIScrollView {
     /// - Parameters:
     ///   - offset: where
     ///   - angularFrequency: bigger value will handle animation faster
-    public func scroll(to offset: CGPoint, angularFrequency: Double? = nil) {
+    ///   - preserveVelocity: keep current velocity when retargeting
+    public func scroll(
+        to offset: CGPoint,
+        angularFrequency: Double? = nil,
+        preserveVelocity: Bool = true
+    ) {
+        let target = nearestScrollLocationInBounds(offset: offset)
         // update the context, but we need to keep the velocity
-        scrollingContext.setCurrent(
-            .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
-            vel: .init(
+        let velocity: CGPoint = if preserveVelocity {
+            .init(
                 x: scrollingContext.x.context.currentVel,
                 y: scrollingContext.y.context.currentVel
             )
+        } else {
+            .init(x: 0, y: 0)
+        }
+        scrollingContext.setCurrent(
+            .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
+            vel: .init(x: velocity.x, y: velocity.y)
         )
         if let angularFrequency {
             assert(angularFrequency > 0)
             scrollingContext.x.config.angularFrequency = angularFrequency
             scrollingContext.y.config.angularFrequency = angularFrequency
         }
-        scrollingContext.setTarget(.init(x: ceil(offset.x), y: ceil(offset.y)))
+        scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
+        scrollingTarget = target
 
         guard scrollingDisplayLink == nil else { return }
         scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
@@ -106,7 +124,8 @@ open class ListScrollView: UIScrollView {
             .init(x: currentContentOffset.x, y: currentContentOffset.y),
             vel: .init(x: 0, y: 0)
         )
-        scrollingContext.setTarget(.init(x: 0, y: 0))
+        scrollingTarget = nil
+        scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
         scrollingDisplayLink?.invalidate()
         scrollingDisplayLink = nil
     }
@@ -119,10 +138,10 @@ open class ListScrollView: UIScrollView {
         let time = CACurrentMediaTime()
         let delta = min(1 / 30, time - scrollingTik)
         scrollingContext.update(withDeltaTime: delta)
-        let loc = CGPoint(
+        let loc = nearestScrollLocationInBounds(offset: .init(
             x: scrollingContext.x.value,
             y: scrollingContext.y.value
-        )
+        ))
         setContentOffset(loc, animated: false)
     }
 
