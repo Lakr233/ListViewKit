@@ -12,22 +12,27 @@ import UIKit
 
 open class AnimationBlockView: UIView {
     public let subview: UIView
-    public let displayLink: DisplayLink = .init()
+
+    // 按需启动的 DisplayLink，动画结束/离屏后释放，避免常驻占用帧回调
+    private var displayLink: DisplayLink?
 
     open var heightAnimator: SpringInterpolation?
-    open var previousConstraint: NSLayoutConstraint?
+    private var heightConstraint: NSLayoutConstraint!
 
     public init(install subview: UIView) {
         self.subview = subview
         super.init(frame: .zero)
-        displayLink.delegatingObject(self)
         addSubview(subview)
         subview.translatesAutoresizingMaskIntoConstraints = false
-        NSLayoutConstraint.activate([
-            subview.topAnchor.constraint(equalTo: topAnchor),
-            subview.leftAnchor.constraint(equalTo: leftAnchor),
-            subview.rightAnchor.constraint(equalTo: rightAnchor),
-        ])
+        heightConstraint = subview.heightAnchor.constraint(equalToConstant: 0)
+        NSLayoutConstraint.activate(
+            [
+                subview.topAnchor.constraint(equalTo: topAnchor),
+                subview.leftAnchor.constraint(equalTo: leftAnchor),
+                subview.rightAnchor.constraint(equalTo: rightAnchor),
+                heightConstraint,
+            ]
+        )
     }
 
     @available(*, unavailable)
@@ -46,6 +51,8 @@ open class AnimationBlockView: UIView {
         }
     }
 
+    deinit { stopDisplayLink() }
+
     private var previousLayoutFrame: CGRect = .zero
     override open func layoutSubviews() {
         super.layoutSubviews()
@@ -53,6 +60,31 @@ open class AnimationBlockView: UIView {
             previousLayoutFrame = frame
             scheduleHeightUpdate()
         }
+    }
+
+    override open func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { stopDisplayLink() }
+    }
+
+    private func startDisplayLinkIfNeeded() {
+        guard displayLink == nil else { return }
+        let link = DisplayLink()
+        link.delegatingObject(self)
+        displayLink = link
+    }
+
+    private func stopDisplayLinkIfIdle() {
+        guard let animator = heightAnimator else {
+            stopDisplayLink()
+            return
+        }
+        if animator.completed { stopDisplayLink() }
+    }
+
+    private func stopDisplayLink() {
+        displayLink?.delegatingObject(nil)
+        displayLink = nil
     }
 
     open func scheduleHeightUpdate() {
@@ -63,26 +95,24 @@ open class AnimationBlockView: UIView {
                 threshold: 1,
                 stopWhenHitTarget: true
             ))
-            if subview.frame.height == 0 { // forgive the first layout
-                heightAnimator?.setTarget(bounds.height)
-                heightAnimator?.setCurrent(bounds.height)
-            }
-        } else {
-            heightAnimator?.setTarget(bounds.height)
         }
+        let targetHeight = Double(bounds.height)
+        heightAnimator?.setTarget(targetHeight)
+        if subview.frame.height == 0 {
+            heightAnimator?.setCurrent(targetHeight)
+        }
+        if !(heightAnimator?.completed ?? true) { startDisplayLinkIfNeeded() }
         animationTik()
     }
 
     open func animationTik(delta: TimeInterval = 0) {
         if delta > 0 { heightAnimator?.update(withDeltaTime: delta) }
         guard let height = heightAnimator?.value else { return }
-        if let previousConstraint { previousConstraint.isActive = false }
         UIView.performWithoutAnimation {
-            let constraint = subview.heightAnchor.constraint(equalToConstant: height)
-            constraint.isActive = true
-            previousConstraint = constraint
+            heightConstraint.constant = CGFloat(height)
             layoutIfNeeded()
         }
+        stopDisplayLinkIfIdle()
     }
 }
 
