@@ -3,42 +3,94 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
-import UIKit
+#if canImport(UIKit)
+    import UIKit
 
-open class ListRowView: UIView {
-    public var rowKind: (any Hashable)?
+    open class ListRowView: UIView {
+        public var rowKind: (any Hashable)?
 
-    public var superListView: ListView? {
-        // find up
-        var view: UIView? = self
-        while view != nil {
-            if let listView = view as? ListView {
-                return listView
+        public var superListView: ListView? {
+            // find up
+            var view: UIView? = self
+            while view != nil {
+                if let listView = view as? ListView {
+                    return listView
+                }
+                view = view?.superview
             }
-            view = view?.superview
+            return nil
         }
-        return nil
+
+        /// called when this row is going to be used for a different item
+        open func prepareForReuse() {}
+
+        /// using the same animation as list view
+        open func withAnimation(_ block: @escaping () -> Void) {
+            withListAnimation(block)
+        }
+
+        override public init(frame: CGRect) {
+            super.init(frame: frame)
+            clipsToBounds = true
+        }
+
+        @available(*, unavailable)
+        public required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override open func layoutSubviews() {
+            super.layoutSubviews()
+        }
     }
 
-    // called when this row is going to be used for a different item
-    open func prepareForReuse() {}
+#elseif canImport(AppKit)
+    import AppKit
 
-    // using the same animation as list view
-    open func withAnimation(_ block: @escaping () -> Void) {
-        withListAnimation(block)
+    open class ListRowView: NSView {
+        override open var isFlipped: Bool {
+            true
+        }
+
+        public var rowKind: (any Hashable)?
+
+        public var superListView: ListView? {
+            var view: NSView? = self
+            while view != nil {
+                if let listView = view as? ListView {
+                    return listView
+                }
+                view = view?.superview
+            }
+            return nil
+        }
+
+        /// called when this row is going to be used for a different item
+        override open func prepareForReuse() {
+            super.prepareForReuse()
+        }
+
+        /// using the same animation as list view
+        open func withAnimation(_ block: @escaping () -> Void) {
+            withListAnimation(block)
+        }
+
+        override public init(frame: CGRect) {
+            super.init(frame: frame)
+            wantsLayer = true
+            layer?.masksToBounds = true
+        }
+
+        @available(*, unavailable)
+        public required init?(coder _: NSCoder) {
+            fatalError("init(coder:) has not been implemented")
+        }
+
+        override open func layout() {
+            super.layout()
+        }
     }
 
-    override public init(frame: CGRect) {
-        super.init(frame: frame)
-        clipsToBounds = true
-    }
-
-    @available(*, unavailable)
-    public required init?(coder _: NSCoder) {
-        fatalError("init(coder:) has not been implemented")
-    }
-
-    override open func layoutSubviews() {
-        super.layoutSubviews()
-    }
-}
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif

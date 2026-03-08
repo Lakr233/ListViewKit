@@ -6,11 +6,16 @@
 //
 
 import OrderedCollections
-import UIKit
 
-public class ListViewDiffableDataSource<Item>: ListViewDataSource
-    where Item: Identifiable & Hashable
-{
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
+
+public class ListViewDiffableDataSource<Item: Identifiable & Hashable>: ListViewDataSource {
     public typealias Snapshot = ListViewDataSourceSnapshot<Item>
 
     weak var listView: ListView?
@@ -36,18 +41,43 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
         applySnapshot(snapshot, animatingDifferences: animatingDifferences)
     }
 
-    func createAnimationForDisposeView(on view: UIView, listView: ListView) {
-        view.layoutIfNeeded()
-        let frameInListView = view.convert(view.bounds, to: listView)
-        guard let snapshotView = view.snapshotView(afterScreenUpdates: false) else { return }
-        snapshotView.frame = frameInListView
-        listView.addSubview(snapshotView)
-        withListAnimation {
-            snapshotView.alpha = 0
-        } completion: { _ in
-            snapshotView.removeFromSuperview()
+    #if canImport(UIKit)
+        func createAnimationForDisposeView(on view: UIView, listView: ListView) {
+            view.layoutIfNeeded()
+            let frameInListView = view.convert(view.bounds, to: listView)
+            guard let snapshotView = view.snapshotView(afterScreenUpdates: false) else { return }
+            snapshotView.frame = frameInListView
+            listView.addSubview(snapshotView)
+            withListAnimation {
+                snapshotView.alpha = 0
+            } completion: { _ in
+                MainActor.assumeIsolated {
+                    snapshotView.removeFromSuperview()
+                }
+            }
         }
-    }
+
+    #elseif canImport(AppKit)
+        func createAnimationForDisposeView(on view: NSView, listView: ListView) {
+            view.display()
+            let frameInListView = view.convert(view.bounds, to: listView)
+            guard let bitmapRep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else { return }
+            view.cacheDisplay(in: view.bounds, to: bitmapRep)
+            let image = NSImage(size: view.bounds.size)
+            image.addRepresentation(bitmapRep)
+            let snapshotView = NSImageView(image: image)
+            snapshotView.frame = frameInListView
+            snapshotView.wantsLayer = true
+            listView.addSubview(snapshotView)
+            withListAnimation {
+                snapshotView.alphaValue = 0
+            } completion: { _ in
+                MainActor.assumeIsolated {
+                    snapshotView.removeFromSuperview()
+                }
+            }
+        }
+    #endif
 
     public func applySnapshot(
         _ snapshot: Snapshot,
@@ -104,7 +134,11 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
             for identifier in addedItemIdentifiers {
                 guard let itemIndexInNewLayout = elements.index(forKey: identifier) else { continue }
                 if let rowView = listView.rowView(at: itemIndexInNewLayout) {
-                    rowView.alpha = 0
+                    #if canImport(UIKit)
+                        rowView.alpha = 0
+                    #elseif canImport(AppKit)
+                        rowView.alphaValue = 0
+                    #endif
                 }
             }
         }
@@ -117,16 +151,32 @@ public class ListViewDiffableDataSource<Item>: ListViewDataSource
                 for identifier in addedItemIdentifiers {
                     guard let itemIndexInNewLayout = self.elements.index(forKey: identifier) else { continue }
                     if let rowView = listView.rowView(at: itemIndexInNewLayout) {
-                        rowView.alpha = 1
+                        #if canImport(UIKit)
+                            rowView.alpha = 1
+                        #elseif canImport(AppKit)
+                            rowView.alphaValue = 1
+                        #endif
                     }
                 }
             } completion: { _ in
-                listView.setNeedsLayout()
-                listView.layoutIfNeeded()
+                MainActor.assumeIsolated {
+                    #if canImport(UIKit)
+                        listView.setNeedsLayout()
+                        listView.layoutIfNeeded()
+                    #elseif canImport(AppKit)
+                        listView.needsLayout = true
+                        listView.display()
+                    #endif
+                }
             }
         } else {
-            listView.setNeedsLayout()
-            listView.layoutIfNeeded()
+            #if canImport(UIKit)
+                listView.setNeedsLayout()
+                listView.layoutIfNeeded()
+            #elseif canImport(AppKit)
+                listView.needsLayout = true
+                listView.display()
+            #endif
         }
     }
 

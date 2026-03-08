@@ -6,7 +6,7 @@
 import Foundation
 
 @propertyWrapper
-final class Reference<T> {
+final class Reference<T>: @unchecked Sendable {
     var wrappedValue: T
 
     init(wrappedValue: T) {

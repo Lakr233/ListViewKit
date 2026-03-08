@@ -9,7 +9,7 @@ import Foundation
 import OrderedCollections
 
 extension ListViewDiffableDataSource {
-    struct SequenceDiffResult<T> where T: Hashable {
+    struct SequenceDiffResult<T: Hashable> {
         let elements: OrderedDictionary<T, Item>
 
         let removed: [Index]

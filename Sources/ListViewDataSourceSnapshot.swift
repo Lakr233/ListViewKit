@@ -8,11 +8,16 @@
 import Foundation
 import OrderedCollections
 
-public struct ListViewDataSourceSnapshot<Item> where Item: Identifiable {
+public struct ListViewDataSourceSnapshot<Item: Identifiable> {
     var elements: [Item]
 
-    public var count: Int { elements.count }
-    public var isEmpty: Bool { elements.isEmpty }
+    public var count: Int {
+        elements.count
+    }
+
+    public var isEmpty: Bool {
+        elements.isEmpty
+    }
 
     init(elements: OrderedDictionary<Item.ID, Item>) {
         self.elements = elements.values.elements

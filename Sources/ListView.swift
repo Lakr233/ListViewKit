@@ -4,9 +4,16 @@
 //
 
 import DequeModule
-import UIKit
 
-open class ListView: ListScrollView, Identifiable {
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
+
+open class ListView: ListScrollView {
     public var id: UUID = .init()
 
     public typealias DataSource = ListViewDataSource
@@ -23,18 +30,34 @@ open class ListView: ListScrollView, Identifiable {
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
 
     public var topInset: CGFloat = 0 {
-        didSet { setNeedsLayout() }
+        didSet {
+            #if canImport(UIKit)
+                setNeedsLayout()
+            #elseif canImport(AppKit)
+                needsLayout = true
+            #endif
+        }
     }
 
     public var bottomInset: CGFloat = 0 {
-        didSet { setNeedsLayout() }
+        didSet {
+            #if canImport(UIKit)
+                setNeedsLayout()
+            #elseif canImport(AppKit)
+                needsLayout = true
+            #endif
+        }
     }
 
     override public init(frame: CGRect) {
         super.init(frame: frame)
 
-        alwaysBounceVertical = true
-        clipsToBounds = true
+        #if canImport(UIKit)
+            alwaysBounceVertical = true
+            clipsToBounds = true
+        #elseif canImport(AppKit)
+            layer?.masksToBounds = true
+        #endif
     }
 
     @available(*, unavailable)
@@ -59,9 +82,19 @@ open class ListView: ListScrollView, Identifiable {
         }
     }
 
-    override open func layoutSubviews() {
-        super.layoutSubviews()
+    #if canImport(UIKit)
+        override open func layoutSubviews() {
+            super.layoutSubviews()
+            performLayout()
+        }
+    #elseif canImport(AppKit)
+        override open func layout() {
+            super.layout()
+            performLayout()
+        }
+    #endif
 
+    private func performLayout() {
         let bounds = bounds
         layoutCache.contentBounds = bounds
         contentSize = supposedContentSize
@@ -76,7 +109,11 @@ open class ListView: ListScrollView, Identifiable {
         prepareVisibleRows()
         for (id, rowView) in visibleRows {
             rowView.frame = rectForRow(with: id)
-            rowView.setNeedsLayout()
+            #if canImport(UIKit)
+                rowView.setNeedsLayout()
+            #elseif canImport(AppKit)
+                rowView.needsLayout = true
+            #endif
         }
 
         #if DEBUG
@@ -102,14 +139,20 @@ open class ListView: ListScrollView, Identifiable {
 
         for (id, rowView) in visibleRows {
             rowView.frame = rectForRow(with: id)
-            rowView.setNeedsLayout()
+            #if canImport(UIKit)
+                rowView.setNeedsLayout()
+            #elseif canImport(AppKit)
+                rowView.needsLayout = true
+            #endif
         }
 
         removeUnusedRowsFromSuperview()
     }
 }
 
-// internal api
+extension ListView: @MainActor Identifiable {}
+
+/// internal api
 extension ListView {
     func reusableDequeRef(for kind: AnyHashable) -> Reference<Deque<ListRowView>> {
         if let ref = reusableRows[kind] {
@@ -177,8 +220,13 @@ extension ListView {
             return
         }
         configureRowView(view, for: item, at: index)
-        view.setNeedsLayout()
-        view.layoutIfNeeded()
+        #if canImport(UIKit)
+            view.setNeedsLayout()
+            view.layoutIfNeeded()
+        #elseif canImport(AppKit)
+            view.needsLayout = true
+            view.display()
+        #endif
     }
 
     func configureRowView(_ rowView: ListRowView, for _: any Identifiable, at index: Int) {

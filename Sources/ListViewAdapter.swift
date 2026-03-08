@@ -3,8 +3,15 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
-import UIKit
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
 
+@MainActor
 public protocol ListViewAdapter: AnyObject {
     typealias ItemType = (any Identifiable)
     typealias RowKind = (any Hashable)

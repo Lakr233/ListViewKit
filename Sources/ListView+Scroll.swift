@@ -5,7 +5,13 @@
 //  Created by 秋星桥 on 5/21/25.
 //
 
-import UIKit
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
 
 public extension ListView {
     /// The position in the list view (top, middle, bottom) to scroll a specified row to.

@@ -3,10 +3,16 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
-import UIKit
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
 
 extension ListView {
-    final class LayoutCache {
+    @MainActor final class LayoutCache {
         weak var listView: ListView?
 
         var heightCache: [AnyHashable: CGFloat] = [:]
@@ -105,7 +111,7 @@ extension ListView {
             return frameCache
         }
 
-        func requestInvalidateHeights<S>(for identifiers: S) where S: Sequence, S.Element: Hashable {
+        func requestInvalidateHeights<S: Sequence>(for identifiers: S) where S.Element: Hashable {
             for id in identifiers {
                 heightCache.removeValue(forKey: id)
             }

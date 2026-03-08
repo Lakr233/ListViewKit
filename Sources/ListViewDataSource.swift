@@ -4,8 +4,16 @@
 //
 
 import OrderedCollections
-import UIKit
 
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
+
+@MainActor
 public class ListViewDataSource {
     public typealias ItemType = Hashable & Identifiable
 

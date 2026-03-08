@@ -6,7 +6,14 @@
 //
 
 import Foundation
-import UIKit
+
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
 
 public extension ListView {
     var visibleRowViews: [ListRowView] {
@@ -27,7 +34,11 @@ public extension ListView {
 
     func invaliateLayout() {
         layoutCache.invalidateAll()
-        setNeedsLayout()
+        #if canImport(UIKit)
+            setNeedsLayout()
+        #elseif canImport(AppKit)
+            needsLayout = true
+        #endif
     }
 
     func rowView(at index: Int) -> ListRowView? {
