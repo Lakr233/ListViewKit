@@ -87,6 +87,17 @@ public class ListViewDiffableDataSource<Item: Identifiable & Hashable>: ListView
 
         let diffResult = difference(with: snapshot.elements)
         if diffResult.isEmpty { return }
+
+        #if canImport(AppKit)
+            // On macOS, disable animation when cells are reordered —
+            // AppKit frame animations for reorder look unnatural.
+            let animatingDifferences = if !diffResult.reordered.isEmpty {
+                false
+            } else {
+                animatingDifferences
+            }
+        #endif
+
         let addedItemIdentifiers = diffResult.added.map(\.identifier)
 
         let removed = diffResult.removed

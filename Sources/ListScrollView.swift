@@ -115,8 +115,8 @@ import SpringInterpolation
             scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
             if #available(iOS 15.0, macCatalyst 15.0, *) {
                 scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 80, maximum: 120, preferred: 120)
-                scrollingTik = CACurrentMediaTime()
             }
+            scrollingTik = CACurrentMediaTime()
             scrollingDisplayLink?.add(to: .main, forMode: .common)
         }
 
@@ -139,6 +139,7 @@ import SpringInterpolation
             }
             let time = CACurrentMediaTime()
             let delta = min(1 / 30, time - scrollingTik)
+            scrollingTik = time
             scrollingContext.update(withDeltaTime: delta)
             let loc = nearestScrollLocationInBounds(offset: .init(
                 x: scrollingContext.x.value,
@@ -165,7 +166,7 @@ import SpringInterpolation
         var scrollingDisplayLink: DisplayLink?
         var scrollingContext: SpringInterpolation2D = .init(
             .init(
-                angularFrequency: 6,
+                angularFrequency: 16,
                 dampingRatio: 1,
                 threshold: 0.05,
                 stopWhenHitTarget: true
@@ -182,6 +183,18 @@ import SpringInterpolation
         var isTracking: Bool {
             _isTracking
         }
+
+        /// Raw (un-rubber-banded) Y offset during user scroll tracking.
+        /// Delta is always applied to this value; rubber-band is applied only for display.
+        private var _trackingRawOffsetY: CGFloat = 0
+
+        /// True when spring is animating a bounce-back from overscroll.
+        /// During bounce, all system momentum events are consumed (ignored).
+        private var _isBouncing: Bool = false
+
+        /// Estimated visual scroll velocity (points/sec) for spring handoff.
+        private var _scrollVelocityY: CGFloat = 0
+        private var _prevScrollTime: CFTimeInterval = 0
 
         open var contentInsets: NSEdgeInsets = .init() {
             didSet { needsLayout = true }
@@ -209,6 +222,7 @@ import SpringInterpolation
             set {
                 guard _contentOffset != newValue else { return }
                 _contentOffset = newValue
+                setBoundsOrigin(newValue)
                 needsLayout = true
             }
         }
@@ -266,43 +280,104 @@ import SpringInterpolation
         }
 
         override open func scrollWheel(with event: NSEvent) {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+
+            // During bounce-back, eat all system momentum events.
+            // Only a new direct touch (phase.began) can interrupt.
+            if _isBouncing {
+                if event.momentumPhase == .ended || event.momentumPhase == .cancelled {
+                    // Momentum sequence is fully over, safe to clear.
+                    _isBouncing = false
+                    return
+                }
+                if event.momentumPhase != [] {
+                    return
+                }
+                if event.phase == .began {
+                    _isBouncing = false
+                    // fall through to normal began handling
+                } else {
+                    return
+                }
+            }
+
             if event.phase == .began || event.momentumPhase == .began {
+                // Full reset: kill any in-flight animation and clear all tracking state.
                 _isTracking = true
+                _isBouncing = false
                 cancelCurrentScrolling()
+                // Initialize raw offset from current visual position.
+                // If out of bounds (e.g. grabbed during bounce-back animation),
+                // invert the rubber-band to recover the raw position for continuity.
+                let currentY = contentOffset.y
+                if currentY < min.y {
+                    let visualOverscroll = min.y - currentY
+                    _trackingRawOffsetY = min.y - inverseRubberBand(visualOverscroll, dimension: bounds.height)
+                } else if currentY > max.y {
+                    let visualOverscroll = currentY - max.y
+                    _trackingRawOffsetY = max.y + inverseRubberBand(visualOverscroll, dimension: bounds.height)
+                } else {
+                    _trackingRawOffsetY = currentY
+                }
+                _scrollVelocityY = 0
+                _prevScrollTime = CACurrentMediaTime()
             }
 
             let deltaY = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 10)
-            let deltaX = event.scrollingDeltaX * (event.hasPreciseScrollingDeltas ? 1 : 10)
+            _trackingRawOffsetY -= deltaY
 
-            var newOffset = contentOffset
-            newOffset.x -= deltaX
-            newOffset.y -= deltaY
-
-            // Rubber-band if out of bounds
-            let min = minimumContentOffset
-            let max = maximumContentOffset
-            if newOffset.y < min.y {
-                let overscroll = min.y - newOffset.y
-                newOffset.y = min.y - rubberBand(overscroll, dimension: bounds.height)
-            } else if newOffset.y > max.y {
-                let overscroll = newOffset.y - max.y
-                newOffset.y = max.y + rubberBand(overscroll, dimension: bounds.height)
-            }
-            if newOffset.x < min.x {
-                let overscroll = min.x - newOffset.x
-                newOffset.x = min.x - rubberBand(overscroll, dimension: bounds.width)
-            } else if newOffset.x > max.x {
-                let overscroll = newOffset.x - max.x
-                newOffset.x = max.x + rubberBand(overscroll, dimension: bounds.width)
+            // Apply rubber-band only for display
+            var visualY = _trackingRawOffsetY
+            if visualY < min.y {
+                let overscroll = min.y - visualY
+                visualY = min.y - rubberBand(overscroll, dimension: bounds.height)
+            } else if visualY > max.y {
+                let overscroll = visualY - max.y
+                visualY = max.y + rubberBand(overscroll, dimension: bounds.height)
             }
 
-            setContentOffset(newOffset, animated: false)
+            // Track visual velocity for spring handoff.
+            // Only update when there is meaningful movement — the ended event
+            // often has deltaY ≈ 0 which would incorrectly zero out the velocity.
+            let now = CACurrentMediaTime()
+            let dt = now - _prevScrollTime
+            let displacement = visualY - contentOffset.y
+            if dt > 0 && dt < 0.2 && abs(displacement) > 0.5 {
+                _scrollVelocityY = displacement / dt
+            }
+            _prevScrollTime = now
 
-            if event.phase == .ended || event.phase == .cancelled
-                || event.momentumPhase == .ended || event.momentumPhase == .cancelled
-            {
+            setContentOffset(.init(x: contentOffset.x, y: visualY), animated: false)
+
+            // Finger lifted while out of bounds → immediately bounce back with velocity.
+            // Do NOT wait for momentum — the spring handles deceleration + return as one motion.
+            if event.phase == .ended || event.phase == .cancelled {
+                let clamped = nearestScrollLocationInBounds(offset: contentOffset)
+                if clamped != contentOffset {
+                    _isTracking = false
+                    _isBouncing = true
+                    let target = clamped
+                    scrollingContext.setCurrent(
+                        .init(x: contentOffset.x, y: contentOffset.y),
+                        vel: .init(x: 0, y: _scrollVelocityY)
+                    )
+                    scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
+                    scrollingTarget = target
+                    if scrollingDisplayLink == nil {
+                        let link = DisplayLink()
+                        link.delegatingObject(self)
+                        scrollingDisplayLink = link
+                        scrollingTik = CACurrentMediaTime()
+                    }
+                    return
+                }
+                // Within bounds → let system momentum take over naturally
+            }
+
+            // Momentum ended while out of bounds (e.g. momentum carried past bounds)
+            if event.momentumPhase == .ended || event.momentumPhase == .cancelled {
                 _isTracking = false
-                // Snap back if out of bounds
                 let clamped = nearestScrollLocationInBounds(offset: contentOffset)
                 if clamped != contentOffset {
                     scroll(to: clamped, preserveVelocity: false)
@@ -313,6 +388,12 @@ import SpringInterpolation
         private func rubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
             let constant: CGFloat = 0.55
             return (1.0 - (1.0 / ((offset * constant / dimension) + 1.0))) * dimension
+        }
+
+        private func inverseRubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
+            let constant: CGFloat = 0.55
+            guard offset > 0, offset < dimension else { return offset }
+            return offset * dimension / (constant * (dimension - offset))
         }
 
         /// scroll to an offset
@@ -360,6 +441,8 @@ import SpringInterpolation
                 vel: .init(x: 0, y: 0)
             )
             scrollingTarget = nil
+            // Do NOT clear _isBouncing here — the system may still be sending
+            // momentum events that must be eaten. Only scrollWheel clears it.
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
             scrollingDisplayLink?.delegatingObject(nil)
             scrollingDisplayLink = nil
@@ -372,10 +455,13 @@ import SpringInterpolation
             }
             let delta = min(1 / 30, context.duration)
             scrollingContext.update(withDeltaTime: delta)
-            let loc = nearestScrollLocationInBounds(offset: .init(
+            // Do NOT clamp here — the spring target is already clamped in scroll(to:).
+            // Clamping intermediate values kills the bounce-back animation
+            // (e.g. spring animating from -10 to 0 would visually jump to 0 on frame 1).
+            let loc = CGPoint(
                 x: scrollingContext.x.value,
                 y: scrollingContext.y.value
-            ))
+            )
             setContentOffset(loc, animated: false)
         }
 
