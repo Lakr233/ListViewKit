@@ -30,12 +30,30 @@ extension ListView {
             numberOfItems != heightCache.count
         }
 
+        /// Identifiers whose cached height currently serves as an estimate.
+        /// The per-entry width stamp is the ground truth; this set exists so
+        /// layout can ask "anything left to correct?" in O(1) every tick.
+        private(set) var estimatedIdentifiers: Set<AnyHashable> = []
+        var hasEstimatedHeights: Bool { !estimatedIdentifiers.isEmpty }
+
         var contentBounds: CGRect = .zero {
             didSet {
                 let oldWidth = oldValue.width
                 let width = contentBounds.width
                 if oldWidth == width { return }
-                invalidateAll()
+                guard let listView, listView.deferredSizeCalculation,
+                      oldWidth > 0, width > 0, !heightCache.isEmpty
+                else {
+                    invalidateAll()
+                    return
+                }
+                // Heights measured at the old width become estimates. Frames
+                // are rebuilt without touching the adapter so they carry the
+                // new width and remain a valid prefix sum.
+                estimatedIdentifiers = Set(
+                    heightCache.lazy.filter { $0.value.width != width }.map(\.key)
+                )
+                contentHeightCache = rebuildFrame(listView: listView, count: numberOfItems)
             }
         }
 
@@ -76,12 +94,14 @@ extension ListView {
                     index: index,
                     listView: listView
                 )
+                estimatedIdentifiers.remove(key)
             }
             let staleIdentifiers = heightCache.keys.filter {
                 !validIdentifiers.contains($0)
             }
             for key in staleIdentifiers {
                 heightCache.removeValue(forKey: key)
+                estimatedIdentifiers.remove(key)
             }
 
             contentHeightCache = rebuildFrame(listView: listView, count: count)
@@ -154,6 +174,7 @@ extension ListView {
                     index: entry.index,
                     listView: listView
                 )
+                estimatedIdentifiers.remove(entry.key)
             }
             contentHeightCache = rebuildFrame(
                 listView: listView,
@@ -247,6 +268,7 @@ extension ListView {
             contentHeightCache = nil
             for identifier in erasedIdentifiers {
                 heightCache.removeValue(forKey: identifier)
+                estimatedIdentifiers.remove(identifier)
             }
             erasedIdentifiers
                 .compactMap { index(for: $0) }
@@ -268,6 +290,7 @@ extension ListView {
             contentHeightCache = nil
             heightCache.removeAll()
             frameCache.removeAll()
+            estimatedIdentifiers.removeAll()
         }
     }
 }

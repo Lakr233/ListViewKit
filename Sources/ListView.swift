@@ -50,6 +50,23 @@ open class ListView: ListScrollView {
         }
     }
 
+    /// Keeps previously measured row heights as estimates when the content
+    /// width changes, instead of discarding them all and re-measuring every
+    /// row synchronously. Only the rows needed for the visible rect are
+    /// measured during layout; the rest are corrected in small chunks on the
+    /// main run loop while the scroll position is compensated to keep visible
+    /// rows stationary. Estimated frames keep the list scrollable at
+    /// approximately the right content height until every row is corrected.
+    public var deferredSizeCalculation: Bool = false {
+        didSet {
+            guard oldValue, !deferredSizeCalculation else { return }
+            // Turning the mode off with estimates outstanding falls back to
+            // a full synchronous recompute on the next layout pass.
+            layoutCache.invalidateAll()
+            requestLayout()
+        }
+    }
+
     override public init(frame: CGRect) {
         super.init(frame: frame)
 

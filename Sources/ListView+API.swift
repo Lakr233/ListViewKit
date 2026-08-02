@@ -91,7 +91,7 @@ public extension ListView {
         invalidateLayout()
     }
 
-    private func requestLayout() {
+    internal func requestLayout() {
         #if canImport(UIKit)
             setNeedsLayout()
         #elseif canImport(AppKit)
