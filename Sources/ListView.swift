@@ -29,6 +29,7 @@ open class ListView: ListScrollView {
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
     var rowsPendingRemoval: [ListRowView] = []
+    var isDeferredMeasurementScheduled = false
 
     public var topInset: CGFloat = 0 {
         didSet {
@@ -116,6 +117,24 @@ open class ListView: ListScrollView {
     private func performLayout() {
         let bounds = bounds
         layoutCache.contentBounds = bounds
+        if deferredSizeCalculation, layoutCache.hasEstimatedHeights {
+            // Correct only the rows the viewport needs, keep everything at
+            // and below the top edge stationary, and let the run-loop drain
+            // handle the rest. Compensation must precede the contentSize
+            // update so the clamped offset lands inside the new bounds
+            // without triggering a programmatic scroll.
+            let visibleRect = CGRect(
+                origin: .init(x: contentOffset.x, y: contentOffset.y - topInset),
+                size: bounds.size
+            )
+            let visibleIndices = layoutCache.indices(intersecting: visibleRect)
+            let offsetDelta = layoutCache.correctEstimatedHeights(
+                at: visibleIndices,
+                anchorY: visibleRect.minY
+            )
+            compensateScrollOffset(by: offsetDelta)
+            scheduleDeferredMeasurement()
+        }
         contentSize = supposedContentSize
 
         let contentOffsetY = contentOffset.y

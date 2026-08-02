@@ -184,6 +184,76 @@ extension ListView {
             return true
         }
 
+        /// Returns the estimated rows the background drain should correct
+        /// next: rows above the rect first, nearest first, so a bottom-pinned
+        /// list walks upward and each chunk rebuilds frames exactly once.
+        /// Identifiers that no longer resolve to an index are dropped.
+        func nextEstimatedIndices(near rect: CGRect, limit: Int) -> [Int] {
+            guard limit > 0, hasEstimatedHeights else { return [] }
+            var above: [Int] = []
+            var below: [Int] = []
+            var deadKeys: [AnyHashable] = []
+            for key in estimatedIdentifiers {
+                guard let index = index(for: key) else {
+                    deadKeys.append(key)
+                    continue
+                }
+                if let frame = frameCache[index], frame.minY >= rect.minY {
+                    below.append(index)
+                } else {
+                    above.append(index)
+                }
+            }
+            for key in deadKeys {
+                estimatedIdentifiers.remove(key)
+            }
+            above.sort(by: >)
+            below.sort(by: <)
+            return Array((above + below).prefix(limit))
+        }
+
+        /// Re-measures the estimated rows among `indices` at the current width
+        /// and rebuilds frames from the earliest affected index. Returns the
+        /// total height delta of corrected rows lying entirely above
+        /// `anchorY` — the contentOffset adjustment that keeps rows at and
+        /// below the anchor visually stationary.
+        func correctEstimatedHeights(at indices: [Int], anchorY: CGFloat) -> CGFloat {
+            guard hasEstimatedHeights,
+                  let listView,
+                  let adapter = listView.adapter,
+                  let dataSource = listView.dataSource
+            else { return 0 }
+
+            var offsetDelta: CGFloat = 0
+            var earliestAffected = Int.max
+            for index in indices {
+                guard let key = identifier(for: index),
+                      estimatedIdentifiers.contains(key),
+                      let item = dataSource.item(at: index, in: listView)
+                else { continue }
+                let measured = measuredHeight(
+                    adapter: adapter,
+                    item: item,
+                    index: index,
+                    listView: listView
+                )
+                let estimatedHeight = heightCache[key]?.height ?? 0
+                heightCache[key] = measured
+                estimatedIdentifiers.remove(key)
+                earliestAffected = min(earliestAffected, index)
+                if let estimatedFrame = frameCache[index], estimatedFrame.maxY <= anchorY {
+                    offsetDelta += measured.height - estimatedHeight
+                }
+            }
+            guard earliestAffected != .max else { return 0 }
+            contentHeightCache = rebuildFrame(
+                listView: listView,
+                count: numberOfItems,
+                startingAt: earliestAffected
+            )
+            return offsetDelta
+        }
+
         private func measuredHeight(
             adapter: any ListViewAdapter,
             item: any Identifiable,

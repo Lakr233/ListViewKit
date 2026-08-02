@@ -130,6 +130,27 @@ import SpringInterpolation
             scrollingDisplayLink = nil
         }
 
+        /// Shifts the current offset and any in-flight programmatic scroll by
+        /// `dy` without cancelling it. Deferred height correction uses this so
+        /// rows above the viewport can change size while visible rows stay
+        /// visually stationary.
+        func compensateScrollOffset(by dy: CGFloat) {
+            guard dy != 0 else { return }
+            super.contentOffset.y += dy
+            if var target = scrollingTarget {
+                target.y += dy
+                scrollingTarget = target
+                scrollingContext.setCurrent(
+                    .init(x: scrollingContext.x.value, y: scrollingContext.y.value + dy),
+                    vel: .init(
+                        x: scrollingContext.x.context.currentVel,
+                        y: scrollingContext.y.context.currentVel
+                    )
+                )
+                scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
+            }
+        }
+
         @objc func handleScrollingAnimation(_: CADisplayLink) {
             if isTracking || scrollingContext.completed {
                 cancelCurrentScrolling()
@@ -347,7 +368,7 @@ import SpringInterpolation
         private var _lastVelocitySampleTime: CFTimeInterval = 0
 
         private struct MomentumAnimation {
-            let initialOffset: CGPoint
+            var initialOffset: CGPoint
             let initialVelocityY: CGFloat
             let duration: TimeInterval
             var elapsedTime: TimeInterval = 0
@@ -356,7 +377,7 @@ import SpringInterpolation
         private var _momentumAnimation: MomentumAnimation?
 
         private struct RubberBandAnimation {
-            let targetOffset: CGPoint
+            var targetOffset: CGPoint
             let initialPositionY: CGFloat
             let initialVelocityY: CGFloat
             var elapsedTime: TimeInterval = 0
@@ -846,6 +867,34 @@ import SpringInterpolation
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
             scrollingDisplayLink?.delegatingObject(nil)
             scrollingDisplayLink = nil
+        }
+
+        /// Shifts the current offset and every piece of in-flight scroll state
+        /// by `dy` without cancelling tracking, momentum, rebound, or
+        /// programmatic scrolling. Deferred height correction uses this so
+        /// rows above the viewport can change size while visible rows stay
+        /// visually stationary.
+        func compensateScrollOffset(by dy: CGFloat) {
+            guard dy != 0 else { return }
+            _contentOffset.y += dy
+            setBoundsOrigin(_contentOffset)
+            needsLayout = true
+            updateVerticalScroller()
+            _trackingRawOffsetY += dy
+            _momentumAnimation?.initialOffset.y += dy
+            _rubberBandAnimation?.targetOffset.y += dy
+            if var target = scrollingTarget {
+                target.y += dy
+                scrollingTarget = target
+                scrollingContext.setCurrent(
+                    .init(x: scrollingContext.x.value, y: scrollingContext.y.value + dy),
+                    vel: .init(
+                        x: scrollingContext.x.context.currentVel,
+                        y: scrollingContext.y.context.currentVel
+                    )
+                )
+                scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
+            }
         }
 
         func handleScrollingAnimation(_ context: DisplayLinkCallbackContext) {
