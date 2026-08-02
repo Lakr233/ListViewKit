@@ -244,7 +244,7 @@ struct ListViewScrollAppKitTests {
     func rebuildingLayoutCacheRemovesStaleEntries() {
         let context = makeListView()
         let cache = context.listView.layoutCache
-        cache.heightCache[AnyHashable(999)] = 44
+        cache.heightCache[AnyHashable(999)] = .init(height: 44, width: 200)
         cache.frameCache[999] = CGRect(x: 0, y: 99_999, width: 200, height: 44)
 
         cache.rebuild()

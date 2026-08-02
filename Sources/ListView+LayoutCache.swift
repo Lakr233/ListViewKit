@@ -13,9 +13,17 @@
 
 extension ListView {
     @MainActor final class LayoutCache {
+        /// A row height together with the content width it was measured at.
+        /// An entry whose width differs from the current content width is an
+        /// estimate awaiting re-measurement.
+        struct MeasuredHeight {
+            var height: CGFloat
+            var width: CGFloat
+        }
+
         weak var listView: ListView?
 
-        var heightCache: [AnyHashable: CGFloat] = [:]
+        var heightCache: [AnyHashable: MeasuredHeight] = [:]
         var frameCache: [Int: CGRect] = [:]
         var contentHeightCache: CGFloat?
         var isCacheInvalid: Bool {
@@ -102,7 +110,7 @@ extension ListView {
             var usedHeight = prefixHeight
             for index in startIndex ..< count {
                 guard let key = identifier(for: index) else { continue }
-                let height = heightCache[key] ?? 0
+                let height = heightCache[key]?.height ?? 0
                 let frame = CGRect(x: 0, y: usedHeight, width: contentWidth, height: height)
                 frameCache[index] = frame
                 usedHeight += height
@@ -160,13 +168,16 @@ extension ListView {
             item: any Identifiable,
             index: Int,
             listView: ListView
-        ) -> CGFloat {
+        ) -> MeasuredHeight {
             let measuredHeight = adapter.listView(listView, heightFor: item, at: index)
             assert(
                 measuredHeight.isFinite && measuredHeight >= 0,
                 "Row heights must be finite and nonnegative."
             )
-            return measuredHeight.isFinite ? ceil(max(0, measuredHeight)) : 0
+            return .init(
+                height: measuredHeight.isFinite ? ceil(max(0, measuredHeight)) : 0,
+                width: listView.bounds.width
+            )
         }
 
         func identifier(for index: Int) -> AnyHashable? {
@@ -183,7 +194,7 @@ extension ListView {
         func height(for index: Int) -> CGFloat? {
             if isCacheInvalid { rebuild() }
             guard let key = identifier(for: index) else { return nil }
-            return heightCache[key]
+            return heightCache[key]?.height
         }
 
         func frame(for index: Int) -> CGRect? {
