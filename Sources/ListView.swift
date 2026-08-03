@@ -263,7 +263,13 @@ extension ListView {
         guard let item = dataSource.item(at: index, in: self) else {
             return
         }
-        configureRowView(view, for: item, at: index)
+        // In-place reconfiguration must keep the row's current content on
+        // screen while the adapter applies the update. prepareForReuse is
+        // reserved for rows coming back from the reuse pool: resetting here
+        // renders the row empty for the frames between this call and any
+        // asynchronous content the adapter installs (e.g. a throttled
+        // streaming text update).
+        adapter?.listView(self, configureRowView: view, for: item, at: index)
         #if canImport(UIKit)
             view.setNeedsLayout()
             view.layoutIfNeeded()
