@@ -106,6 +106,29 @@ struct ListViewDeferredSizeAppKitTests {
         #expect(visible.isSuperset(of: remeasured))
     }
 
+    /// While the width keeps changing, the drain must not measure off-screen
+    /// rows — every correction would land on a width about to be replaced.
+    /// Correction resumes (and converges) once the width holds still.
+    @Test
+    func widthChurnDefersOffScreenCorrection() {
+        let context = makeListView(deferred: true)
+        let listView = context.listView
+        resize(listView, toWidth: 300)
+        context.adapter.measurementCounts.removeAll()
+        resize(listView, toWidth: 320)
+        let visible = Set(listView.indicesForVisibleRows)
+
+        // Well inside the hold-off window: only visible rows may measure.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.05))
+        #expect(Set(context.adapter.measurementCounts.keys).isSubset(of: visible))
+        #expect(listView.layoutCache.hasEstimatedHeights)
+
+        drainDeferredMeasurements(of: listView)
+        #expect(!listView.layoutCache.hasEstimatedHeights)
+        let control = makeListView(deferred: false, width: 320)
+        #expect(listView.layoutCache.contentHeight == control.listView.layoutCache.contentHeight)
+    }
+
     @Test
     func drainConvergesToFullRecomputeResult() {
         let context = makeListView(deferred: true)

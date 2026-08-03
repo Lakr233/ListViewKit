@@ -30,6 +30,10 @@ open class ListView: ListScrollView {
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
     var rowsPendingRemoval: [ListRowView] = []
     var isDeferredMeasurementScheduled = false
+    /// When the content width last turned measured heights into estimates.
+    /// The deferred drain reads this to hold off while the width is still
+    /// churning — see `drainDeferredMeasurementChunk`.
+    var lastWidthReflowAt: CFTimeInterval = 0
 
     public var topInset: CGFloat = 0 {
         didSet {

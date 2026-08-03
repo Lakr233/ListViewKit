@@ -53,6 +53,7 @@ extension ListView {
                 estimatedIdentifiers = Set(
                     heightCache.lazy.filter { $0.value.width != width }.map(\.key)
                 )
+                listView.lastWidthReflowAt = CACurrentMediaTime()
                 contentHeightCache = rebuildFrame(listView: listView, count: numberOfItems)
             }
         }
