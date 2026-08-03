@@ -1,4 +1,6 @@
-#if canImport(AppKit)
+#if canImport(UIKit)
+// UIKit platforms (including Mac Catalyst) are exercised by the UIKit suites.
+#elseif canImport(AppKit)
 import AppKit
 import Testing
 @testable import ListViewKit

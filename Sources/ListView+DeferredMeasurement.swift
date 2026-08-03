@@ -65,7 +65,10 @@ extension ListView {
     private func drainDeferredMeasurementChunk() {
         isDeferredMeasurementScheduled = false
         guard deferredSizeCalculation, layoutCache.hasEstimatedHeights else { return }
-        #if canImport(AppKit)
+        #if canImport(UIKit)
+            // UIKit (including Mac Catalyst) has no live-resize notion; the
+            // width-churn hold-off below covers window resizing there.
+        #elseif canImport(AppKit)
             // Live resize already corrects the visible rect every layout tick;
             // spending the remaining frame budget on off-screen rows would
             // stutter the drag.
