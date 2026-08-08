@@ -14,10 +14,14 @@ private struct AnchorItem: Identifiable, Hashable {
 @MainActor
 private final class AnchorProbe {
     var height: CGFloat = 100
+    /// Overrides for individual rows, so a pass can shrink one row and grow
+    /// another by the same amount.
+    var heights: [Int: CGFloat] = [:]
     var widthScale = false
 
-    func height(of _: AnchorItem, width: CGFloat) -> CGFloat {
-        widthScale ? (height * 400 / max(width, 1)).rounded() : height
+    func height(of item: AnchorItem, width: CGFloat) -> CGFloat {
+        let height = heights[item.id] ?? height
+        return widthScale ? (height * 400 / max(width, 1)).rounded() : height
     }
 }
 
@@ -173,6 +177,28 @@ struct ListViewAnchorAppKitTests {
         #expect(listView.contentOffset.y == offsetBefore)
         #expect(listView.scrollingDisplayLink != nil)
         listView.cancelCurrentScrolling()
+    }
+
+    /// Compensation can leave the offset out of bounds while the total height
+    /// is unchanged: one row shrinks above the anchor and another grows below
+    /// it by the same amount. Nothing is left to notice unless the offset is
+    /// reconciled regardless of whether the content size moved.
+    @Test
+    func compensationPastAnEdgeSettlesEvenWhenTheHeightIsUnchanged() {
+        let context = makeContext()
+        let listView = context.listView
+        let heightBefore = listView.contentSize.height
+        // Row 0 spans 0..<100 and straddles the viewport top, so it anchors on
+        // row 1 and its shrink is absorbed by the offset.
+        listView.setContentOffset(.init(x: 0, y: 50), animated: false)
+        listView.layoutSubtreeIfNeeded()
+
+        context.probe.heights = [0: 40, 1: 160]
+        listView.invalidateLayout()
+        drain(listView)
+
+        #expect(listView.contentSize.height == heightBefore)
+        #expect(listView.contentOffset.y == listView.minimumContentOffset.y)
     }
 
     /// REPRO 4: a bottom-pinned list that shrinks stays pinned to the bottom

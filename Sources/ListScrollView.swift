@@ -44,10 +44,11 @@ import SpringInterpolation
         override open var contentSize: CGSize {
             get { super.contentSize }
             set {
-                guard super.contentSize != newValue else { return }
-                let currentOffset = contentOffset
-                super.contentSize = newValue
-                applyContentOffset(currentOffset)
+                if super.contentSize != newValue {
+                    let currentOffset = contentOffset
+                    super.contentSize = newValue
+                    applyContentOffset(currentOffset)
+                }
                 reconcileOffsetWithContentSize()
             }
         }
@@ -77,7 +78,10 @@ import SpringInterpolation
             )
         }
 
-        /// Puts the offset back in bounds after the content size changed.
+        /// Puts the offset back in bounds at the end of a layout pass. It runs
+        /// even when the size is unchanged: a row shrinking above the anchor
+        /// and one growing below it cancel out in the total while the offset
+        /// still moved, and nothing else would notice it left the bounds.
         ///
         /// Whether the offset may sit outside the bounds is a question about
         /// who owns it, not about the offset itself: deferred measurement
@@ -515,11 +519,12 @@ import SpringInterpolation
         open var contentSize: CGSize {
             get { _contentSize }
             set {
-                guard _contentSize != newValue else { return }
-                let currentOffset = contentOffset
-                _contentSize = newValue
-                applyContentOffset(currentOffset)
-                needsLayout = true
+                if _contentSize != newValue {
+                    let currentOffset = contentOffset
+                    _contentSize = newValue
+                    applyContentOffset(currentOffset)
+                    needsLayout = true
+                }
                 reconcileOffsetWithContentSize()
             }
         }
@@ -696,7 +701,10 @@ import SpringInterpolation
             appliedScrollerPlacement = nil
         }
 
-        /// Puts the offset back in bounds after the content size changed.
+        /// Puts the offset back in bounds at the end of a layout pass. It runs
+        /// even when the size is unchanged: a row shrinking above the anchor
+        /// and one growing below it cancel out in the total while the offset
+        /// still moved, and nothing else would notice it left the bounds.
         ///
         /// Whether the offset may sit outside the bounds is a question about
         /// who owns it, not about the offset itself: deferred measurement
