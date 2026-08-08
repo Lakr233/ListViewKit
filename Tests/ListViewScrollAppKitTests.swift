@@ -229,13 +229,18 @@ struct ListViewScrollAppKitTests {
         let initialCounts = probe.measurementCounts
 
         probe.heights[1] = 180
+        // Row 1 spans 100..<200, so the viewport top sits inside it.
+        let rowBelowScreenY = listView.rectForRow(at: 2).minY - listView.contentOffset.y
         listView.invalidateLayout(forRowWith: 1)
         drain(listView)
 
         #expect(listView.rectForRow(at: 1).height == 180)
         #expect(listView.rectForRow(at: 2).minY == 280)
         #expect(listView.contentSize.height == 580)
-        #expect(listView.contentOffset.y == 120)
+        // The row grew off the top edge, so the offset absorbs it and the rows
+        // below it do not move under the reader.
+        #expect(listView.rectForRow(at: 2).minY - listView.contentOffset.y == rowBelowScreenY)
+        #expect(listView.contentOffset.y == 200)
         #expect(probe.measurementCounts[1] == initialCounts[1, default: 0] + 1)
         for id in [0, 2, 3, 4] {
             #expect(probe.measurementCounts[id] == initialCounts[id])

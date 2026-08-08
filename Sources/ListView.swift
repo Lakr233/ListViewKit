@@ -163,6 +163,11 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         for identifier in difference.added {
             setAlpha(0, onRowWith: identifier)
         }
+        // The rows are about to travel to their new frames. If the shorter
+        // content pulls the offset off an edge, the viewport has to travel
+        // with them instead of cutting to the destination.
+        animatesContentSizeCorrection = true
+        defer { animatesContentSizeCorrection = false }
         withListAnimation {
             self.updateVisibleRowFrames()
             for identifier in difference.added {
@@ -290,10 +295,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // The width has to be current first: adopting a new one turns every
         // measurement back into an estimate.
         rowLayout.prepareForLayout()
-        let visibleRect = contentVisibleRect
-        compensateScrollOffset(
-            by: rowLayout.measureRows(intersecting: visibleRect, anchorY: visibleRect.minY)
-        )
+        compensateScrollOffset(by: rowLayout.measureRows(intersecting: contentVisibleRect))
         scheduleSliceDrain()
     }
 

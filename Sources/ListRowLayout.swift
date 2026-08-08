@@ -101,7 +101,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// Drops every measurement, including for rows no longer in the list.
     func invalidateAll() {
         measured.removeAll()
-        reload()
+        reestimateRows()
     }
 
     /// Re-estimates everything when the width changes: a height measured at
@@ -112,21 +112,47 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         contentWidth = width
         guard engine.count > 0, !measured.isEmpty else { return }
         measured.removeAll(keepingCapacity: true)
+        reestimateRows()
+        listView.lastWidthChangeAt = CACurrentMediaTime()
+    }
+
+    /// Turns every row back into a pending estimate at the height it already
+    /// has. Falling back to the default estimate instead would collapse the
+    /// content the moment anything is invalidated, throwing away the reader's
+    /// place before a single new height has been measured.
+    private func reestimateRows() {
         engine.reset((0 ..< engine.count).map {
             .init(height: engine.height(at: $0), isPending: true)
         })
-        listView.lastWidthChangeAt = CACurrentMediaTime()
     }
 
     // MARK: - Measurement
 
+    /// The first row layout holds visually still while heights change. Rows
+    /// before it are entirely above the fold, so their height changes are
+    /// invisible and belong in the scroll offset instead.
+    ///
+    /// The viewport's own top edge is the wrong boundary. It normally falls
+    /// somewhere inside a row, and leaving that row uncompensated slides
+    /// everything below it under the reader — the row reflows upwards off the
+    /// screen, which is exactly what the offset should absorb.
+    private func anchorIndex(in rect: CGRect) -> Int {
+        let indices = indices(intersecting: rect)
+        guard let first = indices.first else { return indices.lowerBound }
+        let top = engine.offset(at: first)
+        guard top < rect.minY else { return first }
+        // A row that also runs past the bottom edge is the entire viewport:
+        // nothing else is on screen to hold still, so its own top is the
+        // anchor and its reflow shows below the fold.
+        return top + engine.height(at: first) >= rect.maxY ? first : first + 1
+    }
+
     /// Measures every pending row in the rect, repeating while the resulting
     /// height changes bring new pending rows into view.
     ///
-    /// Returns the total height change of rows lying entirely above `anchorY`,
-    /// which is what the content offset must move by to keep the rows at and
-    /// below the anchor visually stationary.
-    func measureRows(intersecting rect: CGRect, anchorY: CGFloat) -> CGFloat {
+    /// Returns the total height change above the anchor, which is what the
+    /// content offset must move by to keep the anchor visually stationary.
+    func measureRows(intersecting rect: CGRect) -> CGFloat {
         var offsetDelta: CGFloat = 0
         // A measured row resizes the viewport's contents, so the visible span
         // has to be re-derived. Rows shorter than their estimate pull more of
@@ -136,19 +162,21 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         while true {
             let indices = indices(intersecting: rect)
             guard engine.pendingCount(in: indices) > 0 else { return offsetDelta }
+            let anchor = anchorIndex(in: rect)
             for index in indices where engine.isPending(at: index) {
-                offsetDelta += measure(at: index, anchorY: anchorY)
+                offsetDelta += measure(at: index, anchorIndex: anchor)
             }
         }
     }
 
-    /// Measures pending rows nearest `index`, closest first, until `deadline`.
-    /// Returns the same anchor-preserving offset delta as ``measureRows``.
-    func drainPendingRows(near index: Int, anchorY: CGFloat, deadline: CFTimeInterval) -> CGFloat {
+    /// Measures pending rows nearest the anchor, closest first, until
+    /// `deadline`. Returns the same offset delta as ``measureRows``.
+    func drainPendingRows(intersecting rect: CGRect, deadline: CFTimeInterval) -> CGFloat {
+        let anchor = anchorIndex(in: rect)
         var offsetDelta: CGFloat = 0
         var now = CACurrentMediaTime()
-        while now < deadline, let next = engine.nextPending(near: index) {
-            offsetDelta += measure(at: next, anchorY: anchorY)
+        while now < deadline, let next = engine.nextPending(near: anchor) {
+            offsetDelta += measure(at: next, anchorIndex: anchor)
             let finished = CACurrentMediaTime()
             if finished - now > Self.slowRowThreshold {
                 Self.log.warning(
@@ -165,10 +193,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     }
 
     /// Measures one row and reports how much of its height change happened
-    /// entirely above `anchorY`.
-    private func measure(at index: Int, anchorY: CGFloat) -> CGFloat {
+    /// above the anchor.
+    private func measure(at index: Int, anchorIndex: Int) -> CGFloat {
         let previousHeight = engine.height(at: index)
-        let previousBottom = engine.offset(at: index) + previousHeight
 
         guard index < listView.items.count,
               let height = listView.measuredHeight(at: index)
@@ -182,8 +209,8 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
         engine.setHeight(height, at: index)
         measured[listView.items[index].id] = engine.height(at: index)
-        // A row straddling the anchor is partly on screen, so its growth is
+        // A row at or below the anchor is on screen, so its growth is
         // something the reader should see rather than something to cancel out.
-        return previousBottom <= anchorY ? engine.height(at: index) - previousHeight : 0
+        return index < anchorIndex ? engine.height(at: index) - previousHeight : 0
     }
 }

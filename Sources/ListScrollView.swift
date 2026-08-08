@@ -21,6 +21,12 @@ import SpringInterpolation
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
+        /// While set, an offset that a content-size change pushed out of
+        /// bounds travels to its new home instead of snapping there. A caller
+        /// animating its rows has to move the viewport along with them, or the
+        /// correction reads as a jump in the middle of the animation.
+        var animatesContentSizeCorrection = false
+
         /// The minimum point (in content view coordinates) that the view can be scrolled.
         public var minimumContentOffset: CGPoint {
             .init(x: -adjustedContentInset.left, y: -adjustedContentInset.top)
@@ -42,15 +48,7 @@ import SpringInterpolation
                 let currentOffset = contentOffset
                 super.contentSize = newValue
                 applyContentOffset(currentOffset)
-                let clampedOffset = nearestScrollLocationInBounds(offset: currentOffset)
-                let clampedTarget = scrollingTarget.map { nearestScrollLocationInBounds(offset: $0) }
-                if clampedOffset != currentOffset {
-                    scroll(to: clampedOffset, preserveVelocity: false)
-                } else if let clampedTarget, clampedTarget != scrollingTarget {
-                    scroll(to: clampedTarget, preserveVelocity: false)
-                } else if let clampedTarget {
-                    scrollingTarget = clampedTarget
-                }
+                reconcileOffsetWithContentSize()
             }
         }
 
@@ -77,6 +75,38 @@ import SpringInterpolation
                 x: CGFloat.minimum(CGFloat.maximum(min.x, offset.x), max.x),
                 y: CGFloat.minimum(CGFloat.maximum(min.y, offset.y), max.y)
             )
+        }
+
+        /// Puts the offset back in bounds after the content size changed.
+        ///
+        /// Whether the offset may sit outside the bounds is a question about
+        /// who owns it, not about the offset itself: deferred measurement
+        /// routinely shifts it past an edge on its way to the right place.
+        private func reconcileOffsetWithContentSize() {
+            // A finger, momentum or a rebound already owns the offset. Those
+            // either clamp themselves every frame or are holding a deliberate
+            // overscroll, and interrupting one cancels the bounce.
+            guard !isUserInteractingWithScroll else { return }
+            if let target = scrollingTarget {
+                // A programmatic scroll keeps running, retargeted onto the new
+                // edge so it lands there instead of short of it.
+                let clamped = nearestScrollLocationInBounds(offset: target)
+                if clamped != target {
+                    scroll(to: clamped)
+                }
+                return
+            }
+            let clamped = nearestScrollLocationInBounds(offset: contentOffset)
+            guard clamped != contentOffset else { return }
+            if animatesContentSizeCorrection {
+                scroll(to: clamped, preserveVelocity: false)
+            } else {
+                // Deferred measurement resizes the content over and over, so
+                // an idle list lands on the new edge outright: animating every
+                // correction restarts the slide on each pass and reads as the
+                // list scrolling by itself.
+                applyContentOffset(clamped)
+            }
         }
 
         /// scroll to an offset
@@ -450,6 +480,12 @@ import SpringInterpolation
 
         var alwaysBounceVertical: Bool = true
 
+        /// While set, an offset that a content-size change pushed out of
+        /// bounds travels to its new home instead of snapping there. A caller
+        /// animating its rows has to move the viewport along with them, or the
+        /// correction reads as a jump in the middle of the animation.
+        var animatesContentSizeCorrection = false
+
         /// The minimum point (in content view coordinates) that the view can be scrolled.
         public var minimumContentOffset: CGPoint {
             .init(x: -contentInsets.left, y: -contentInsets.top)
@@ -484,15 +520,7 @@ import SpringInterpolation
                 _contentSize = newValue
                 applyContentOffset(currentOffset)
                 needsLayout = true
-                let clampedOffset = nearestScrollLocationInBounds(offset: currentOffset)
-                let clampedTarget = scrollingTarget.map { nearestScrollLocationInBounds(offset: $0) }
-                if clampedOffset != currentOffset {
-                    scroll(to: clampedOffset, preserveVelocity: false)
-                } else if let clampedTarget, clampedTarget != scrollingTarget {
-                    scroll(to: clampedTarget, preserveVelocity: false)
-                } else if let clampedTarget {
-                    scrollingTarget = clampedTarget
-                }
+                reconcileOffsetWithContentSize()
             }
         }
 
@@ -666,6 +694,38 @@ import SpringInterpolation
             }
             // The knob has to be re-placed against the new track.
             appliedScrollerPlacement = nil
+        }
+
+        /// Puts the offset back in bounds after the content size changed.
+        ///
+        /// Whether the offset may sit outside the bounds is a question about
+        /// who owns it, not about the offset itself: deferred measurement
+        /// routinely shifts it past an edge on its way to the right place.
+        private func reconcileOffsetWithContentSize() {
+            // A finger, momentum or a rebound already owns the offset. Those
+            // either clamp themselves every frame or are holding a deliberate
+            // overscroll, and interrupting one cancels the bounce.
+            guard !isUserInteractingWithScroll else { return }
+            if let target = scrollingTarget {
+                // A programmatic scroll keeps running, retargeted onto the new
+                // edge so it lands there instead of short of it.
+                let clamped = nearestScrollLocationInBounds(offset: target)
+                if clamped != target {
+                    scroll(to: clamped)
+                }
+                return
+            }
+            let clamped = nearestScrollLocationInBounds(offset: contentOffset)
+            guard clamped != contentOffset else { return }
+            if animatesContentSizeCorrection {
+                scroll(to: clamped, preserveVelocity: false)
+            } else {
+                // Deferred measurement resizes the content over and over, so
+                // an idle list lands on the new edge outright: animating every
+                // correction restarts the slide on each pass and reads as the
+                // list scrolling by itself.
+                applyContentOffset(clamped)
+            }
         }
 
         fileprivate func verticalScrollerTrackingDidBegin() {

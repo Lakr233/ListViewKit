@@ -169,13 +169,61 @@ Fenwick B 是干掉 2.x 那个 O(n²log n) drain 的关键。现在的
               contentSize.height += 74   → 滚动条比例平滑变化，不跳
 ```
 
-补偿量的定义很关键：**只累加完全落在锚点线之上的行的高度变化**。跨越锚点线的那一行
-不算 —— 它本来就有一部分在屏幕上，它变高是用户应该看到的。
+补偿量的定义很关键，而且**锚点是一个行下标，不是一条 y 坐标线**。
 
-`ListViewDeferredSizeAppKitTests` 里已经有三个测试在钉这件事
-（`backgroundCorrectionKeepsBottomPinnedListStationary`、
-`backgroundCorrectionKeepsMidListAnchorStationary`、
-`drainConvergesToFullRecomputeResult`），它们必须原样通过。
+视口顶边几乎不会正好落在行的边界上，它通常切在某一行的中间。那一行如果不补偿，它变矮
+多少，下面所有内容就整体上移多少 —— 这正是"reload 之后内容跳一下"的来源：
+
+```
+   viewport 顶边切在 row 2 中间，row 2 从 100 缩到 40
+
+        锚点 = 视口顶边 (错)                    锚点 = row 3 的顶 (对)
+
+     ┌──────────┐                          ┌──────────┐
+     │  row 2   │ 100                      │  row 2   │ 100
+   ══╪══════════╪══ 视口顶 ═══════════════════╪══════════╪══ 视口顶
+     │          │                          │          │
+     ├──────────┤ ← row 3 在屏幕 y=50        ├──────────┤ ← row 3 在屏幕 y=50
+     │  row 3   │                          │  row 3   │
+                                    
+     row 2 → 40，不补偿                      row 2 → 40，补偿 −60
+     ┌──────────┐                          ┌──────────┐
+   ══╡  row 2   ╞══ 视口顶 ══════════════════╡  row 2   │  ← 顶部往上缩出屏幕
+     ├──────────┤ ← row 3 跳到屏幕 y=-10    ══╪══════════╪══ 视口顶
+     │  row 3   │        ✗ 内容抖了          ├──────────┤ ← row 3 仍在 y=50  ✓
+```
+
+所以 `anchorIndex(in:)` 取**第一个起点落在视口内的行**：被顶边切开的那一行算"上方"，
+它的回流由 offset 吸收。唯一的例外是某一行同时越过了底边 —— 整个视口就它一个，没有别
+的东西可以钉住，此时锚点就是它自己，它的回流出现在屏幕下方。
+
+用下标而不用 y 坐标还有一个原因：一次 drain 会连续量很多行，上方内容一直在移动，一条
+写死的 y 线会漂；下标不会。
+
+`ListViewAnchorAppKitTests` 和 `ListViewSlicedLayoutAppKitTests` 里的
+`backgroundMeasurementKeepsBottomPinnedListStationary`、
+`backgroundMeasurementKeepsMidListAnchorStationary`、
+`shrinkingAStraddlingRowKeepsTheRowsBelowStationary`、
+`drainConvergesToTheFullyMeasuredResult` 钉住这件事。
+
+**锚点钉不住的时候。** 补偿是直接写 `contentOffset` 的，不走钳位 —— 内容缩短时它本来
+就要先越过边界，再由随后的 `contentSize` 落回来。所以"offset 现在在界外"不能用来判断
+要不要修正，能用的判断只有**谁在控制这个 offset**：
+
+```
+   contentSize 变了
+        │
+        ├─ 手指 / 惯性 / 回弹 / 拖滚动条在跑  ──▶ 不管
+        │     它们每帧自己钳位，插手就是把回弹掐断
+        │
+        ├─ 有 scrollingTarget 且它出界了     ──▶ 重新指向新边缘
+        │     回弹的落点也存在这里：留着不动会停在内容外面，再没人来救
+        │
+        └─ 其它（闲置）                      ──▶ 直接落到新边缘，不做动画
+              切片测量会反复改 contentSize，每次都做动画等于自己在滚
+              例外：apply(animated:) 期间置了 animatesContentSizeCorrection，
+              这时视口要跟着行一起走，否则动画中间视口硬切
+```
 
 ### 2.4 结构变更走 splice，不再全量 rebuild
 

@@ -520,6 +520,47 @@ struct ListScrollViewAppKitTests {
         #expect(scrollView.contentOffset == CGPoint(x: 0, y: 300))
     }
 
+    /// Deferred measurement resizes the content over and over, and an offset
+    /// sitting outside the bounds is the normal state mid-rebound. Correcting
+    /// it on the strength of that alone cancels every bounce it lands on.
+    @Test
+    func resizingDuringAReboundLeavesTheBounceAlone() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+
+        // Momentum past the top edge hands straight off to the rebound, whose
+        // endpoint the resize below leaves untouched.
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 100, momentumPhase: .began))
+        let overscrolled = scrollView.contentOffset
+        #expect(overscrolled.y < scrollView.minimumContentOffset.y)
+
+        scrollView.contentSize = CGSize(width: 200, height: 1_200)
+
+        #expect(scrollView.contentOffset == overscrolled)
+        scrollView.cancelCurrentScrolling()
+    }
+
+    /// The other half: a rebound heading for an edge the resize just moved has
+    /// to be retargeted, or it settles at a point outside the new content and
+    /// nothing is left running to correct it.
+    @Test
+    func aReboundHeadingForAStaleEdgeIsRetargeted() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.setContentOffset(scrollView.maximumContentOffset, animated: false)
+
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: -100, momentumPhase: .began))
+        #expect(scrollView.contentOffset.y > scrollView.maximumContentOffset.y)
+
+        scrollView.contentSize = CGSize(width: 200, height: 1_200)
+
+        // Left alone, the bounce would settle 800 points past the new end with
+        // nothing still running to correct it.
+        let retarget = CGFloat(scrollView.scrollingContext.y.context.targetPos)
+        #expect(retarget == scrollView.maximumContentOffset.y)
+        scrollView.cancelCurrentScrolling()
+    }
+
     @Test
     func momentumOverscrollHandsOffToAppKitReboundImmediately() throws {
         let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
