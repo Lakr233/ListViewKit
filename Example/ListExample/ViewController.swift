@@ -36,7 +36,10 @@ final class ViewController: UIViewController {
                         },
                         UIAction(title: "Delete", image: UIImage(systemName: "trash")) { _ in
                             guard let self else { return }
-                            listView.apply(listView.content.filter { $0.id != item.id }, animated: true)
+                            self.listView.apply(
+                                self.listView.content.filter { $0.id != item.id },
+                                animated: true
+                            )
                         },
                     ])
                 }
