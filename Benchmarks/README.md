@@ -1,14 +1,25 @@
 # ListViewKit Runtime Benchmarks
 
 The benchmark uses deterministic fixed-height data sets containing 1,000,
-10,000, and 100,000 rows. It measures:
+10,000, and 100,000 rows. Each measurement isolates one path so a regression
+can be attributed to a single subsystem:
 
-- Initial snapshot application and layout-cache construction.
-- 20,000 visible-range queries across the full content height.
-- 1,000 scrolling layout passes, including row recycling and reuse.
-- 1,000 direct item updates and targeted height invalidations of the final row,
-  modeling a growing streaming response without diffing a complete snapshot or
-  discarding unrelated cached measurements.
+- **Initial layout** — snapshot application and layout-cache construction.
+- **20k visible queries** — visible-range resolution alone. The content offset
+  is written once, then `indicesForVisibleRows` runs repeatedly against the
+  same viewport, so the number reflects the binary search and nothing else.
+- **20k offset writes** — `contentOffset` writes alone, with no row work. On
+  AppKit this is what a scroll gesture costs before the list does anything.
+- **1k scroll layouts** — full layout passes across the content height,
+  including row recycling and reuse.
+- **1k tail item updates** — direct item updates and targeted height
+  invalidations of the final row, modeling a growing streaming response
+  without diffing a complete snapshot or discarding unrelated cached
+  measurements.
+- **200 snapshot appends** — appending one row at a time through a complete
+  snapshot diff, the path a chat client takes for every new message.
+- **20 width reflows** — alternating content widths, each invalidating every
+  cached height and forcing a full synchronous re-measure.
 
 The executable performs an unreported warm-up and prints the median of three
 samples for each measurement.
