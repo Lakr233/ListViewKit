@@ -312,7 +312,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     private func updateFrame(of rowView: ListRowView, to targetFrame: CGRect) {
         guard rowView.frame != targetFrame else { return }
         let sizeChanged = rowView.frame.size != targetFrame.size
-        rowView.frame = targetFrame
+        setRowFrame(targetFrame, on: rowView)
         guard sizeChanged else { return }
         rowView.requestLayout()
     }
