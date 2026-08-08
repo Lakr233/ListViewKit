@@ -486,18 +486,18 @@ profile 里那些 `_findAnySubviewNeedingAutoLayoutEngine` / `_NSAddKeyValueDepe
                                                  swift-collections
 
  ────────────────────────────────────────────────────────────────────────────
-  6  api!: 合并 adapter + dataSource     ⬜ 待做    公开类型 9 → 4
-     进 ListView<Item>，rows { } DSL，              append 37ms → 目标 <1ms
-     Auto Layout 按 kind opt-in                    （现在的 37ms 全是 snapshot
-                                                   API 的三趟 O(n)，不是布局）
+  6  api!: 合并进 ListView<Item>          ✅ 6d1d9f6
+     rows { } DSL，Auto Layout 按行类型             公开类型 9 → 4 个概念
+     opt-in，append/update 增量 API                append 225ms → 0.03ms/条
+     顺手去掉 OrderedDictionary                     swift-collections 彻底移除
+     review 抓到 2 个 P0 + 1 个 P1：动画前未测量、rows{} 泄漏 prototype、
+     动画 completion 强制同步布局
 
-  7  feat: overscan / preload range     ⬜ 待做    真机快滑不掉帧
-     Texture 的 leading/trailing screenful         （benchmark 测不出，要手滑）
-
-  8  refactor: 去掉 OrderedDictionary    ⬜ 待做    依赖 #6 的新数据模型
-     → 彻底摆脱 swift-collections
-
-  9  docs: README / 迁移指南 / 3.0.0     ⬜ 待做
+  7  docs: README / 迁移指南 / 3.0.0      ✅
+ ────────────────────────────────────────────────────────────────────────────
+  8  feat: overscan / preload range      ⬜ 待做    真机快滑不掉帧
+     Texture 的 leading/trailing screenful          （benchmark 测不出，要手滑
+                                                    + Instruments）
 ```
 
 ### 当前完成度
@@ -506,14 +506,14 @@ profile 里那些 `_findAnySubviewNeedingAutoLayoutEngine` / `_NSAddKeyValueDepe
 
 | 指标 | 2.x 基线 | 现在 | 倍数 |
 | --- | ---: | ---: | ---: |
-| Initial layout | 362 ms | 52 ms | 7× |
-| 20k visible queries | 11.8 ms | 3.2 ms | 3.7× |
-| 20k offset writes | 503 ms | 22 ms | 23× |
-| 1k tail item updates | 33.7 ms | 10.6 ms | 3.2× |
-| 200 snapshot appends | 44.9 s | 7.5 s | 6× |
-| 20 width reflows | 3050 ms | 80 ms | 38× |
+| Initial layout | 362 ms | 42 ms | 8.6× |
+| 20k visible queries | 11.8 ms | 3.0 ms | 3.9× |
+| 20k offset writes | 503 ms | 21 ms | 24× |
+| 1k tail item updates | 33.7 ms | 9.7 ms | 3.5× |
+| 追加一行 | 225 ms | 0.03 ms | 7500× |
+| 20 width reflows | 3050 ms | 99 ms | 31× |
 
-测试从 39 个涨到 60 个，六次连跑无 flake。
+测试从 39 个涨到 66 个，多次连跑无 flake。
 
 第 2 步的对拍测试是正确性的地基：拿一个「朴素实现」（就是个 `[CGFloat]` 数组，
 每次线性求和），和 Fenwick 引擎跑同一串 10 万次随机 insert/remove/move/setHeight，

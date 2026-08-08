@@ -16,8 +16,11 @@ can be attributed to a single subsystem:
   invalidations of the final row, modeling a growing streaming response
   without diffing a complete snapshot or discarding unrelated cached
   measurements.
-- **200 snapshot appends** — appending one row at a time through a complete
-  snapshot diff, the path a chat client takes for every new message.
+- **200 appends** — adding one row at a time through `append`, the path a chat
+  client takes for every new message.
+- **200 whole-array applies** — the same growth expressed as `apply`, which has
+  to diff everything to discover the one new row. The gap between this and the
+  previous column is what the incremental API buys.
 - **20 width reflows** — alternating content widths, each invalidating every
   cached height and forcing a full synchronous re-measure.
 
@@ -28,6 +31,12 @@ Run an optimized build from the repository root:
 
 ```bash
 swift run -c release ListViewKitBenchmarks
+```
+
+`LVK_ITEMS` and `LVK_BENCH` narrow a run while iterating on one path:
+
+```bash
+LVK_ITEMS=10000 LVK_BENCH=append,reflow swift run -c release ListViewKitBenchmarks
 ```
 
 Results depend on hardware and toolchain versions. Compare changes using the

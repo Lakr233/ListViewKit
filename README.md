@@ -2,201 +2,226 @@
 
 [![CI](https://github.com/Lakr233/ListViewKit/actions/workflows/ci.yml/badge.svg)](https://github.com/Lakr233/ListViewKit/actions/workflows/ci.yml)
 
-A lightweight, diffable, reusable list view for Swift, UIKit, and AppKit.
+A lightweight, diffable, reusing list view for Swift, UIKit, and AppKit.
 
 ![Preview](./Resource/IMG_0BBF74B35BFB-1.jpeg)
 
-## Features
-
-- Automatic row reuse, grouped by a hashable row kind.
-- Diffable snapshots with insert, remove, update, and reorder support.
-- Variable row heights with identity-based layout caching.
-- Stable content offsets while content size changes.
-- Spring-based programmatic scrolling.
-- Swift 6 main-actor isolation.
-- Repeatable 1k, 10k, and 100k row runtime benchmarks.
+Rows are measured only when they are needed. Everything else is corrected in
+slices between frames, so opening a list, appending to it, and resizing it cost
+about the same whether it holds ten rows or a hundred thousand.
 
 ## Requirements
 
 - Swift 6.0+
-- iOS 17.0+
-- macCatalyst 17.0+
-- macOS 14.0+
+- iOS 17.0+ / macCatalyst 17.0+ / macOS 14.0+
+- No dependencies beyond two small animation packages.
 
 ## Installation
 
-Add ListViewKit to your package dependencies:
-
 ```swift
 dependencies: [
-    .package(
-        url: "https://github.com/Lakr233/ListViewKit",
-        from: "1.2.0"
-    ),
+    .package(url: "https://github.com/Lakr233/ListViewKit", from: "3.0.0"),
 ]
 ```
 
-Then add `ListViewKit` to the dependencies of your target.
-
 ## Usage
 
-### Define an item and row kind
+A list owns its content. Declare the row types once, then hand it arrays.
 
 ```swift
 struct Message: Identifiable, Hashable {
-    enum RowKind: Hashable {
-        case text
-    }
-
     let id: UUID
     var text: String
 }
+
+let list = ListView<Message>()
+
+list.rows {
+    ListRow(TextRow.self)
+        .height { message, context in
+            TextRow.height(for: message.text, width: context.width)
+        }
+        .configure { row, message, _ in
+            row.show(message.text)
+        }
+}
+
+list.apply(messages)
 ```
 
-### Configure a typed adapter
+`TextRow` is your own `ListRowView` subclass. That is the whole setup: one
+object, nothing to keep alive on the side.
 
-`ListViewTypedAdapter` keeps item, row-kind, and row configuration types out
-of application-level force casts:
+### Several row types
+
+Registrations are tried in declaration order and the first `when` match claims
+the item, so the unconditional one goes last.
 
 ```swift
-@MainActor
-final class MessageListController {
-    let listView = ListView(frame: .zero)
-    let dataSource: ListViewDiffableDataSource<Message>
-    let adapter: ListViewTypedAdapter<Message, Message.RowKind>
+list.rows {
+    ListRow(ImageRow.self)
+        .when(\.isImage)
+        .estimatedHeight(220)
+        .height { message, context in message.aspectHeight(for: context.width) }
+        .configure { row, message, _ in row.show(message.image) }
 
-    init() {
-        adapter = ListViewTypedAdapter { _, _, _ in .text }
-        dataSource = ListViewDiffableDataSource(listView: listView)
-        listView.adapter = adapter
+    ListRow(TextRow.self)
+        .height { message, context in
+            TextRow.height(for: message.text, width: context.width)
+        }
+        .configure { row, message, _ in row.show(message.text) }
+}
+```
 
-        adapter.register(
-            .text,
-            makeRow: TextRow.init,
-            height: { listView, message, _ in
-                TextRow.height(for: message.text, width: listView.bounds.width)
-            },
-            configure: { _, row, message, _ in
-                row.configure(with: message.text)
-            }
-        )
+### Changing the content
+
+```swift
+list.apply(messages, animated: true)  // replace everything, diffed
+list.append(message)                  // add to the end, O(log n)
+list.update(message)                  // one item changed, no diff
+```
+
+`apply` has to compare the whole array to find out what moved, which is O(n)
+per call however little changed. For a chat client adding one message, use
+`append`; for a streaming response rewriting one message, use `update`. Both
+leave every other row untouched.
+
+Items need unique, stable identifiers. Changing an item's hashable value is
+what marks its row for refilling and re-measuring.
+
+### Rows
+
+Subclass `ListRowView` and clear transient state in `prepareForReuse`:
+
+```swift
+final class TextRow: ListRowView {
+    override func prepareForReuse() {
+        super.prepareForReuse()
+        imageTask?.cancel()
+        imageTask = nil
+        label.text = nil
     }
 }
 ```
 
-`TextRow` is an application-defined `ListRowView` subclass. The original
-`ListViewAdapter` protocol remains available for existing integrations.
+It is called before every configuration, including the first, so it must be
+idempotent.
 
-Both `dataSource` and `adapter` are weakly referenced by `ListView`; retain
-them for as long as the list is in use, as shown above.
+### Auto Layout
 
-### Apply data
+The list writes `row.frame` and never reads a row's intrinsic size. Using Auto
+Layout *inside* a row is fine — the list hands over a definite `bounds` to lay
+out within.
+
+A row registered **without** a `height` closure is measured from its own
+constraints instead, on one hidden prototype per row type:
 
 ```swift
-var snapshot = dataSource.snapshot()
-snapshot.append(Message(id: UUID(), text: "Hello ListViewKit"))
-dataSource.applySnapshot(snapshot, animatingDifferences: true)
+ListRow(CardRow.self)
+    .estimatedHeight(80)
+    .configure { row, item, context in
+        row.title.text = item.title            // affects height
+        guard context.purpose == .display else { return }
+        row.avatar.load(item.avatarURL)        // does not
+    }
 ```
 
-Items must have unique, stable identifiers. Changing an item's hashable value
-causes visible content and cached height to be refreshed.
+Check `context.purpose` for anything that is not height: a full measurement
+pass would otherwise fire one image request per row in the list.
 
-For a high-frequency change to one existing item, avoid rebuilding and diffing
-a complete snapshot:
+Self-sizing costs one to two orders of magnitude more per row than a height
+closure, so the scrollbar proportion converges as measurement catches up.
+Prefer a height closure for lists in the thousands.
+
+### Estimates
+
+Until a row is measured it stands at `estimatedRowHeight` (44 by default), or
+whatever its registration declared. Only the content height and the scroller
+proportion depend on it, and only until measurement catches up — but a value
+near the truth keeps the scroller steady.
+
+### Invalidating a row
+
+When hosted or expandable content changes size without the item changing:
 
 ```swift
-message.text += delta
-dataSource.updateItem(message)
+list.invalidateLayout(forRowWith: message.id)
 ```
 
-`updateItem(_:)` reconfigures and remeasures only that identifier. Insertions,
-removals, and reorders should continue to use snapshots.
+Use `invalidateLayout()` only when every height may have changed, such as
+after replacing global typography.
 
-### Prepare rows for configuration
-
-Override `prepareForReuse()` to clear transient state such as text, images,
-menus, callbacks, or asynchronous requests:
+### Following streaming content
 
 ```swift
-override func prepareForReuse() {
-    super.prepareForReuse()
-    imageTask?.cancel()
-    imageTask = nil
-    label.text = nil
-}
-```
+let shouldFollow = list.isScrolledToBottom(tolerance: 4)
+list.append(message)
 
-ListViewKit calls this method before every row configuration, including the
-initial configuration and reconfiguration of an existing visible item. The
-implementation should therefore be idempotent.
-
-### Invalidate a self-sizing row
-
-When hosted or expandable content changes size without changing its data-source
-item, invalidate that row by item identifier. ListViewKit re-runs only that
-row's height closure and keeps the other identity-based height measurements:
-
-```swift
-listView.invalidateLayout(forRowWithID: message.id)
-```
-
-Use `invalidateLayout()` only when every cached height may have changed, such
-as after replacing global typography metrics. The misspelled legacy
-`invaliateLayout()` API remains available as a deprecated compatibility shim.
-
-### Follow streaming content
-
-Chat-style clients can capture bottom affinity before applying a snapshot or
-invalidating a growing row:
-
-```swift
-let shouldFollow = listView.isScrolledToBottom(tolerance: 4)
-dataSource.applySnapshot(snapshot)
-
-if shouldFollow && !listView.isUserInteractingWithScroll {
-    listView.setContentOffset(listView.maximumContentOffset, animated: false)
+if shouldFollow, !list.isUserInteractingWithScroll {
+    list.scrollToBottom(animated: false)
 }
 ```
 
 `isUserInteractingWithScroll` includes platform momentum but excludes
 programmatic spring scrolling.
 
-### Scroll to a row
+### Scrolling to a row
 
 ```swift
-listView.scrollToRow(at: 20, at: .middle, animated: true)
-listView.setContentOffset(CGPoint(x: 0, y: 500), animated: true)
+list.scrollToRow(at: 20, at: .middle)
+list.scrollToRow(with: message.id, at: .nearest)
+list.scrollToBottom()
 ```
 
-Row positioning respects adjusted content insets and clamps targets to the
-valid scroll range.
+## Migrating from 2.x
+
+| 2.x | 3.0 |
+| --- | --- |
+| `ListView` + `ListViewDiffableDataSource` + adapter | `ListView<Item>` |
+| `ListViewAdapter` / `ListViewTypedAdapter` | `list.rows { ListRow(…) }` |
+| `ListViewDataSourceSnapshot` | your own `[Item]` |
+| `dataSource.applySnapshot(_:animatingDifferences:)` | `list.apply(_:animated:)` |
+| `dataSource.updateItem(_:)` | `list.update(_:)` |
+| appending via a snapshot | `list.append(_:)` |
+| `listView.rowView(at:)` | `list.rowView(for: id)` |
+| `invalidateLayout(forRowWithID:)` | `invalidateLayout(forRowWith:)` |
+| `ScrollPosition.none` | `ListRowPosition.nearest` |
+| `deferredSizeCalculation` | removed; slicing is the only model |
+| `AnimationBlockView` | removed; add the list as a subview directly |
+
+The row-kind type is gone. Where you switched on a kind, register one
+`ListRow` per row type and select with `when`.
 
 ## Tests
-
-Run the Swift 6 test suite:
 
 ```bash
 swift test
 ```
 
-CI also builds the macOS example and the library for iOS Simulator and
-Mac Catalyst destinations.
-
-## Runtime benchmarks
-
-Run deterministic 1k, 10k, and 100k row benchmarks in Release mode:
+## Benchmarks
 
 ```bash
 swift run -c release ListViewKitBenchmarks
 ```
 
-See [`Benchmarks/README.md`](./Benchmarks/README.md) for measured operations
-and comparison guidance.
+`LVK_ITEMS` and `LVK_BENCH` narrow a run to one size or one path. See
+[`Benchmarks/README.md`](./Benchmarks/README.md).
+
+Measured on an Apple Silicon Mac, Release, 800×600 viewport, 100,000 rows:
+
+| | 2.x | 3.0 |
+| --- | ---: | ---: |
+| Initial layout | 362 ms | 42 ms |
+| 20k visible-range queries | 11.8 ms | 3.0 ms |
+| 20k content-offset writes | 503 ms | 21 ms |
+| 1k tail item updates | 33.7 ms | 9.7 ms |
+| Appending one row | 225 ms | 0.03 ms |
+| Width reflow | 152 ms | 4.9 ms |
 
 ## Examples
 
-- `Example/ListExample`: UIKit example project.
-- `Example/ListExampleMac`: Swift Package based AppKit example.
+- `Example/ListExample`: UIKit.
+- `Example/ListExampleMac`: AppKit, as a Swift package.
 
 ## License
 
