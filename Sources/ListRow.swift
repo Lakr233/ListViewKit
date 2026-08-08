@@ -46,7 +46,7 @@ public struct ListRowContext: Sendable {
 /// constraints instead. That costs one or two orders of magnitude more per
 /// row, so give a ``estimatedHeight(_:)`` close to the truth and prefer a
 /// height closure for lists in the thousands.
-public struct ListRow<Item: Identifiable & Hashable, RowView: ListRowView> {
+public struct ListRow<Item: Identifiable & Hashable & SendableMetatype, RowView: ListRowView> {
     var registration: ListRowRegistration<Item>
 
     public init(_: RowView.Type = RowView.self) {
@@ -66,12 +66,12 @@ public struct ListRow<Item: Identifiable & Hashable, RowView: ListRowView> {
     /// Limits this row to items it can display. Registrations are tried in
     /// declaration order and the first match wins, so a row without a
     /// condition is the catch-all and belongs last.
-    public func when(_ predicate: @escaping (Item) -> Bool) -> Self {
+    public func when(_ predicate: @escaping @MainActor (Item) -> Bool) -> Self {
         map { $0.matches = predicate }
     }
 
     /// Computes the row height without building a view. Always prefer this.
-    public func height(_ height: @escaping (Item, ListRowContext) -> CGFloat) -> Self {
+    public func height(_ height: @escaping @MainActor (Item, ListRowContext) -> CGFloat) -> Self {
         map { $0.height = height }
     }
 
@@ -83,7 +83,7 @@ public struct ListRow<Item: Identifiable & Hashable, RowView: ListRowView> {
     }
 
     public func configure(
-        _ configure: @escaping (RowView, Item, ListRowContext) -> Void
+        _ configure: @escaping @MainActor (RowView, Item, ListRowContext) -> Void
     ) -> Self {
         map { registration in
             registration.configure = { view, item, context in
@@ -105,16 +105,20 @@ public struct ListRow<Item: Identifiable & Hashable, RowView: ListRowView> {
 }
 
 /// A ``ListRow`` with its view type erased, as the list stores it.
-public struct ListRowRegistration<Item: Identifiable & Hashable> {
-    var matches: (Item) -> Bool = { _ in true }
-    var makeRow: () -> ListRowView
-    var height: ((Item, ListRowContext) -> CGFloat)?
+///
+/// Rows are views, so every closure here runs on the main actor. Saying so in
+/// the type lets a caller's closure touch main-actor state without ceremony,
+/// and lets `makeRow` call a view initializer at all.
+public struct ListRowRegistration<Item: Identifiable & Hashable & SendableMetatype> {
+    var matches: @MainActor (Item) -> Bool = { _ in true }
+    var makeRow: @MainActor () -> ListRowView
+    var height: (@MainActor (Item, ListRowContext) -> CGFloat)?
     var estimatedHeight: CGFloat?
-    var configure: (ListRowView, Item, ListRowContext) -> Void
+    var configure: @MainActor (ListRowView, Item, ListRowContext) -> Void
 }
 
 @resultBuilder
-public enum ListRowsBuilder<Item: Identifiable & Hashable> {
+public enum ListRowsBuilder<Item: Identifiable & Hashable & SendableMetatype> {
     public static func buildExpression<RowView: ListRowView>(
         _ row: ListRow<Item, RowView>
     ) -> ListRowRegistration<Item> {

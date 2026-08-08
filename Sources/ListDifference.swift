@@ -9,7 +9,7 @@
 /// are the same event here — both mean the row has to be filled in and
 /// measured again — so they are not split into categories no caller
 /// distinguishes.
-struct ListDifference<Item: Identifiable & Hashable> {
+struct ListDifference<Item: Identifiable & Hashable & SendableMetatype> {
     /// Position of every identifier in the new ordering, which the list keeps
     /// as its index.
     let indexByID: [Item.ID: Int]

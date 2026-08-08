@@ -23,6 +23,12 @@ jobs:
       - name: Run tests
         run: swift test
 
+      # Isolated-conformance and actor-isolation diagnostics only surface under
+      # complete checking, and an app target that turns them on gets errors
+      # where the package saw nothing.
+      - name: Build with complete strict concurrency
+        run: swift build -Xswiftc -strict-concurrency=complete -Xswiftc -warnings-as-errors
+
       - name: Build macOS example
         run: swift build --package-path Example/ListExampleMac
 

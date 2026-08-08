@@ -24,7 +24,7 @@ import QuartzCore
 /// them are discarded when the content width changes, because a row height
 /// only means anything at the width it was measured at.
 @MainActor
-final class ListRowLayout<Item: Identifiable & Hashable> {
+final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// A single row that takes longer than a whole frame to measure cannot be
     /// sliced around; the list will drop frames until it is done.
     private static var slowRowThreshold: CFTimeInterval { 0.005 }

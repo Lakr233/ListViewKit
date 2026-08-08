@@ -29,12 +29,15 @@
 /// Rows are measured only when they are needed. Everything else is corrected
 /// in slices between frames, so opening a list and appending to it cost the
 /// same whether it holds ten rows or a hundred thousand.
-public final class ListView<Item: Identifiable & Hashable>: ListScrollView {
+public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrollView {
     private(set) var items: [Item] = []
     var indexByID: [Item.ID: Int] = [:]
     private var registrations: [ListRowRegistration<Item>] = []
 
-    lazy var rowLayout: ListRowLayout<Item> = .init(self)
+    /// Set in `init` rather than lazily: a lazy initializer is evaluated in a
+    /// nonisolated context, which cannot name a main-actor-isolated generic
+    /// type. Non-nil for the whole observable lifetime.
+    private(set) var rowLayout: ListRowLayout<Item>!
     /// Row views on screen, and the registration each was built from.
     var visibleRows: [Item.ID: (view: ListRowView, registration: Int)] = [:]
     /// Recycled rows, by registration index.
@@ -75,6 +78,7 @@ public final class ListView<Item: Identifiable & Hashable>: ListScrollView {
 
     override public init(frame: CGRect) {
         super.init(frame: frame)
+        rowLayout = ListRowLayout(self)
 
         #if canImport(UIKit)
             alwaysBounceVertical = true
