@@ -19,21 +19,37 @@ open class ListView: ListScrollView {
     public typealias DataSource = ListViewDataSource
     public typealias Adapter = ListViewAdapter
 
+    /// Held weakly, so a data source that has been released reads as `nil` and
+    /// another one can take its place. The rows and measured heights described
+    /// by the previous one must not survive that: identifiers are only unique
+    /// within a single data source.
     public weak var dataSource: DataSource? {
-        didSet { assert(oldValue == nil) }
+        didSet {
+            assert(oldValue == nil)
+            rowLayout.invalidateAll()
+        }
     }
 
     public weak var adapter: (any Adapter)?
 
-    lazy var layoutCache: LayoutCache = .init(self)
+    lazy var rowLayout: ListRowLayout = .init(self)
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
     lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
     var rowsPendingRemoval: [ListRowView] = []
-    var isDeferredMeasurementScheduled = false
-    /// When the content width last turned measured heights into estimates.
-    /// The deferred drain reads this to hold off while the width is still
-    /// churning — see `drainDeferredMeasurementChunk`.
-    var lastWidthReflowAt: CFTimeInterval = 0
+    var isSliceDrainScheduled = false
+    /// When the content width last turned measured heights back into
+    /// estimates. The drain holds off while the width is still churning.
+    var lastWidthChangeAt: CFTimeInterval = 0
+
+    /// Height a row is assumed to have until it is measured.
+    ///
+    /// Rows are never measured before they are needed, so this is what holds
+    /// the content height together while the list scrolls. A value close to
+    /// the typical row keeps the scroller proportion steady as measurement
+    /// catches up.
+    public var estimatedRowHeight: CGFloat = 44 {
+        didSet { invalidateLayout() }
+    }
 
     public var topInset: CGFloat = 0 {
         didSet {
@@ -52,23 +68,6 @@ open class ListView: ListScrollView {
             #elseif canImport(AppKit)
                 needsLayout = true
             #endif
-        }
-    }
-
-    /// Keeps previously measured row heights as estimates when the content
-    /// width changes, instead of discarding them all and re-measuring every
-    /// row synchronously. Only the rows needed for the visible rect are
-    /// measured during layout; the rest are corrected in small chunks on the
-    /// main run loop while the scroll position is compensated to keep visible
-    /// rows stationary. Estimated frames keep the list scrollable at
-    /// approximately the right content height until every row is corrected.
-    public var deferredSizeCalculation: Bool = false {
-        didSet {
-            guard oldValue, !deferredSizeCalculation else { return }
-            // Turning the mode off with estimates outstanding falls back to
-            // a full synchronous recompute on the next layout pass.
-            layoutCache.invalidateAll()
-            requestLayout()
         }
     }
 
@@ -91,7 +90,16 @@ open class ListView: ListScrollView {
     var supposedContentSize: CGSize {
         .init(
             width: frame.width,
-            height: layoutCache.contentHeight + topInset + bottomInset
+            height: rowLayout.contentHeight + topInset + bottomInset
+        )
+    }
+
+    /// The visible rectangle in the space row frames are measured in, which
+    /// sits `topInset` above the scroll coordinate space.
+    var contentVisibleRect: CGRect {
+        .init(
+            origin: .init(x: contentOffset.x, y: contentOffset.y - topInset),
+            size: bounds.size
         )
     }
 
@@ -106,26 +114,16 @@ open class ListView: ListScrollView {
     }
 
     override func layoutContent() {
-        let bounds = bounds
-        layoutCache.contentBounds = bounds
-        if deferredSizeCalculation, layoutCache.hasEstimatedHeights {
-            // Correct only the rows the viewport needs, keep everything at
-            // and below the top edge stationary, and let the run-loop drain
-            // handle the rest. Compensation must precede the contentSize
-            // update so the clamped offset lands inside the new bounds
-            // without triggering a programmatic scroll.
-            let visibleRect = CGRect(
-                origin: .init(x: contentOffset.x, y: contentOffset.y - topInset),
-                size: bounds.size
-            )
-            let visibleIndices = layoutCache.indices(intersecting: visibleRect)
-            let offsetDelta = layoutCache.correctEstimatedHeights(
-                at: visibleIndices,
-                anchorY: visibleRect.minY
-            )
-            compensateScrollOffset(by: offsetDelta)
-            scheduleDeferredMeasurement()
-        }
+        rowLayout.prepareForLayout()
+        // Measure exactly what the viewport needs and let the drain handle the
+        // rest. Compensation has to precede the contentSize update so the
+        // clamped offset lands inside the new bounds without turning into a
+        // programmatic scroll.
+        let visibleRect = contentVisibleRect
+        compensateScrollOffset(
+            by: rowLayout.measureRows(intersecting: visibleRect, anchorY: visibleRect.minY)
+        )
+        scheduleSliceDrain()
         contentSize = supposedContentSize
 
         let contentOffsetY = contentOffset.y
@@ -157,8 +155,7 @@ open class ListView: ListScrollView {
     }
 
     func updateVisibleItemsLayout() {
-        let bounds = bounds
-        layoutCache.contentBounds = bounds
+        rowLayout.prepareForLayout()
         contentSize = supposedContentSize
 
         for (id, rowView) in visibleRows {

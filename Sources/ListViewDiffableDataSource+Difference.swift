@@ -20,6 +20,16 @@ extension ListViewDiffableDataSource {
         var isEmpty: Bool {
             removed.isEmpty && added.isEmpty && updated.isEmpty && reordered.isEmpty
         }
+
+        /// True when the only change is rows appended past `previousCount`.
+        /// The layout can absorb those without revisiting the rows already
+        /// there, which is what keeps a chat client's send path off O(n).
+        func isTailAppend(previousCount: Int) -> Bool {
+            removed.isEmpty && updated.isEmpty && reordered.isEmpty
+                && !added.isEmpty
+                && added.count == elements.count - previousCount
+                && added[0].index == previousCount
+        }
     }
 }
 

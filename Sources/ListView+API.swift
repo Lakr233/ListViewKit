@@ -21,44 +21,28 @@ public extension ListView {
     }
 
     var indicesForVisibleRows: [Int] {
-        let offset = contentOffset
-        let visibleRect = CGRect(
-            origin: .init(x: offset.x, y: offset.y - topInset),
-            size: bounds.size
-        )
-        return layoutCache.indices(intersecting: visibleRect)
+        Array(rowLayout.indices(intersecting: contentVisibleRect))
     }
 
-    /// Invalidates every cached row height and frame.
+    /// Invalidates every row height.
     ///
     /// Prefer ``invalidateLayout(forRowWithID:)`` when one self-sizing row
-    /// changes. Keeping the remaining identity-based height cache intact is
-    /// substantially cheaper for streaming or expandable content.
+    /// changes: keeping the other measurements is substantially cheaper for
+    /// streaming or expandable content.
     func invalidateLayout() {
-        layoutCache.invalidateAll()
+        rowLayout.invalidateAll()
         requestLayout()
     }
 
-    /// Invalidates the cached height and all dependent frames for one row.
+    /// Invalidates the measured height of one row.
     ///
     /// The identifier must match the item's `Identifiable.id`, not its row
-    /// kind. Unknown identifiers are ignored. The adapter's height closure is
-    /// called again, and the new frames are installed during the next layout
-    /// pass.
+    /// kind. Unknown identifiers are ignored. The row keeps its current height
+    /// as an estimate until the adapter is asked again during the next layout
+    /// pass or drain.
     func invalidateLayout(forRowWithID identifier: some Hashable) {
-        guard dataSource?.itemIndex(for: identifier, in: self) != nil else {
-            return
-        }
-        let identifiers = CollectionOfOne(identifier)
-        if !layoutCache.invalidateHeights(for: identifiers) {
-            layoutCache.requestInvalidateHeights(for: identifiers)
-        }
+        rowLayout.invalidateHeights(for: CollectionOfOne(AnyHashable(identifier)))
         requestLayout()
-    }
-
-    @available(*, deprecated, renamed: "invalidateLayout()")
-    func invaliateLayout() {
-        invalidateLayout()
     }
 
     func rowView(at index: Int) -> ListRowView? {
@@ -69,11 +53,9 @@ public extension ListView {
     }
 
     func rectForRow(at index: Int) -> CGRect {
-        if var location = layoutCache.frame(for: index) {
-            location.origin.y += topInset
-            return location
-        }
-        return .zero
+        guard var location = rowLayout.frame(for: index) else { return .zero }
+        location.origin.y += topInset
+        return location
     }
 
     func rectForRow(with identifier: some Hashable) -> CGRect {

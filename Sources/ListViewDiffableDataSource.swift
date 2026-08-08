@@ -56,18 +56,14 @@ public class ListViewDiffableDataSource<Item: Identifiable & Hashable>: ListView
         }
 
         elements[item.id] = item
-        let identifiers = CollectionOfOne(item.id)
-        if !listView.layoutCache.invalidateHeights(for: identifiers) {
-            listView.layoutCache.requestInvalidateHeights(for: identifiers)
-        }
-
         let identifier = AnyHashable(item.id)
+        listView.rowLayout.invalidateHeights(for: CollectionOfOne(identifier))
+
         if let newRowView = listView.updateRowKindIfNeeded(for: identifier) {
             _ = newRowView
         } else {
             listView.reconfigureRowView(for: identifier)
         }
-        listView.layoutCache.finalizeInvalidationRequests()
 
         #if canImport(UIKit)
             listView.setNeedsLayout()
@@ -139,18 +135,28 @@ public class ListViewDiffableDataSource<Item: Identifiable & Hashable>: ListView
             }
             recycled.removeFromSuperview()
         }
-        listView.layoutCache.requestInvalidateHeights(for: removed.map(\.identifier))
 
         let newElements = diffResult.elements
+        let previousCount = elements.count
         elements = newElements
+
+        // Bring the layout in line with the new order. Appending never
+        // disturbs the rows already there, so it stays off the O(n) path.
+        if diffResult.isTailAppend(previousCount: previousCount) {
+            listView.rowLayout.appendRows(count: diffResult.added.count)
+        } else {
+            listView.rowLayout.reload()
+        }
 
         let updated = diffResult.updated
         let reordered = diffResult.reordered
-        let identifiersNeedingMeasurement = updated.map(\.identifier)
-            + reordered.map(\.identifier)
-        if !listView.layoutCache.invalidateHeights(for: identifiersNeedingMeasurement) {
-            listView.layoutCache.requestInvalidateHeights(for: identifiersNeedingMeasurement)
-        }
+        // Removed rows only need their measurement forgotten; updated and
+        // reordered rows need it taken again, since the adapter is handed both
+        // the item and its index.
+        listView.rowLayout.invalidateHeights(
+            for: (removed + updated).map { AnyHashable($0.identifier) }
+                + reordered.map { AnyHashable($0.identifier) }
+        )
 
         for index in updated {
             let identifier = index.identifier
@@ -185,8 +191,6 @@ public class ListViewDiffableDataSource<Item: Identifiable & Hashable>: ListView
                 }
             }
         }
-
-        listView.layoutCache.finalizeInvalidationRequests()
 
         if animatingDifferences {
             withListAnimation {

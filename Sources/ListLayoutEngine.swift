@@ -59,6 +59,10 @@ struct ListLayoutEngine {
     func height(at index: Int) -> CGFloat { rows[index].height }
     func isPending(at index: Int) -> Bool { rows[index].isPending }
 
+    func pendingCount(in range: Range<Int>) -> Int {
+        prefix(range.upperBound).pending - prefix(range.lowerBound).pending
+    }
+
     /// Distance from the top of the list to the top of `index`.
     func offset(at index: Int) -> CGFloat { prefix(index).height }
 
