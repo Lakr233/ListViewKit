@@ -443,7 +443,6 @@ import SpringInterpolation
             /// re-tile a scroller nobody can see.
             var scrollableRange: CGFloat
             var showsScroller: Bool
-            var autohidesScrollers: Bool
             /// Padding that keeps overlay knob endpoints clear of rounded
             /// window corners, already netted against the overlay's own safe
             /// area so an underlapping titlebar is not counted twice.
@@ -453,7 +452,6 @@ import SpringInterpolation
                 lhs.boundsSize == rhs.boundsSize
                     && lhs.scrollableRange == rhs.scrollableRange
                     && lhs.showsScroller == rhs.showsScroller
-                    && lhs.autohidesScrollers == rhs.autohidesScrollers
                     && lhs.knobEndpointInsets == rhs.knobEndpointInsets
             }
         }
@@ -470,19 +468,9 @@ import SpringInterpolation
         /// this to prove that scrolling alone does not re-tile the scroller.
         private(set) var scrollerGeometryPassCount: Int = 0
 
-        public var hasVerticalScroller: Bool = true {
-            didSet { needsLayout = true }
-        }
-
-        public var autohidesScrollers: Bool = true {
-            didSet { needsLayout = true }
-        }
-
         open var contentInsets: NSEdgeInsets = .init() {
             didSet { needsLayout = true }
         }
-
-        var alwaysBounceVertical: Bool = true
 
         /// While set, an offset that a content-size change pushed out of
         /// bounds travels to its new home instead of snapping there. A caller
@@ -606,7 +594,7 @@ import SpringInterpolation
         private func updateVerticalScroller() {
             let minOffset = minimumContentOffset.y
             let scrollableRange = maximumContentOffset.y - minOffset
-            let showsScroller = hasVerticalScroller && scrollableRange > 0 && bounds.height > 0
+            let showsScroller = scrollableRange > 0 && bounds.height > 0
 
             // NSScrollView already applies its own safe area when tiling the
             // scroller, so only the remainder is ours to add.
@@ -619,7 +607,6 @@ import SpringInterpolation
                 boundsSize: bounds.size,
                 scrollableRange: showsScroller ? scrollableRange : 0,
                 showsScroller: showsScroller,
-                autohidesScrollers: autohidesScrollers,
                 knobEndpointInsets: (
                     top: max(0, endpointInset - safeAreaInsets.top),
                     bottom: max(0, endpointInset - safeAreaInsets.bottom)
@@ -664,9 +651,10 @@ import SpringInterpolation
 
                 scrollerOverlay.frame = bounds
                 scrollerOverlay.scrollerStyle = .overlay
+                // Autohiding follows the system preference while a knob is
+                // live. A hidden overlay pins it off so AppKit cannot fade
+                // a scroller back in over content that cannot scroll.
                 scrollerOverlay.autohidesScrollers = geometry.showsScroller
-                    ? geometry.autohidesScrollers
-                    : false
                 scrollerOverlay.hasVerticalScroller = true
 
                 scrollerOverlay.scrollerInsets = NSEdgeInsets(

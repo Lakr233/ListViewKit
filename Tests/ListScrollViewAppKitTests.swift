@@ -173,8 +173,7 @@ struct ListScrollViewAppKitTests {
         #expect(passesAfter { scrollView.contentSize = CGSize(width: 200, height: 2_000) } == 1)
         #expect(passesAfter { scrollView.frame.size.height = 300 } == 1)
         #expect(passesAfter { scrollView.contentInsets = NSEdgeInsets(top: 20, left: 0, bottom: 0, right: 0) } == 1)
-        #expect(passesAfter { scrollView.autohidesScrollers = false } == 1)
-        #expect(passesAfter { scrollView.hasVerticalScroller = false } == 1)
+        #expect(passesAfter { scrollView.contentSize = CGSize(width: 200, height: 100) } == 1)
         #expect(passesAfter {} == 0)
     }
 
@@ -291,7 +290,7 @@ struct ListScrollViewAppKitTests {
     }
 
     @Test
-    func verticalScrollerHidesWhenContentFitsOrItIsDisabled() throws {
+    func verticalScrollerHidesWheneverTheContentFits() throws {
         let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         let scroller = try #require(
             scrollView.subviews
@@ -317,7 +316,8 @@ struct ListScrollViewAppKitTests {
         #expect(!scrollerContainer.isHidden)
         #expect(scrollerContainer.frame == scrollView.bounds)
 
-        scrollView.hasVerticalScroller = false
+        // And back the other way: content that fits again puts the knob away.
+        scrollView.contentSize = CGSize(width: 200, height: 100)
         scrollView.layoutSubtreeIfNeeded()
         #expect(scrollerContainer.isHidden)
     }

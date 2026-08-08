@@ -366,7 +366,7 @@ final class MessageListController {
      contentOffset  contentSize  contentInsets
      minimumContentOffset  maximumContentOffset
      scroll(to:angularFrequency:preserveVelocity:)   cancelCurrentScrolling()
-     hasVerticalScroller  autohidesScrollers  flashScrollers()
+     flashScrollers()
 ```
 
 ---

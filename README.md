@@ -187,6 +187,7 @@ list.scrollToBottom()
 | `invalidateLayout(forRowWithID:)` | `invalidateLayout(forRowWith:)` |
 | `ScrollPosition.none` | `ListRowPosition.nearest` |
 | `deferredSizeCalculation` | removed; slicing is the only model |
+| `hasVerticalScroller` / `autohidesScrollers` | removed; the scroller appears when the content overflows and autohides per the system preference |
 | `AnimationBlockView` | removed; add the list as a subview directly |
 
 The row-kind type is gone. Where you switched on a kind, register one
