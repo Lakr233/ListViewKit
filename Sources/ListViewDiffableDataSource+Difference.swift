@@ -37,66 +37,53 @@ extension ListViewDiffableDataSource.SequenceDiffResult {
 }
 
 extension ListViewDiffableDataSource {
+    /// Classifies `other` against the current elements in one pass over each.
+    ///
+    /// The intermediate key sets and index maps this used to build were three
+    /// `Set`s and two `Dictionary`s the size of the list, allocated on every
+    /// apply. An `OrderedDictionary` already answers "where is this key" in
+    /// constant time, so the only collection built here is the result itself.
+    ///
+    /// Walking positions rather than key sets also makes the output
+    /// deterministic; iterating a `Set` previously varied the order of
+    /// `removed` and `added` between runs.
     func difference(with other: [Item]) -> SequenceDiffResult<Item.ID> {
-        let snapshot: OrderedDictionary<Item.ID, Item> = .init(uniqueKeysWithValues: other.map {
-            ($0.id, $0)
-        })
-        assert(
-            snapshot.count == other.count,
-            "duplicate identifiers found in the new collection."
-        )
-
-        let oldKeys = Set(elements.keys)
-        let newKeys = Set(snapshot.keys)
-        let removedKeys = oldKeys.subtracting(newKeys)
-        let addedKeys = newKeys.subtracting(oldKeys)
-        let commonKeys = oldKeys.intersection(newKeys)
-
-        var oldIndexMap = [Item.ID: Int]()
-        var newIndexMap = [Item.ID: Int]()
-
-        for identifier in commonKeys {
-            oldIndexMap[identifier] = elements.index(forKey: identifier)!
-            newIndexMap[identifier] = snapshot.index(forKey: identifier)!
-        }
-
-        let removed = removedKeys.map { identifier in
-            SequenceDiffResult<Item.ID>.Index(
-                index: elements.index(forKey: identifier)!,
-                identifier: identifier
-            )
-        }
-
-        let added = addedKeys.map { identifier in
-            SequenceDiffResult<Item.ID>.Index(
-                index: snapshot.index(forKey: identifier)!,
-                identifier: identifier
-            )
-        }
-
+        var newElements = OrderedDictionary<Item.ID, Item>(minimumCapacity: other.count)
+        var added = [SequenceDiffResult<Item.ID>.Index]()
         var updated = [SequenceDiffResult<Item.ID>.Index]()
         var reordered = [SequenceDiffResult<Item.ID>.ReorderIndex]()
 
-        for identifier in commonKeys {
-            let oldIndex = oldIndexMap[identifier]!
-            let newIndex = newIndexMap[identifier]!
+        for (newIndex, item) in other.enumerated() {
+            // The unique-key initializer this replaces trapped on duplicates in
+            // every build, and the indices below are only meaningful while one
+            // position maps to one identifier.
+            let displaced = newElements.updateValue(item, forKey: item.id)
+            precondition(displaced == nil, "duplicate identifier \(item.id) in the new collection.")
 
-            if elements[identifier] != snapshot[identifier] {
-                updated.append(.init(
-                    index: newIndex,
-                    identifier: identifier
-                ))
+            guard let oldIndex = elements.index(forKey: item.id) else {
+                added.append(.init(index: newIndex, identifier: item.id))
+                continue
+            }
+            if elements.values[oldIndex] != item {
+                updated.append(.init(index: newIndex, identifier: item.id))
             } else if oldIndex != newIndex {
                 reordered.append(.init(
                     oldIndex: oldIndex,
                     newIndex: newIndex,
-                    identifier: identifier
+                    identifier: item.id
                 ))
             }
         }
 
+        var removed = [SequenceDiffResult<Item.ID>.Index]()
+        for (oldIndex, identifier) in elements.keys.enumerated()
+            where newElements[identifier] == nil
+        {
+            removed.append(.init(index: oldIndex, identifier: identifier))
+        }
+
         return .init(
-            elements: snapshot,
+            elements: newElements,
             removed: removed,
             added: added,
             updated: updated,
