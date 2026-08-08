@@ -3,8 +3,6 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
-import DequeModule
-
 #if canImport(UIKit)
     import UIKit
 #elseif canImport(AppKit)
@@ -20,13 +18,14 @@ open class ListView: ListScrollView {
     public typealias Adapter = ListViewAdapter
 
     /// Held weakly, so a data source that has been released reads as `nil` and
-    /// another one can take its place. The rows and measured heights described
-    /// by the previous one must not survive that: identifiers are only unique
-    /// within a single data source.
+    /// another one can take its place. Nothing the previous one described may
+    /// survive that — neither measured heights nor the row views still keyed by
+    /// its identifiers — because identifiers are only unique within one data
+    /// source.
     public weak var dataSource: DataSource? {
         didSet {
             assert(oldValue == nil)
-            rowLayout.invalidateAll()
+            reloadData()
         }
     }
 
@@ -34,7 +33,7 @@ open class ListView: ListScrollView {
 
     lazy var rowLayout: ListRowLayout = .init(self)
     lazy var visibleRows: [AnyHashable: ListRowView] = [:]
-    lazy var reusableRows: [AnyHashable: Reference<Deque<ListRowView>>] = [:]
+    lazy var reusableRows: [AnyHashable: [ListRowView]] = [:]
     var rowsPendingRemoval: [ListRowView] = []
     var isSliceDrainScheduled = false
     /// When the content width last turned measured heights back into
@@ -182,15 +181,6 @@ extension ListView: @MainActor Identifiable {}
 
 /// internal api
 extension ListView {
-    func reusableDequeRef(for kind: AnyHashable) -> Reference<Deque<ListRowView>> {
-        if let ref = reusableRows[kind] {
-            return ref
-        }
-        @Reference var newRef: Deque<ListRowView> = .init()
-        reusableRows[kind] = _newRef
-        return _newRef
-    }
-
     @discardableResult
     func ensureRowView(for index: Int) -> ListRowView {
         guard let identifier = dataSource?.itemIdentifier(at: index, in: self) else {
@@ -213,22 +203,18 @@ extension ListView {
         }
         let kind = adapter.listView(self, rowKindFor: item, at: index)
 
-        return reusableDequeRef(for: .init(kind))
-            .modifying { pool in
-                let row: ListRowView = if let reusedRow = pool.popFirst() {
-                    reusedRow
-                } else {
-                    adapter.listViewMakeRow(for: kind)
-                }
-                row.rowKind = kind
-                configureRowView(row, for: item, at: index)
-                visibleRows[key] = row
-                if row.superview != self {
-                    addSubview(row)
-                }
-                row.frame = rectForRow(at: index)
-                return row
-            }
+        // Reuse the most recently recycled row of this kind: it is the one
+        // still warm in cache, and a pool has no ordering to preserve.
+        let row = reusableRows[AnyHashable(kind)]?.popLast()
+            ?? adapter.listViewMakeRow(for: kind)
+        row.rowKind = kind
+        configureRowView(row, for: item, at: index)
+        visibleRows[key] = row
+        if row.superview != self {
+            addSubview(row)
+        }
+        row.frame = rectForRow(at: index)
+        return row
     }
 
     func prepareVisibleRows() {
@@ -300,10 +286,8 @@ extension ListView {
             assertionFailure()
             return
         }
-        let kind = AnyHashable(rowKind)
         rowView.rowKind = nil
-        reusableDequeRef(for: kind)
-            .modifying { $0.append(rowView) }
+        reusableRows[AnyHashable(rowKind), default: []].append(rowView)
         rowsPendingRemoval.append(rowView)
     }
 

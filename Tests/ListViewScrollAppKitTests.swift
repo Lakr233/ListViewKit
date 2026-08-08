@@ -232,8 +232,7 @@ struct ListViewScrollAppKitTests {
             snapshot.append(ScrollItem(id: index))
         }
         dataSource.applySnapshot(snapshot)
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
+        drain(listView)
 
         listView.contentOffset.y = 50
         listView.layoutSubtreeIfNeeded()

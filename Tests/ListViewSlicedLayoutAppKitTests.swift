@@ -149,12 +149,17 @@ struct ListViewSlicedLayoutAppKitTests {
 
         let second = ListViewDiffableDataSource<ReflowItem>(listView: listView)
         #expect(listView.rowLayout.rowCount == 0)
+        #expect(listView.visibleRowViews.isEmpty)
         second.applySnapshot(using: (0 ..< 3).map { ReflowItem(id: $0) })
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
+        drain(listView)
 
         #expect(listView.rowLayout.rowCount == 3)
         #expect(listView.indicesForVisibleRows == [0, 1, 2])
+        // Views left over from the first data source would resolve to a zero
+        // frame here and overlap the real rows.
+        #expect(listView.visibleRowViews.count == 3)
+        let tops = listView.visibleRowViews.map(\.frame.minY).sorted()
+        #expect(tops == (0 ..< 3).map { listView.rectForRow(at: $0).minY }.sorted())
     }
 
     /// A row nobody can measure has to settle for its estimate. Measurement
