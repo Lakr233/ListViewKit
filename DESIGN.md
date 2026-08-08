@@ -1,0 +1,415 @@
+# ListViewKit 3.0 设计
+
+本文是 3.0 的施工图。2.x 的问题、3.0 的模型、要砍掉的 API、以及分几步落地，
+都在这里。每一步单独 commit，每一步都要有测试和 benchmark 数字。
+
+---
+
+## 0. 为什么要动
+
+`Benchmarks/` 拆分之后测出来的基线（Release，800×600 视口，44pt 固定行高）：
+
+| Items  | Initial layout | 20k visible queries | 20k offset writes | 1k scroll layouts | 200 snapshot appends | 20 width reflows |
+| -----: | -------------: | ------------------: | ----------------: | ----------------: | -------------------: | ---------------: |
+|   1000 |         3.5 ms |             10.5 ms |            498 ms |             50 ms |               399 ms |            26 ms |
+|  10000 |        31.6 ms |             11.5 ms |            507 ms |             79 ms |             3 675 ms |           243 ms |
+| 100000 |         362 ms |             12.3 ms |            503 ms |             93 ms |            44 928 ms |          3 050 ms |
+
+换算成单次操作，三个数字不能接受：
+
+```
+  往 10 万行的列表追加一条消息      225 ms      ← 一次 UI 卡死
+  10 万行首次布局                   362 ms      ← 打开就卡
+  10 万行宽度变化一次               152 ms      ← 拖窗口每帧都卡
+  每次 contentOffset 写             25 µs       ← 纯浪费，是可见区间查询的 50 倍
+```
+
+`sample` 的归因（append 负载，841 个主线程样本）：
+
+```
+  478 (57%)  applySnapshot → prepareVisibleRows → indices() → LayoutCache.rebuild()
+               ├ 175  rebuildFrame()            每行一次 Dictionary 写
+               ├  93  Set<AnyHashable>.insert   每行一次装箱
+               ├  60  heightCache[key]          每行一次 AnyHashable 哈希
+               ├  43  heightCache.keys.filter   全量扫陈旧 key
+               └  37  identifier(for:)          每行一次 weak load + 存在类型调用
+  363 (43%)  difference(with:)
+               └ 3 个 Set + 2 个 Dictionary + 1 个 OrderedDictionary，全是 O(n) 分配
+
+  叶子节点：AnyHashable.init → swift_dynamicCast → _conformsToProtocol
+            → dyld4::APIs::_dyld_find_protocol_conformance
+            每一行都在做一次动态协议一致性查找。
+```
+
+根因只有一句话：**diff 已经算出了谁增谁删谁动，却没人用，最后还是全量重建。**
+触发点是 `ListView+LayoutCache.swift:29` 那个启发式：
+
+```swift
+var isCacheInvalid: Bool { numberOfItems != heightCache.count }
+```
+
+数量对不上就全量 rebuild。追加一行 → 数量对不上 → 走一遍 10 万行。
+
+---
+
+## 1. 分层
+
+```
+┌────────────────────────────────────────────────────────────────────────┐
+│  应用层                                                                  │
+│     list.register(...)    list.apply([Item])    list.update(item)       │
+└──────────────────────────────────┬─────────────────────────────────────┘
+                                   │   只有这一个门面，一个对象
+┌──────────────────────────────────▼─────────────────────────────────────┐
+│  ListView<Item>                                    (final, UIKit/AppKit)│
+│    · 复用池、可见行装配、frame 下发                                        │
+│    · 只做一件跟布局有关的事：把「要测哪些行」问给 engine，                    │
+│      再把「测出来是多少」答回去                                            │
+└────────┬───────────────────────────────────────────────┬───────────────┘
+         │                                                │
+┌────────▼─────────────────────────────┐  ┌───────────────▼──────────────┐
+│  ListLayoutEngine                    │  │  ListScrollView              │
+│  纯模型 — 不 import UIKit/AppKit       │  │  UIKit : UIScrollView 薄封装  │
+│  不知道 view、adapter、dataSource 存在  │  │  AppKit: 自绘滚动 + 物理曲线   │
+│                                       │  │          + overlay scroller  │
+│  · Fenwick(height)  前缀和            │  │                              │
+│  · Fenwick(pending) 未测计数           │  └──────────────────────────────┘
+│  · 切片调度 + 滚动补偿量计算            │
+└───────────────────────────────────────┘
+```
+
+`ListLayoutEngine` 不 import 任何 UI 框架，是这次重构的核心收益：它可以在几微秒
+内跑几十万次单元测试，不需要 view、不需要主线程、不需要 run loop。
+
+---
+
+## 2. 核心模型：切片式延迟布局
+
+2.x 里 `deferredSizeCalculation` 是个默认关闭的开关。3.0 里它是**唯一的布局模型**，
+开关消失。
+
+### 2.1 数据结构
+
+```
+ListLayoutEngine
+──────────────────────────────────────────────────────────────────────────
+  slot        0      1      2      3      4      5      6     ...   n-1
+            ┌──────┬──────┬──────┬──────┬──────┬──────┬──────┬───┬──────┐
+  height    │ 44 e │ 44 e │  92  │ 118  │  76  │ 44 e │ 44 e │...│ 44 e │
+            └──────┴──────┴──────┴──────┴──────┴──────┴──────┴───┴──────┘
+  pending   │  1   │  1   │  0   │  0   │  0   │  1   │  1   │...│  1   │
+                            └──── 视口内，本帧同步测过 ────┘
+
+  e = estimated。出生时从「已测行的均值」取一个数，之后**永不回改**。
+      回改会让所有未测行的前缀和一起漂移，滚动条就会抖。
+
+  ┌─ Fenwick A：高度前缀和 ──────────────┐  ┌─ Fenwick B：未测计数 ────────┐
+  │   offsetOf(i)  = Σ[0,i)    O(log n) │  │  pendingIn(range)  O(log n) │
+  │   totalHeight  = Σ[0,n)    O(1)     │  │  nearestPending(i) O(log n) │
+  │   indexAt(y)   = 下界搜索   O(log n) │  │  setPending(i,_)   O(log n) │
+  │   setHeight(i) = 单点更新   O(log n) │  │                             │
+  └─────────────────────────────────────┘  └─────────────────────────────┘
+
+  没有 Dictionary。没有 AnyHashable。没有 weak load。没有存在类型。
+  热路径上全部是 [CGFloat] / [Int32] 上的整型加法，内存连续。
+```
+
+Fenwick B 是干掉 2.x 那个 O(n²log n) drain 的关键。现在的
+`nextEstimatedIndices(near:limit:)` 每次都要遍历整个 `estimatedIdentifiers` 再
+`sort()`，还是在 `limit: 1` 的循环里调的。换成「未测计数」的树之后，
+「离视口最近的未测行是哪个」是一次 O(log n) 的下降搜索。
+
+### 2.2 一帧里发生什么
+
+```
+                          ┌────────── viewport ──────────┐
+   ... ──┬────┬────┬────┬─┼──┬────┬────┬────┬────┬────┬──┼─┬────┬────┬── ...
+         │ P3 │ P2 │ P1 │ │S │ S  │ S  │ S  │ S  │ S  │  │ │ P1 │ P2 │
+   ... ──┴────┴────┴────┴─┼──┴────┴────┴────┴────┴────┴──┼─┴────┴────┴── ...
+                          └──────────────────────────────┘
+
+   S       同步测量。这一帧就要上屏，没有第二种选择。
+           数量 ≈ 视口能装下的行数，与 n 无关。
+   P1..Pk  切片。nearestPending 每次 O(log n) 取一个，由近及远，
+           一帧内一直取到时间预算用完为止。
+```
+
+```
+   一帧 (120 Hz → 8.3 ms)
+   ├──────────┬──────────┬──────────────┬───────────────┬────────────────┤
+   │  event   │  scroll  │  可见行装配   │  slice ≤ 2ms  │     render     │
+   └──────────┴──────────┴──────────────┴───────┬───────┴────────────────┘
+                                                │
+                     超预算 ──────────────────▶ 立刻停，剩下的下一帧继续
+                     用户正在拖 / 宽度还在变 ──▶ 整片跳过（测了也白测）
+                     pending 归零 ────────────▶ 不再调度，零开销
+```
+
+### 2.3 滚动补偿：锚点必须纹丝不动
+
+切片修正了视口**上方**的一行，会把下面所有东西往下推。必须同量反向补偿。
+
+```
+   切片把 row 5 从估算 44 修正为实测 118  (Δ = +74)
+
+          before                                after
+       ┌────────────┐ y=0                   ┌────────────┐ y=0
+       │   row 5    │ 44  (est)             │            │
+       ├────────────┤                       │   row 5    │ 118 (measured)
+       │   row 6    │ 44  (est)             │            │
+   ════╪════════════╪═══ 视口顶 ══════════════╪════════════╪════  ← 必须不动
+       │   row 7    │                       │   row 6    │
+       │   row 8    │                       │   row 7    │
+       └────────────┘                       └────────────┘
+
+   engine.applyMeasurements(...) 返回 Δ = +74
+        │
+        └─▶ compensateScrollOffset(by: +74)
+              contentOffset.y += 74      → 屏幕上一个像素都没动
+              contentSize.height += 74   → 滚动条比例平滑变化，不跳
+```
+
+补偿量的定义很关键：**只累加完全落在锚点线之上的行的高度变化**。跨越锚点线的那一行
+不算 —— 它本来就有一部分在屏幕上，它变高是用户应该看到的。
+
+`ListViewDeferredSizeAppKitTests` 里已经有三个测试在钉这件事
+（`backgroundCorrectionKeepsBottomPinnedListStationary`、
+`backgroundCorrectionKeepsMidListAnchorStationary`、
+`drainConvergesToFullRecomputeResult`），它们必须原样通过。
+
+### 2.4 结构变更走 splice，不再全量 rebuild
+
+```
+   apply([Item])
+        │
+        ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  diff — 单趟 Heckel，输出全是 Int index                 │
+   │     removed[]   inserted[]   moved[]   updated[]      │
+   │     零中间 Set / Dictionary                            │
+   └──────────────────────────┬───────────────────────────┘
+                              ▼
+   ┌──────────────────────────────────────────────────────┐
+   │  engine.transact { ... }                              │
+   │     remove(at:count:)     O(k log n)                  │
+   │     insert(at:count:)     O(k log n)  → pending = 1   │
+   │     move(from:to:)        O(log n)    高度跟着 id 走    │
+   │     invalidate(at:)       O(log n)    → pending = 1   │
+   └──────────────────────────┬───────────────────────────┘
+                              ▼
+                       requestLayout()
+                       —— 结束。不重建任何东西。
+                       下一帧只测视口里那十几行。
+```
+
+对比：
+
+```
+   2.x   append 1 行到 10 万行
+         diff O(n) ──▶ isCacheInvalid 猜到不一致 ──▶ rebuild() 全量
+                                                    ├ 10 万次 AnyHashable 装箱
+                                                    ├ 10 万次 swift_dynamicCast
+                                                    ├ 10 万次 weak load
+                                                    └ 10 万次 Dictionary 写
+                                                    = 225 ms
+
+   3.0   diff O(n)（还是要过一遍新数组，避不掉）
+         ──▶ engine.insert(at: n, count: 1)
+             = 一次 Fenwick 点更新，17 次加法
+                                                    = 目标 < 1 ms
+```
+
+`identity → 已测高度` 的映射只在应用 diff 的那一瞬间用一次，用来让被 move / insert
+影响到的行保住已经测过的高度。布局路径完全不碰 identifier。
+
+---
+
+## 3. 公开 API：9 个类型砍到 4 个
+
+### 3.1 类型表
+
+```
+   2.x 对外类型                              3.0
+   ──────────────────────────────────────────────────────────────────────
+   ListView                     open     →  ListView<Item>        final
+   ListScrollView               open     →  ListScrollView        open
+   ListRowView                  open     →  ListRowView           open
+   ListRowPosition              (嵌套)    →  ListRowPosition       顶层
+   ──────────────────────────────────────────────────────────────────────
+   ListViewAdapter              protocol →  ✗  并入 ListView.register
+   ListViewTypedAdapter         final    →  ✗  同上
+   ListViewDataSource           open     →  ✗  内部化
+   ListViewDiffableDataSource   class    →  ✗  并入 ListView.apply
+   ListViewDataSourceSnapshot   struct   →  ✗  用户自己的 [Item] 就是快照
+   AnimationBlockView           open     →  ✗  移进 Example
+   ListView.deferredSizeCalculation      →  ✗  默认且唯一的模型
+   ListView.invaliateLayout()   depr.    →  ✗
+```
+
+### 3.2 调用方对比
+
+```swift
+// ─── 2.x ────────────────────────────────────────────────────────────────
+final class MessageListController {
+    let listView = ListView(frame: .zero)
+    let dataSource: ListViewDiffableDataSource<Message>   // 必须自己持有
+    let adapter: ListViewTypedAdapter<Message, Message.RowKind>  // 必须自己持有
+
+    init() {
+        adapter = ListViewTypedAdapter { _, _, _ in .text }
+        dataSource = ListViewDiffableDataSource(listView: listView)
+        listView.adapter = adapter
+        adapter.register(
+            .text,
+            makeRow: TextRow.init,
+            height: { listView, message, _ in
+                TextRow.height(for: message.text, width: listView.bounds.width)
+            },
+            configure: { _, row, message, _ in row.configure(with: message.text) }
+        )
+    }
+
+    func add(_ message: Message) {
+        var snapshot = dataSource.snapshot()      // O(n) 拷贝
+        snapshot.append(message)
+        dataSource.applySnapshot(snapshot, animatingDifferences: true)  // O(n) 拷贝 + O(n) diff
+    }
+}
+
+// ─── 3.0 ────────────────────────────────────────────────────────────────
+final class MessageListController {
+    let list = ListView<Message>()                 // 一个对象，不用管弱引用
+
+    init() {
+        list.rowKind = { message, _ in message.kind }
+        list.register(TextRow.self, for: .text) { row, message, ctx in
+            row.configure(with: message.text)
+        } height: { message, ctx in
+            TextRow.height(for: message.text, width: ctx.width)
+        }
+    }
+
+    func add(_ message: Message) {
+        list.apply(messages, animated: true)       // 用户自己的数组就是快照
+    }
+
+    func stream(_ message: Message) {
+        list.update(message)                       // 单条，不 diff，O(log n)
+    }
+}
+```
+
+`ctx`（`ListRowContext`）带 `width` / `index` / 未来的 `traits`，比现在往闭包里塞
+`ListView` 干净，也避免了循环引用陷阱。
+
+### 3.3 保留的 API
+
+```
+   ListView<Item>
+     apply(_:animated:)          update(_:)          remove(id:)
+     register(_:for:height:configure:)               rowKind
+     scrollToRow(_:at:animated:) scrollToBottom(animated:)
+     visibleRows                 rowView(for:)       rectForRow(id:)
+     invalidateLayout(id:)       invalidateLayout()
+     topInset  bottomInset       estimatedRowHeight
+     isScrolledToBottom(tolerance:)   isUserInteractingWithScroll
+
+   ListScrollView（滚动基座，原样保留，仅收敛内部成员）
+     contentOffset  contentSize  contentInsets
+     minimumContentOffset  maximumContentOffset
+     scroll(to:angularFrequency:preserveVelocity:)   cancelCurrentScrolling()
+     hasVerticalScroller  autohidesScrollers  flashScrollers()
+```
+
+---
+
+## 4. 不支持 Auto Layout —— 明确成契约
+
+这个决定是对的，但 2.x 里只是「碰巧没实现」，3.0 里要写成契约。
+
+```
+   ┌──────────────────────────────────────────────────────────────────┐
+   │  ListView 只写 row.frame。                                        │
+   │                                                                   │
+   │  它不读 intrinsicContentSize，                                     │
+   │  不调 systemLayoutSizeFitting，                                    │
+   │  不给 row 装任何约束，                                              │
+   │  不参与 constraint 求解。                                           │
+   └──────────────────────────────────────────────────────────────────┘
+
+   row 内部 ─┬─ 想用 Auto Layout 排自己的子视图？可以，那是你的事。
+             │   ListViewKit 给你一个确定的 bounds，你在里面自便。
+             │
+             └─ 但**行高必须由 height 闭包算出来**，不能指望
+                 systemLayoutSizeFitting 反推。因为切片模型要在
+                 row view 还不存在的时候就知道它多高。
+
+   ListRowView 会强制:
+       translatesAutoresizingMaskIntoConstraints = true     (UIKit)
+       #if DEBUG 断言 row 自身没有约束自身尺寸的 constraint
+```
+
+为什么这条对性能是实打实的：profile 里 AppKit 的
+`_findAnySubviewNeedingAutoLayoutEngine` 和 `_NSAddKeyValueDependency` 是热点之一，
+每次布局 AppKit 都在遍历视图树找约束客户。行视图不碰约束，这份成本就是零。
+
+---
+
+## 5. 落地顺序
+
+一步一个 commit，每步都要有测试和 benchmark 数字。前 5 步不动公开 API，
+第 6、7 步才 breaking。
+
+```
+  #  commit                            动的文件                验收指标
+ ────────────────────────────────────────────────────────────────────────────
+  0  bench: 拆分 benchmark              Benchmarks/            已完成 ✓
+     （建立可归因的基线）
+
+  1  perf: AppKit scroller 拆成         ListScrollView         20k offset writes
+     「几何」+「位置同步」                                        503ms → 目标 <60ms
+     几何只在 bounds/contentSize/                              （WIP 已测到 281ms，
+     inset 变化时才跑                                            余下是 flashScrollers
+                                                               和 NSAnimationContext）
+
+  2  feat: 引入 ListLayoutEngine        新文件                  引擎独立测试全绿
+     Fenwick×2，纯模型，先不接线          + 独立单元测试            含 100k 随机操作
+                                                               对拍朴素实现
+
+  3  refactor!: ListView 改用引擎        ListView+LayoutCache   Initial layout
+     删掉 frameCache/heightCache/        ListView               362ms → 目标 <5ms
+     isCacheInvalid                                            appends 225ms → <1ms
+
+  4  perf: diff 单趟化                   +Difference            appends 再降一档
+     去掉 3 Set + 2 Dictionary
+
+  5  feat: 切片调度成为唯一布局模型        +DeferredMeasurement   width reflow
+     删掉 deferredSizeCalculation                              152ms → 目标 <5ms
+                                                               现有 6 个 deferred
+                                                               测试必须原样通过
+
+  6  feat: overscan / preload range     ListView               真机快滑不掉帧
+     参考 Texture 的 leading/trailing                          （benchmark 测不出，
+     screenful                                                  要手滑 + Instruments）
+
+  7  api!: 合并 adapter + dataSource     全部公开 API            公开类型 9 → 4
+     进 ListView<Item>                   + Example + Tests
+
+  8  docs: README / 迁移指南 / 3.0.0 tag
+```
+
+第 2 步的对拍测试是正确性的地基：拿一个「朴素实现」（就是个 `[CGFloat]` 数组，
+每次线性求和），和 Fenwick 引擎跑同一串 10 万次随机 insert/remove/move/setHeight，
+每一步都比对 `offsetOf` / `indexAt` / `totalHeight` / `nearestPending`。
+这个测试跑得起来，后面 5 步才敢改。
+
+---
+
+## 6. 风险
+
+| 风险 | 处理 |
+| --- | --- |
+| 泛型 `ListView<Item>` 在 AppKit 下 override 失效 | 已验证：泛型 NSView 子类的 `isFlipped` / `layout()` / `viewDidMoveToWindow()` / `hitTest` override 均正常 |
+| 估算高度不准导致滚动条跳 | 估算值出生即固定、永不回改；估算基数取已测均值；`estimatedRowHeight` 可显式指定 |
+| 切片在低端机吃掉帧预算 | 时间预算（默认 2ms）而非行数预算；用户交互 / 宽度变化期间整片跳过 |
+| 一次性删掉 5 个公开类型，下游迁移成本 | 3.0 是 major；第 7 步单独 commit，配迁移指南；1~6 步不动 API，可先单独发 2.x patch |
