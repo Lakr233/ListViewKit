@@ -32,110 +32,16 @@ private final class BenchmarkAdapter: ListViewAdapter {
     func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
 }
 
-@main
 @MainActor
-private struct ListViewKitBenchmarks {
-    private struct Context {
-        let listView: ListView
-        let dataSource: ListViewDiffableDataSource<BenchmarkItem>
-        let adapter: BenchmarkAdapter
-    }
+private struct Context {
+    let listView: ListView
+    let dataSource: ListViewDiffableDataSource<BenchmarkItem>
+    let adapter: BenchmarkAdapter
 
-    private static let itemCounts = [1_000, 10_000, 100_000]
-    private static let sampleCount = 3
-    private static let visibleQueryCount = 20_000
-    private static let offsetWriteCount = 20_000
-    private static let scrollLayoutCount = 1_000
-    private static let tailHeightUpdateCount = 1_000
-    private static let appendCount = 200
-    private static let widthReflowCount = 20
-
-    static func main() {
-        let warmupContext = makeContext(itemCount: 100)
-        _ = runVisibleQueries(in: warmupContext.listView, count: 100)
-        _ = runOffsetWrites(in: warmupContext.listView, count: 100)
-        _ = runScrollLayouts(in: warmupContext.listView, count: 10)
-
-        print("ListViewKit runtime benchmark")
-        print("Release configuration; fixed 44pt rows; 800×600 viewport")
-        print("")
-        print(
-            "| Items | Initial layout | 20k visible queries | Per query "
-                + "| 20k offset writes | 1k scroll layouts | 1k tail item updates "
-                + "| 200 snapshot appends | 20 width reflows |"
-        )
-        print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
-
-        for itemCount in itemCounts {
-            var context: Context?
-            var initialSamples: [Double] = []
-            for _ in 0 ..< sampleCount {
-                let (candidate, milliseconds) = measure {
-                    makeContext(itemCount: itemCount)
-                }
-                context = candidate
-                initialSamples.append(milliseconds)
-            }
-            guard let context else { continue }
-
-            let visibleSamples = (0 ..< sampleCount).map { _ in
-                measure {
-                    runVisibleQueries(in: context.listView, count: visibleQueryCount)
-                }.1
-            }
-            let offsetSamples = (0 ..< sampleCount).map { _ in
-                measure {
-                    runOffsetWrites(in: context.listView, count: offsetWriteCount)
-                }.1
-            }
-            let layoutSamples = (0 ..< sampleCount).map { _ in
-                measure {
-                    runScrollLayouts(in: context.listView, count: scrollLayoutCount)
-                }.1
-            }
-            let heightUpdateSamples = (0 ..< sampleCount).map { _ in
-                measure {
-                    runTailHeightUpdates(in: context, count: tailHeightUpdateCount)
-                }.1
-            }
-            let appendSamples = (0 ..< sampleCount).map { _ in
-                let appendContext = makeContext(itemCount: itemCount)
-                return measure {
-                    runSnapshotAppends(in: appendContext, count: appendCount)
-                }.1
-            }
-            let widthReflowSamples = (0 ..< sampleCount).map { _ in
-                measure {
-                    runWidthReflows(in: context.listView, count: widthReflowCount)
-                }.1
-            }
-            let initialMilliseconds = median(initialSamples)
-            let visibleMilliseconds = median(visibleSamples)
-            let offsetMilliseconds = median(offsetSamples)
-            let layoutMilliseconds = median(layoutSamples)
-            let heightUpdateMilliseconds = median(heightUpdateSamples)
-            let appendMilliseconds = median(appendSamples)
-            let widthReflowMilliseconds = median(widthReflowSamples)
-            let microsecondsPerQuery = visibleMilliseconds * 1_000 / Double(visibleQueryCount)
-
-            print(
-                "| \(itemCount) | \(format(initialMilliseconds)) ms "
-                    + "| \(format(visibleMilliseconds)) ms "
-                    + "| \(format(microsecondsPerQuery)) µs "
-                    + "| \(format(offsetMilliseconds)) ms "
-                    + "| \(format(layoutMilliseconds)) ms "
-                    + "| \(format(heightUpdateMilliseconds)) ms "
-                    + "| \(format(appendMilliseconds)) ms "
-                    + "| \(format(widthReflowMilliseconds)) ms |"
-            )
-            withExtendedLifetime(context) {}
-        }
-    }
-
-    private static func makeContext(itemCount: Int) -> Context {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
-        let adapter = BenchmarkAdapter()
-        let dataSource = ListViewDiffableDataSource<BenchmarkItem>(listView: listView)
+    init(itemCount: Int) {
+        listView = ListView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        adapter = BenchmarkAdapter()
+        dataSource = ListViewDiffableDataSource<BenchmarkItem>(listView: listView)
         listView.adapter = adapter
 
         dataSource.applySnapshot(
@@ -144,88 +50,125 @@ private struct ListViewKitBenchmarks {
         )
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
-        return Context(listView: listView, dataSource: dataSource, adapter: adapter)
+    }
+}
+
+/// One timed path. Every sample runs against a freshly built `Context`, so no
+/// benchmark can be contaminated by a previous one's mutations.
+@MainActor
+private struct Benchmark {
+    let key: String
+    let label: String
+    let iterations: Int
+    let body: (Context, Int) -> Void
+}
+
+@main
+@MainActor
+private enum ListViewKitBenchmarks {
+    private static let sampleCount = 3
+
+    private static let benchmarks: [Benchmark] = [
+        // Visible-range resolution alone. The offset is written once so the
+        // number reflects the binary search and nothing else.
+        Benchmark(key: "query", label: "20k visible queries", iterations: 20_000) { context, count in
+            let listView = context.listView
+            listView.contentOffset.y = listView.maximumContentOffset.y / 2
+            for _ in 0 ..< count {
+                blackHole(listView.indicesForVisibleRows.count)
+            }
+        },
+        // Content-offset writes alone: what a scroll gesture costs before the
+        // list does any row work.
+        Benchmark(key: "offset", label: "20k offset writes", iterations: 20_000) { context, count in
+            let listView = context.listView
+            let maximumOffset = listView.maximumContentOffset.y
+            for iteration in 0 ..< count {
+                listView.contentOffset.y = maximumOffset * CGFloat(iteration % 997) / 996
+            }
+        },
+        Benchmark(key: "layout", label: "1k scroll layouts", iterations: 1_000) { context, count in
+            let listView = context.listView
+            let maximumOffset = listView.maximumContentOffset.y
+            for iteration in 0 ..< count {
+                listView.contentOffset.y = maximumOffset * CGFloat(iteration) / CGFloat(max(1, count - 1))
+                listView.layoutSubtreeIfNeeded()
+            }
+        },
+        // A growing streaming response: one item changes height repeatedly
+        // without diffing a snapshot.
+        Benchmark(key: "update", label: "1k tail item updates", iterations: 1_000) { context, count in
+            let itemID = max(0, context.dataSource.snapshot().count - 1)
+            context.listView.setContentOffset(context.listView.minimumContentOffset, animated: false)
+            for iteration in 0 ..< count {
+                context.adapter.heightOverrides[itemID] = 44 + CGFloat(iteration % 120)
+                context.dataSource.updateItem(BenchmarkItem(id: itemID, revision: iteration + 1))
+                context.listView.layoutSubtreeIfNeeded()
+            }
+        },
+        // Appending through a complete snapshot diff, the path a chat client
+        // takes for every new message.
+        Benchmark(key: "append", label: "200 snapshot appends", iterations: 200) { context, count in
+            var nextID = context.dataSource.snapshot().count
+            for _ in 0 ..< count {
+                var snapshot = context.dataSource.snapshot()
+                snapshot.append(BenchmarkItem(id: nextID))
+                nextID += 1
+                context.dataSource.applySnapshot(snapshot, animatingDifferences: false)
+            }
+        },
+        // Alternating widths, each invalidating every cached height.
+        Benchmark(key: "reflow", label: "20 width reflows", iterations: 20) { context, count in
+            let listView = context.listView
+            for iteration in 0 ..< count {
+                listView.frame.size.width = iteration.isMultiple(of: 2) ? 640 : 800
+                listView.needsLayout = true
+                listView.layoutSubtreeIfNeeded()
+            }
+        },
+    ]
+
+    static func main() {
+        let itemCounts = environmentList("LVK_ITEMS").map { $0.compactMap(Int.init) } ?? [1_000, 10_000, 100_000]
+        let selectedKeys = environmentList("LVK_BENCH").map(Set.init)
+        let selected = benchmarks.filter { selectedKeys?.contains($0.key) ?? true }
+
+        warmUp()
+
+        print("ListViewKit runtime benchmark")
+        print("Release configuration; fixed 44pt rows; 800×600 viewport")
+        print("")
+        print("| Items | Initial layout | " + selected.map(\.label).joined(separator: " | ") + " |")
+        print(String(repeating: "| ---: ", count: selected.count + 2) + "|")
+
+        for itemCount in itemCounts {
+            var setupSamples: [Double] = []
+            var columns: [String] = []
+            for benchmark in selected {
+                var samples: [Double] = []
+                for _ in 0 ..< sampleCount {
+                    let (context, setupMilliseconds) = measure { Context(itemCount: itemCount) }
+                    setupSamples.append(setupMilliseconds)
+                    samples.append(measure { benchmark.body(context, benchmark.iterations) }.1)
+                    withExtendedLifetime(context) {}
+                }
+                columns.append(format(median(samples)))
+            }
+            print("| \(itemCount) | \(format(median(setupSamples))) ms | " + columns.joined(separator: " ms | ") + " ms |")
+        }
     }
 
-    /// Visible-range resolution alone: the content offset is written once, then
-    /// the query runs repeatedly against the same viewport.
-    private static func runVisibleQueries(in listView: ListView, count: Int) -> Int {
-        listView.contentOffset.y = listView.maximumContentOffset.y / 2
-        var resultCount = 0
-        for _ in 0 ..< count {
-            resultCount &+= listView.indicesForVisibleRows.count
+    private static func warmUp() {
+        let context = Context(itemCount: 100)
+        for benchmark in benchmarks {
+            benchmark.body(context, min(benchmark.iterations, 20))
         }
-        return resultCount
     }
 
-    /// Content-offset writes alone: what a scroll gesture costs before any row
-    /// work happens.
-    private static func runOffsetWrites(in listView: ListView, count: Int) -> CGFloat {
-        let maximumOffset = listView.maximumContentOffset.y
-        var checksum: CGFloat = 0
-        for iteration in 0 ..< count {
-            let progress = CGFloat(iteration % 997) / 996
-            listView.contentOffset.y = maximumOffset * progress
-            checksum += listView.contentOffset.y
-        }
-        return checksum
-    }
-
-    private static func runScrollLayouts(in listView: ListView, count: Int) -> Int {
-        let maximumOffset = listView.maximumContentOffset.y
-        var visibleRowCount = 0
-        for iteration in 0 ..< count {
-            let progress = CGFloat(iteration) / CGFloat(max(1, count - 1))
-            listView.contentOffset.y = maximumOffset * progress
-            listView.layoutSubtreeIfNeeded()
-            visibleRowCount &+= listView.visibleRowViews.count
-        }
-        return visibleRowCount
-    }
-
-    private static func runTailHeightUpdates(in context: Context, count: Int) -> CGFloat {
-        let itemID = max(0, context.dataSource.snapshot().count - 1)
-        context.listView.setContentOffset(context.listView.minimumContentOffset, animated: false)
-        var checksum: CGFloat = 0
-        for iteration in 0 ..< count {
-            context.adapter.heightOverrides[itemID] = 44 + CGFloat(iteration % 120)
-            _ = context.dataSource.updateItem(BenchmarkItem(
-                id: itemID,
-                revision: iteration + 1
-            ))
-            context.listView.layoutSubtreeIfNeeded()
-            checksum += context.listView.contentSize.height
-        }
-        return checksum
-    }
-
-    /// Appending one row through a full snapshot diff, the path a chat client
-    /// takes for every new message.
-    private static func runSnapshotAppends(in context: Context, count: Int) -> Int {
-        var nextID = context.dataSource.snapshot().count
-        for _ in 0 ..< count {
-            var snapshot = context.dataSource.snapshot()
-            snapshot.append(BenchmarkItem(id: nextID))
-            nextID += 1
-            context.dataSource.applySnapshot(snapshot, animatingDifferences: false)
-        }
-        return nextID
-    }
-
-    /// Alternating content-width changes, each of which invalidates every
-    /// cached height and forces a full synchronous re-measure.
-    private static func runWidthReflows(in listView: ListView, count: Int) -> CGFloat {
-        var checksum: CGFloat = 0
-        for iteration in 0 ..< count {
-            listView.frame.size.width = iteration.isMultiple(of: 2) ? 640 : 800
-            listView.needsLayout = true
-            listView.layoutSubtreeIfNeeded()
-            checksum += listView.contentSize.height
-        }
-        listView.frame.size.width = 800
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
-        return checksum
+    private static func environmentList(_ name: String) -> [String]? {
+        ProcessInfo.processInfo.environment[name]?
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
     }
 
     private static func measure<Result>(_ operation: () -> Result) -> (Result, Double) {
@@ -243,6 +186,13 @@ private struct ListViewKitBenchmarks {
     private static func format(_ value: Double) -> String {
         String(format: "%.3f", value)
     }
+}
+
+/// Keeps a measured result from being optimized away without the cost of a
+/// running checksum in the timed loop.
+@inline(never)
+private func blackHole(_ value: some Any) {
+    withExtendedLifetime(value) {}
 }
 #else
 #error("ListViewKitBenchmarks currently requires AppKit")
