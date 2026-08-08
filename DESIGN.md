@@ -449,42 +449,71 @@ profile 里那些 `_findAnySubviewNeedingAutoLayoutEngine` / `_NSAddKeyValueDepe
 第 6、7 步才 breaking。
 
 ```
-  #  commit                            动的文件                验收指标
+  #  commit                            状态      结果
  ────────────────────────────────────────────────────────────────────────────
-  0  bench: 拆分 benchmark              Benchmarks/            已完成 ✓
-     （建立可归因的基线）
+  0  bench: 拆分 benchmark              ✅ 079cedf
+     建立可归因的基线                              发现「25µs/query」其实是
+                                                 contentOffset 写，不是二分查找
 
-  1  perf: AppKit scroller 拆成         ListScrollView         20k offset writes
-     「几何」+「位置同步」                                        503ms → 目标 <60ms
-     几何只在 bounds/contentSize/                              （WIP 已测到 281ms，
-     inset 变化时才跑                                            余下是 flashScrollers
-                                                               和 NSAnimationContext）
+  1  perf: AppKit scroller 拆几何/位置    ✅ 3836d01
+                                                 20k offset writes
+                                                 503ms → 22ms  (23×)
+                                                 1k scroll layouts 93 → 87ms
+     review 抓到 3 个 P0：layoutContent 顺序、bounds.origin 跟随、
+     placement memo 键错（inset 改变但 range 不变）
 
-  2  feat: 引入 ListLayoutEngine        新文件                  引擎独立测试全绿
-     Fenwick×2，纯模型，先不接线          + 独立单元测试            含 100k 随机操作
-                                                               对拍朴素实现
+  2  feat: ListLayoutEngine             ✅ 684ec7d
+     Fenwick 单树（高度和 + 未测计数）              10 万随机操作对拍朴素实现
+                                                 review 抓到 2 个 P0：浮点降序
+                                                 vs 前缀和不一致（→ 行高 ceil 成
+                                                 整点）、indices() 越界返回末行
 
-  3  refactor!: ListView 改用引擎        ListView+LayoutCache   Initial layout
-     删掉 frameCache/heightCache/        ListView               362ms → 目标 <5ms
-     isCacheInvalid                                            appends 225ms → <1ms
+  3  perf: diff 单趟化                   ✅ 448c20c
+     去掉 3 Set + 2 Dictionary                    10k appends 3753 → 2557ms
+                                                 顺序从 Set 迭代变确定性
 
-  4  perf: diff 单趟化                   +Difference            appends 再降一档
-     去掉 3 Set + 2 Dictionary
+  4  refactor!: 切片布局成为唯一模型       ✅ befac74
+     删掉 LayoutCache / DeferredMeasurement       100k: initial 362 → 52ms
+     / deferredSizeCalculation                    width reflow 152 → 4ms/次
+                                                  tail updates 33.7 → 10.6ms
+                                                  visible queries 11.8 → 3.2ms
+                                                  append 225 → 37ms/条
+     review 抓到 2 个 P0 + 1 个 P1：固定 4 次收敛循环不够、
+     替换 dataSource 未清旧状态、无 adapter 时死循环
 
-  5  feat: 切片调度成为唯一布局模型        +DeferredMeasurement   width reflow
-     删掉 deferredSizeCalculation                              152ms → 目标 <5ms
-                                                               现有 6 个 deferred
-                                                               测试必须原样通过
+  5  refactor: 去掉 Deque + Reference    ✅ 2987d8a
+     复用池改 LIFO 普通数组                        只剩 OrderedDictionary 还依赖
+                                                 swift-collections
 
-  6  feat: overscan / preload range     ListView               真机快滑不掉帧
-     参考 Texture 的 leading/trailing                          （benchmark 测不出，
-     screenful                                                  要手滑 + Instruments）
+ ────────────────────────────────────────────────────────────────────────────
+  6  api!: 合并 adapter + dataSource     ⬜ 待做    公开类型 9 → 4
+     进 ListView<Item>，rows { } DSL，              append 37ms → 目标 <1ms
+     Auto Layout 按 kind opt-in                    （现在的 37ms 全是 snapshot
+                                                   API 的三趟 O(n)，不是布局）
 
-  7  api!: 合并 adapter + dataSource     全部公开 API            公开类型 9 → 4
-     进 ListView<Item>                   + Example + Tests
+  7  feat: overscan / preload range     ⬜ 待做    真机快滑不掉帧
+     Texture 的 leading/trailing screenful         （benchmark 测不出，要手滑）
 
-  8  docs: README / 迁移指南 / 3.0.0 tag
+  8  refactor: 去掉 OrderedDictionary    ⬜ 待做    依赖 #6 的新数据模型
+     → 彻底摆脱 swift-collections
+
+  9  docs: README / 迁移指南 / 3.0.0     ⬜ 待做
 ```
+
+### 当前完成度
+
+100k 行，Release，800×600 视口：
+
+| 指标 | 2.x 基线 | 现在 | 倍数 |
+| --- | ---: | ---: | ---: |
+| Initial layout | 362 ms | 52 ms | 7× |
+| 20k visible queries | 11.8 ms | 3.2 ms | 3.7× |
+| 20k offset writes | 503 ms | 22 ms | 23× |
+| 1k tail item updates | 33.7 ms | 10.6 ms | 3.2× |
+| 200 snapshot appends | 44.9 s | 7.5 s | 6× |
+| 20 width reflows | 3050 ms | 80 ms | 38× |
+
+测试从 39 个涨到 60 个，六次连跑无 flake。
 
 第 2 步的对拍测试是正确性的地基：拿一个「朴素实现」（就是个 `[CGFloat]` 数组，
 每次线性求和），和 Fenwick 引擎跑同一串 10 万次随机 insert/remove/move/setHeight，
