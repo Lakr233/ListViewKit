@@ -6,25 +6,21 @@
 #if canImport(UIKit)
     import UIKit
 
+    /// Base class for a row.
+    ///
+    /// The list owns a row's frame and never reads its intrinsic size, so a
+    /// row does not need Auto Layout. Using it inside the row is fine — the
+    /// list hands over a definite `bounds` to lay out within. A row type
+    /// registered without a height closure is measured from those constraints
+    /// instead, on a hidden prototype.
     open class ListRowView: UIView {
-        public var rowKind: (any Hashable)?
-
-        public var superListView: ListView? {
-            // find up
-            var view: UIView? = self
-            while view != nil {
-                if let listView = view as? ListView {
-                    return listView
-                }
-                view = view?.superview
-            }
-            return nil
-        }
-
-        /// called when this row is going to be used for a different item
+        /// Called before this row is filled in, including the first time and
+        /// including a row already on screen. Clear transient state here:
+        /// text, images, menus, callbacks, in-flight requests. Must be
+        /// idempotent.
         open func prepareForReuse() {}
 
-        /// using the same animation as list view
+        /// Runs `block` with the same animation the list uses.
         open func withAnimation(_ block: @escaping () -> Void) {
             withListAnimation(block)
         }
@@ -39,38 +35,35 @@
             fatalError("init(coder:) has not been implemented")
         }
 
-        override open func layoutSubviews() {
-            super.layoutSubviews()
+        func requestLayout() {
+            setNeedsLayout()
         }
     }
 
 #elseif canImport(AppKit)
     import AppKit
 
+    /// Base class for a row.
+    ///
+    /// The list owns a row's frame and never reads its intrinsic size, so a
+    /// row does not need Auto Layout. Using it inside the row is fine — the
+    /// list hands over a definite `bounds` to lay out within. A row type
+    /// registered without a height closure is measured from those constraints
+    /// instead, on a hidden prototype.
     open class ListRowView: NSView {
         override open var isFlipped: Bool {
             true
         }
 
-        public var rowKind: (any Hashable)?
-
-        public var superListView: ListView? {
-            var view: NSView? = self
-            while view != nil {
-                if let listView = view as? ListView {
-                    return listView
-                }
-                view = view?.superview
-            }
-            return nil
-        }
-
-        /// called when this row is going to be used for a different item
+        /// Called before this row is filled in, including the first time and
+        /// including a row already on screen. Clear transient state here:
+        /// text, images, menus, callbacks, in-flight requests. Must be
+        /// idempotent.
         override open func prepareForReuse() {
             super.prepareForReuse()
         }
 
-        /// using the same animation as list view
+        /// Runs `block` with the same animation the list uses.
         open func withAnimation(_ block: @escaping () -> Void) {
             withListAnimation(block)
         }
@@ -86,8 +79,8 @@
             fatalError("init(coder:) has not been implemented")
         }
 
-        override open func layout() {
-            super.layout()
+        func requestLayout() {
+            needsLayout = true
         }
     }
 

@@ -8,53 +8,55 @@
 import ListViewKit
 import UIKit
 
-class ViewController: UIViewController {
-    let listView: ListView
-    let dataSource: ListViewDiffableDataSource<ViewModel>
-
-    init() {
-        fatalError()
-    }
-
-    required init?(coder _: NSCoder) {
-        let listView = ListView(frame: .zero)
-        self.listView = listView
-        dataSource = .init(listView: listView)
-        super.init(nibName: nil, bundle: nil)
-        title = "ListView Example"
-        listView.adapter = self
-    }
+final class ViewController: UIViewController {
+    private let listView = ListView<ViewModel>()
 
     override func viewDidLoad() {
         super.viewDidLoad()
 
+        title = "ListView Example"
         edgesForExtendedLayout = []
         view.backgroundColor = .systemBackground
 
-        listView.topInset = 0
-        listView.bottomInset = 0
+        listView.rows {
+            ListRow(SimpleRow.self)
+                .height { item, context in
+                    SimpleRow.height(for: Self.text(for: item, index: context.index), width: context.width)
+                }
+                .configure { [weak self] row, item, context in
+                    row.configure(with: Self.text(for: item, index: context.index))
+                    row.backgroundColor = context.index.isMultiple(of: 2)
+                        ? .clear
+                        : .systemGray.withAlphaComponent(0.025)
+                    // Menus only matter for a row the reader can touch.
+                    guard context.purpose == .display else { return }
+                    row.contextMenu = UIMenu(children: [
+                        UIAction(title: "Copy", image: UIImage(systemName: "document.on.document")) { _ in
+                            UIPasteboard.general.string = item.text
+                        },
+                        UIAction(title: "Delete", image: UIImage(systemName: "trash")) { _ in
+                            guard let self else { return }
+                            listView.apply(listView.content.filter { $0.id != item.id }, animated: true)
+                        },
+                    ])
+                }
+        }
 
-        let animationBlockView = AnimationBlockView(install: listView)
-        view.addSubview(animationBlockView)
-        animationBlockView.translatesAutoresizingMaskIntoConstraints = false
-
+        view.addSubview(listView)
+        listView.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([
-            animationBlockView.topAnchor.constraint(equalTo: view.topAnchor),
-            animationBlockView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
-            animationBlockView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            animationBlockView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            listView.topAnchor.constraint(equalTo: view.topAnchor),
+            listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
         ])
 
-        var snapshot = dataSource.snapshot()
-        for content in [
+        listView.apply([
             ViewModel(text: "若遗憾是遗憾"),
             ViewModel(text: "若故事没说完"),
             ViewModel(text: "回头看"),
             ViewModel(text: "梨花已落千山"),
-        ] {
-            snapshot.append(content)
-        }
-        dataSource.applySnapshot(snapshot, animatingDifferences: false)
+        ])
 
         navigationItem.leftBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .compose, target: self, action: #selector(compose)),
@@ -65,6 +67,10 @@ class ViewController: UIViewController {
         ]
     }
 
+    private static func text(for item: ViewModel, index: Int) -> String {
+        "\(index)\n\n\(item.text)"
+    }
+
     @objc func addItem() {
         let content = [
             "我至少听过",
@@ -73,51 +79,34 @@ class ViewController: UIViewController {
             "若遗憾是遗憾",
             "若故事没说完",
         ].randomElement()!
-        let vm = ViewModel(text: content)
-        var snapshot = dataSource.snapshot()
-        let index = (0 ..< snapshot.count).randomElement() ?? 0
-        snapshot.insert(vm, at: index)
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
-        print("[*] inserted at \(index)")
-        listView.scrollToRow(at: index, at: .none)
+        var items = listView.content
+        let index = (0 ..< max(items.count, 1)).randomElement() ?? 0
+        items.insert(ViewModel(text: content), at: index)
+        listView.apply(items, animated: true)
+        listView.scrollToRow(at: index, at: .nearest)
     }
 
     @objc func shuffle() {
-        var snapshot = dataSource.snapshot()
-        var items: [ViewModel] = []
-        while true {
-            if let item = snapshot.remove(at: 0) {
-                items.append(item)
-            } else {
-                break
-            }
-        }
-        assert(snapshot.isEmpty)
-        for item in items.shuffled() {
-            snapshot.append(item)
-        }
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        listView.apply(listView.content.shuffled(), animated: true)
     }
 
+    /// A streaming response: append once, then update that one row as tokens
+    /// arrive. `update` never diffs the rest of the list.
     @objc func compose() {
-        var snapshot = dataSource.snapshot()
-        var composeItem = ViewModel()
-        snapshot.append(composeItem)
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        var item = ViewModel()
+        listView.append(item)
 
         let text = """
-        Eiusmod officia consequat reprehenderit Lorem eu ut id exercitation veniam veniam nulla. Nisi et reprehenderit nostrud. Cillum aliqua dolore reprehenderit non cupidatat velit Lorem. Laborum dolor voluptate aliquip labore aliquip et aliqua proident quis magna cupidatat minim labore. Qui in cupidatat aliqua et dolor minim ullamco est veniam consectetur cillum ad. Nulla nisi Lorem labore ullamco in sunt non laborum enim aliquip.
+        Eiusmod officia consequat reprehenderit Lorem eu ut id exercitation veniam veniam nulla. \
+        Nisi et reprehenderit nostrud. Cillum aliqua dolore reprehenderit non cupidatat velit Lorem. \
+        Laborum dolor voluptate aliquip labore aliquip et aliqua proident quis magna cupidatat minim labore.
         """
-        DispatchQueue.global().async {
-            for char in text {
-                composeItem.text += String(char)
-                DispatchQueue.main.async {
-                    var snapshot = self.dataSource.snapshot()
-                    snapshot.updateItem(composeItem)
-                    self.dataSource.applySnapshot(snapshot, animatingDifferences: true)
-                    self.listView.scroll(to: self.listView.maximumContentOffset)
-                }
-                usleep(5000)
+        Task { @MainActor in
+            for character in text {
+                try? await Task.sleep(for: .milliseconds(5))
+                item.text.append(character)
+                listView.update(item)
+                listView.scrollToBottom(animated: false)
             }
         }
     }

@@ -5,51 +5,21 @@ import AppKit
 import Testing
 @testable import ListViewKit
 
-@MainActor
-private final class FixedHeightListAdapter: ListViewAdapter {
-    enum RowKind: Hashable {
-        case row
-    }
-
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind {
-        RowKind.row
-    }
-
-    func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView {
-        ListRowView()
-    }
-
-    func listView(_: ListView, heightFor _: ItemType, at _: Int) -> CGFloat {
-        100
-    }
-
-    func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
+private struct ScrollItem: Identifiable, Hashable {
+    let id: Int
+    var revision = 0
 }
 
+/// Row heights the test controls, and a record of who asked for them.
 @MainActor
-private final class VariableHeightListAdapter: ListViewAdapter {
-    enum RowKind: Hashable {
-        case row
-    }
-
+private final class HeightProbe {
     var heights: [Int: CGFloat] = [:]
     var measurementCounts: [Int: Int] = [:]
 
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind {
-        RowKind.row
-    }
-
-    func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView {
-        ListRowView()
-    }
-
-    func listView(_: ListView, heightFor item: ItemType, at _: Int) -> CGFloat {
-        let item = item as! ScrollItem
+    func height(of item: ScrollItem) -> CGFloat {
         measurementCounts[item.id, default: 0] += 1
         return heights[item.id, default: 100]
     }
-
-    func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
 }
 
 @MainActor
@@ -68,58 +38,32 @@ private final class LayoutCountingRow: ListRowView {
     }
 }
 
-@MainActor
-private final class LayoutCountingAdapter: ListViewAdapter {
-    enum RowKind: Hashable {
-        case row
-    }
-
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind {
-        RowKind.row
-    }
-
-    func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView {
-        LayoutCountingRow()
-    }
-
-    func listView(_: ListView, heightFor _: ItemType, at _: Int) -> CGFloat {
-        100
-    }
-
-    func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
-}
-
-private struct ScrollItem: Identifiable, Hashable {
-    let id: Int
-    var revision = 0
-}
-
 @Suite(.serialized)
 @MainActor
 struct ListViewScrollAppKitTests {
-    private func makeListView() -> (
-        listView: ListView,
-        dataSource: ListViewDiffableDataSource<ScrollItem>,
-        adapter: FixedHeightListAdapter
-    ) {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = FixedHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        listView.contentInsets = NSEdgeInsets(top: 20, left: 10, bottom: 30, right: 0)
-
-        var snapshot = dataSource.snapshot()
-        for index in 0 ..< 20 {
-            snapshot.append(ScrollItem(id: index))
+    private func makeListView(
+        probe: HeightProbe,
+        count: Int = 20,
+        size: CGSize = CGSize(width: 200, height: 200),
+        insets: NSEdgeInsets? = nil
+    ) -> ListView<ScrollItem> {
+        let listView = ListView<ScrollItem>(frame: CGRect(origin: .zero, size: size))
+        listView.rows {
+            ListRow(LayoutCountingRow.self)
+                .height { item, _ in probe.height(of: item) }
+                .configure { _, _, _ in }
         }
-        dataSource.applySnapshot(snapshot)
+        if let insets {
+            listView.contentInsets = insets
+        }
+        listView.apply((0 ..< count).map { ScrollItem(id: $0) })
         // Rows are measured lazily, so scroll geometry only settles once the
         // slice drain has caught up.
         drain(listView)
-        return (listView, dataSource, adapter)
+        return listView
     }
 
-    private func drain(_ listView: ListView) {
+    private func drain(_ listView: ListView<ScrollItem>) {
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
         for _ in 0 ..< 200 where listView.rowLayout.hasPendingRows {
@@ -129,10 +73,16 @@ struct ListViewScrollAppKitTests {
         listView.layoutSubtreeIfNeeded()
     }
 
+    private func insetListView(_ probe: HeightProbe = .init()) -> ListView<ScrollItem> {
+        makeListView(
+            probe: probe,
+            insets: NSEdgeInsets(top: 20, left: 10, bottom: 30, right: 0)
+        )
+    }
+
     @Test
     func verticalScrollerStaysAboveVisibleRows() throws {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
         let scrollerContainer = try #require(listView.subviews.first { view in
             view.subviews.contains { $0 is NSScroller }
         })
@@ -142,8 +92,7 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func rowPositionsRespectVisibleInsets() {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
         listView.contentOffset = CGPoint(x: -10, y: 700)
 
         listView.scrollToRow(at: 5, at: .top, animated: false)
@@ -164,26 +113,39 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func minimalScrollUsesTheUnobscuredVisibleArea() {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
 
         listView.contentOffset = CGPoint(x: -10, y: 440)
-        listView.scrollToRow(at: 5, at: .none, animated: false)
+        listView.scrollToRow(at: 5, at: .nearest, animated: false)
         #expect(listView.contentOffset == CGPoint(x: -10, y: 440))
 
         listView.contentOffset.y = 0
-        listView.scrollToRow(at: 5, at: .none, animated: false)
+        listView.scrollToRow(at: 5, at: .nearest, animated: false)
         #expect(listView.contentOffset.y == 430)
 
         listView.contentOffset.y = 700
-        listView.scrollToRow(at: 5, at: .none, animated: false)
+        listView.scrollToRow(at: 5, at: .nearest, animated: false)
         #expect(listView.contentOffset.y == 480)
     }
 
     @Test
+    func scrollingToARowByIdentifierMatchesScrollingByIndex() {
+        let listView = insetListView()
+        listView.scrollToRow(at: 7, at: .top, animated: false)
+        let byIndex = listView.contentOffset
+
+        listView.contentOffset.y = 0
+        listView.scrollToRow(with: 7, at: .top, animated: false)
+        #expect(listView.contentOffset == byIndex)
+
+        // An identifier that is not in the list leaves the offset alone.
+        listView.scrollToRow(with: 9_999, at: .top, animated: false)
+        #expect(listView.contentOffset == byIndex)
+    }
+
+    @Test
     func visibleIndicesExcludeRowsTouchingViewportEdges() {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
 
         listView.contentOffset.y = 500
         #expect(listView.indicesForVisibleRows == [5, 6])
@@ -195,20 +157,9 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func scrollingDoesNotRelayoutRowsWithUnchangedFrames() throws {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = LayoutCountingAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
+        let listView = makeListView(probe: .init())
 
-        var snapshot = dataSource.snapshot()
-        for index in 0 ..< 20 {
-            snapshot.append(ScrollItem(id: index))
-        }
-        dataSource.applySnapshot(snapshot)
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
-
-        let firstRow = try #require(listView.rowView(at: 0) as? LayoutCountingRow)
+        let firstRow = try #require(listView.rowView(for: 0) as? LayoutCountingRow)
         firstRow.layoutSubtreeIfNeeded()
         firstRow.layoutCount = 0
         firstRow.needsLayout = false
@@ -216,23 +167,13 @@ struct ListViewScrollAppKitTests {
         listView.contentOffset.y = 10
         listView.layoutSubtreeIfNeeded()
 
-        #expect(listView.rowView(at: 0) === firstRow)
+        #expect(listView.rowView(for: 0) === firstRow)
         #expect(firstRow.layoutCount == 0)
     }
 
     @Test
     func pooledRowsAreRemovedFromSuperviewOnlyOnce() throws {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = LayoutCountingAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-
-        var snapshot = dataSource.snapshot()
-        for index in 0 ..< 20 {
-            snapshot.append(ScrollItem(id: index))
-        }
-        dataSource.applySnapshot(snapshot)
-        drain(listView)
+        let listView = makeListView(probe: .init())
 
         listView.contentOffset.y = 50
         listView.layoutSubtreeIfNeeded()
@@ -257,18 +198,14 @@ struct ListViewScrollAppKitTests {
     /// changed is laid out at its old height.
     @Test
     func removingARowForgetsItsMeasurement() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = VariableHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        adapter.heights[5] = 70
-        dataSource.applySnapshot(using: (0 ..< 8).map { ScrollItem(id: $0) })
-        drain(listView)
+        let probe = HeightProbe()
+        probe.heights[5] = 70
+        let listView = makeListView(probe: probe, count: 8)
         #expect(listView.rectForRow(at: 5).height == 70)
 
-        dataSource.applySnapshot(using: (0 ..< 8).filter { $0 != 5 }.map { ScrollItem(id: $0) })
-        adapter.heights[5] = 130
-        dataSource.applySnapshot(using: (0 ..< 8).map { ScrollItem(id: $0) })
+        listView.apply((0 ..< 8).filter { $0 != 5 }.map { ScrollItem(id: $0) })
+        probe.heights[5] = 130
+        listView.apply((0 ..< 8).map { ScrollItem(id: $0) })
         drain(listView)
 
         #expect(listView.rectForRow(at: 5).height == 130)
@@ -276,14 +213,9 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func invalidatingHeightsSupportsSinglePassSequences() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = VariableHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 8).map { ScrollItem(id: $0) })
-        drain(listView)
+        let listView = makeListView(probe: .init(), count: 8)
 
-        var iterator = [AnyHashable(5)].makeIterator()
+        var iterator = [5].makeIterator()
         listView.rowLayout.invalidateHeights(for: AnySequence { AnyIterator { iterator.next() } })
 
         #expect(listView.rowLayout.pendingRowCount == 1)
@@ -291,83 +223,88 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func targetedHeightInvalidationRemeasuresOnlyThatRow() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = VariableHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 5).map { ScrollItem(id: $0) })
-        drain(listView)
+        let probe = HeightProbe()
+        let listView = makeListView(probe: probe, count: 5)
         listView.contentOffset.y = 120
-        let initialMeasurementCounts = adapter.measurementCounts
+        let initialCounts = probe.measurementCounts
 
-        adapter.heights[1] = 180
-        listView.invalidateLayout(forRowWithID: 1)
+        probe.heights[1] = 180
+        listView.invalidateLayout(forRowWith: 1)
         drain(listView)
 
         #expect(listView.rectForRow(at: 1).height == 180)
         #expect(listView.rectForRow(at: 2).minY == 280)
         #expect(listView.contentSize.height == 580)
         #expect(listView.contentOffset.y == 120)
-        #expect(adapter.measurementCounts[1] == initialMeasurementCounts[1, default: 0] + 1)
-        #expect(adapter.measurementCounts[0] == initialMeasurementCounts[0])
-        #expect(adapter.measurementCounts[2] == initialMeasurementCounts[2])
-        #expect(adapter.measurementCounts[3] == initialMeasurementCounts[3])
-        #expect(adapter.measurementCounts[4] == initialMeasurementCounts[4])
+        #expect(probe.measurementCounts[1] == initialCounts[1, default: 0] + 1)
+        for id in [0, 2, 3, 4] {
+            #expect(probe.measurementCounts[id] == initialCounts[id])
+        }
     }
 
     @Test
-    func snapshotUpdateUsesTargetedHeightInvalidation() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = VariableHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 5).map { ScrollItem(id: $0) })
-        drain(listView)
-        let initialMeasurementCounts = adapter.measurementCounts
+    func applyingAChangedItemRemeasuresOnlyThatRow() {
+        let probe = HeightProbe()
+        let listView = makeListView(probe: probe, count: 5)
+        let initialCounts = probe.measurementCounts
 
-        adapter.heights[3] = 160
-        var snapshot = dataSource.snapshot()
-        snapshot.updateItem(ScrollItem(id: 3, revision: 1))
-        dataSource.applySnapshot(snapshot)
+        probe.heights[3] = 160
+        var items = listView.content
+        items[3] = ScrollItem(id: 3, revision: 1)
+        listView.apply(items)
         drain(listView)
 
         #expect(listView.rectForRow(at: 3).height == 160)
         #expect(listView.contentSize.height == 560)
-        #expect(adapter.measurementCounts[3] == initialMeasurementCounts[3, default: 0] + 1)
-        #expect(adapter.measurementCounts[0] == initialMeasurementCounts[0])
-        #expect(adapter.measurementCounts[1] == initialMeasurementCounts[1])
-        #expect(adapter.measurementCounts[2] == initialMeasurementCounts[2])
-        #expect(adapter.measurementCounts[4] == initialMeasurementCounts[4])
+        #expect(probe.measurementCounts[3] == initialCounts[3, default: 0] + 1)
+        for id in [0, 1, 2, 4] {
+            #expect(probe.measurementCounts[id] == initialCounts[id])
+        }
     }
 
     @Test
-    func directItemUpdateAvoidsAWholeSnapshotDiff() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
-        let adapter = VariableHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 5).map { ScrollItem(id: $0) })
-        drain(listView)
-        let initialMeasurementCounts = adapter.measurementCounts
+    func updatingOneItemAvoidsAWholeDiff() {
+        let probe = HeightProbe()
+        let listView = makeListView(probe: probe, count: 5)
+        let initialCounts = probe.measurementCounts
 
-        adapter.heights[4] = 220
-        #expect(dataSource.updateItem(ScrollItem(id: 4, revision: 1)))
-        #expect(!dataSource.updateItem(ScrollItem(id: 4, revision: 1)))
+        probe.heights[4] = 220
+        #expect(listView.update(ScrollItem(id: 4, revision: 1)))
+        #expect(!listView.update(ScrollItem(id: 4, revision: 1)))
         drain(listView)
 
         #expect(listView.rectForRow(at: 4).height == 220)
         #expect(listView.contentSize.height == 620)
-        #expect(adapter.measurementCounts[4] == initialMeasurementCounts[4, default: 0] + 1)
-        #expect(adapter.measurementCounts[0] == initialMeasurementCounts[0])
-        #expect(adapter.measurementCounts[1] == initialMeasurementCounts[1])
-        #expect(adapter.measurementCounts[2] == initialMeasurementCounts[2])
-        #expect(adapter.measurementCounts[3] == initialMeasurementCounts[3])
+        #expect(probe.measurementCounts[4] == initialCounts[4, default: 0] + 1)
+        for id in [0, 1, 2, 3] {
+            #expect(probe.measurementCounts[id] == initialCounts[id])
+        }
+    }
+
+    /// The append fast path must leave the rows already there untouched.
+    @Test
+    func appendingDoesNotRemeasureExistingRows() {
+        let probe = HeightProbe()
+        let listView = makeListView(probe: probe, count: 5)
+        let initialCounts = probe.measurementCounts
+        let heightBefore = listView.contentSize.height
+
+        listView.append(ScrollItem(id: 99))
+
+        #expect(listView.content.count == 6)
+        for id in 0 ..< 5 {
+            #expect(probe.measurementCounts[id] == initialCounts[id])
+        }
+        #expect(listView.contentSize.height == heightBefore + listView.estimatedRowHeight)
+
+        drain(listView)
+        #expect(listView.rectForRow(at: 5).height == 100)
+        #expect(probe.measurementCounts[99] == 1)
     }
 
     @Test
     func bottomDetectionSupportsToleranceAndOverscroll() {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
         let bottom = listView.maximumContentOffset.y
 
         listView.contentOffset.y = bottom - 3
@@ -383,27 +320,23 @@ struct ListViewScrollAppKitTests {
 
     @Test
     func insertionAnimationsAreNotDisabledByShiftedIndices() throws {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
-        let adapter = FixedHeightListAdapter()
-        let dataSource = ListViewDiffableDataSource<ScrollItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 3).map { ScrollItem(id: $0) })
-        listView.layoutSubtreeIfNeeded()
+        let listView = makeListView(
+            probe: .init(),
+            count: 3,
+            size: CGSize(width: 200, height: 400)
+        )
 
-        var snapshot = dataSource.snapshot()
-        snapshot.insert(ScrollItem(id: 99), at: 0)
-        dataSource.applySnapshot(snapshot, animatingDifferences: true)
+        listView.apply([ScrollItem(id: 99)] + listView.content, animated: true)
 
-        let insertedRow = try #require(listView.rowView(at: 0))
-        let shiftedRow = try #require(listView.rowView(at: 1))
+        let insertedRow = try #require(listView.rowView(for: 99))
+        let shiftedRow = try #require(listView.rowView(for: 0))
         #expect(insertedRow.layer?.animationKeys()?.isEmpty == false)
         #expect(shiftedRow.layer?.animationKeys()?.isEmpty == false)
     }
 
     @Test
     func invalidRowDoesNotChangeTheContentOffset() {
-        let context = makeListView()
-        let listView = context.listView
+        let listView = insetListView()
         listView.contentOffset = CGPoint(x: -10, y: 321)
 
         listView.scrollToRow(at: -1, at: .top, animated: false)

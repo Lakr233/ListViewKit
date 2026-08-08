@@ -14,7 +14,6 @@ let package = Package(
         .library(name: "ListViewKit", targets: ["ListViewKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-collections", from: "1.1.0"),
         .package(url: "https://github.com/Lakr233/SpringInterpolation", from: "1.4.0"),
         .package(url: "https://github.com/Lakr233/MSDisplayLink", from: "2.0.8"),
     ],
@@ -22,8 +21,6 @@ let package = Package(
         .target(
             name: "ListViewKit",
             dependencies: [
-                .product(name: "DequeModule", package: "swift-collections"),
-                .product(name: "OrderedCollections", package: "swift-collections"),
                 "SpringInterpolation",
                 "MSDisplayLink",
             ],

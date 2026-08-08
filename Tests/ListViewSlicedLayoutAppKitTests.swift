@@ -9,32 +9,17 @@ import Testing
 /// width is 400, and bases are multiples of 3 so every scaled height stays
 /// integral and assertions cannot drift on rounding.
 @MainActor
-private final class ReflowingHeightAdapter: ListViewAdapter {
-    enum RowKind: Hashable {
-        case row
-    }
-
+private final class ReflowProbe {
     var measurementCounts: [Int: Int] = [:]
 
     func baseHeight(for id: Int) -> CGFloat {
         60 + CGFloat(id % 5) * 30
     }
 
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind {
-        RowKind.row
-    }
-
-    func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView {
-        ListRowView()
-    }
-
-    func listView(_ listView: ListView, heightFor item: ItemType, at _: Int) -> CGFloat {
-        let item = item as! ReflowItem
+    func height(of item: ReflowItem, width: CGFloat) -> CGFloat {
         measurementCounts[item.id, default: 0] += 1
-        return (baseHeight(for: item.id) * 400 / max(listView.bounds.width, 1)).rounded()
+        return (baseHeight(for: item.id) * 400 / max(width, 1)).rounded()
     }
-
-    func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
 }
 
 private struct ReflowItem: Identifiable, Hashable {
@@ -47,26 +32,20 @@ private struct ReflowItem: Identifiable, Hashable {
 struct ListViewSlicedLayoutAppKitTests {
     private static let rowCount = 500
 
-    private typealias Context = (
-        listView: ListView,
-        dataSource: ListViewDiffableDataSource<ReflowItem>,
-        adapter: ReflowingHeightAdapter
-    )
+    private typealias Context = (listView: ListView<ReflowItem>, adapter: ReflowProbe)
 
-    private func makeListView(width: CGFloat = 400) -> Context {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: width, height: 400))
-        let adapter = ReflowingHeightAdapter()
-        let dataSource = ListViewDiffableDataSource<ReflowItem>(listView: listView)
-        listView.adapter = adapter
-
-        var snapshot = dataSource.snapshot()
-        for index in 0 ..< Self.rowCount {
-            snapshot.append(ReflowItem(id: index))
+    private func makeListView(width: CGFloat = 400, count: Int = rowCount) -> Context {
+        let probe = ReflowProbe()
+        let listView = ListView<ReflowItem>(frame: CGRect(x: 0, y: 0, width: width, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { item, ctx in probe.height(of: item, width: ctx.width) }
+                .configure { _, _, _ in }
         }
-        dataSource.applySnapshot(snapshot)
+        listView.apply((0 ..< count).map { ReflowItem(id: $0) })
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
-        return (listView, dataSource, adapter)
+        return (listView, probe)
     }
 
     /// A fully measured list, for comparing a drained result against.
@@ -76,13 +55,13 @@ struct ListViewSlicedLayoutAppKitTests {
         return context
     }
 
-    private func resize(_ listView: ListView, toWidth width: CGFloat) {
+    private func resize(_ listView: ListView<ReflowItem>, toWidth width: CGFloat) {
         listView.frame = CGRect(x: 0, y: 0, width: width, height: listView.frame.height)
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
     }
 
-    private func drain(_ listView: ListView, sourceLocation: SourceLocation = #_sourceLocation) {
+    private func drain(_ listView: ListView<ReflowItem>, sourceLocation: SourceLocation = #_sourceLocation) {
         for _ in 0 ..< 400 {
             guard listView.rowLayout.hasPendingRows else { return }
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
@@ -111,19 +90,13 @@ struct ListViewSlicedLayoutAppKitTests {
     /// is still a guess, or the drain reshuffles the viewport a moment later.
     @Test
     func layoutConvergesWhenRowsAreMuchShorterThanTheEstimate() {
-        final class TinyRowAdapter: ListViewAdapter {
-            enum RowKind: Hashable { case row }
-            func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind { RowKind.row }
-            func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView { ListRowView() }
-            func listView(_: ListView, heightFor _: ItemType, at _: Int) -> CGFloat { 1 }
-            func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
+        let listView = ListView<ReflowItem>(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { _, _ in 1 }
+                .configure { _, _, _ in }
         }
-
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-        let adapter = TinyRowAdapter()
-        let dataSource = ListViewDiffableDataSource<ReflowItem>(listView: listView)
-        listView.adapter = adapter
-        dataSource.applySnapshot(using: (0 ..< 2_000).map { ReflowItem(id: $0) })
+        listView.apply((0 ..< 2_000).map { ReflowItem(id: $0) })
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
 
@@ -133,30 +106,31 @@ struct ListViewSlicedLayoutAppKitTests {
         #expect(listView.rowLayout.pendingRowCount == 2_000 - 400)
     }
 
-    /// A released data source can be replaced. Its rows and measurements must
-    /// go with it: identifiers are only unique within one data source.
+    /// Redeclaring the row types discards every view and measurement: a
+    /// height belongs to the registration that produced it.
     @Test
-    func replacingAReleasedDataSourceDiscardsTheOldLayout() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-        let adapter = ReflowingHeightAdapter()
-        listView.adapter = adapter
-        do {
-            let first = ListViewDiffableDataSource<ReflowItem>(listView: listView)
-            first.applySnapshot(using: (0 ..< 50).map { ReflowItem(id: $0) })
-            drain(listView)
-            #expect(listView.rowLayout.rowCount == 50)
-        }
-
-        let second = ListViewDiffableDataSource<ReflowItem>(listView: listView)
-        #expect(listView.rowLayout.rowCount == 0)
-        #expect(listView.visibleRowViews.isEmpty)
-        second.applySnapshot(using: (0 ..< 3).map { ReflowItem(id: $0) })
+    func redeclaringRowsDiscardsTheOldLayout() {
+        let context = makeListView(count: 50)
+        let listView = context.listView
         drain(listView)
+        #expect(listView.rowLayout.rowCount == 50)
+
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { _, _ in 25 }
+                .configure { _, _, _ in }
+        }
+        #expect(listView.visibleRowViews.isEmpty)
+
+        listView.apply((0 ..< 3).map { ReflowItem(id: $0) })
+        drain(listView)
+        listView.layoutSubtreeIfNeeded()
 
         #expect(listView.rowLayout.rowCount == 3)
         #expect(listView.indicesForVisibleRows == [0, 1, 2])
-        // Views left over from the first data source would resolve to a zero
-        // frame here and overlap the real rows.
+        #expect(listView.rowLayout.contentHeight == 75)
+        // Views left over from the previous declaration would resolve to a
+        // zero frame here and overlap the real rows.
         #expect(listView.visibleRowViews.count == 3)
         let tops = listView.visibleRowViews.map(\.frame.minY).sorted()
         #expect(tops == (0 ..< 3).map { listView.rectForRow(at: $0).minY }.sorted())
@@ -167,26 +141,24 @@ struct ListViewSlicedLayoutAppKitTests {
     /// ever never lets that loop finish — this test hangs if that regresses.
     @Test
     func aRowThatCannotBeMeasuredSettlesAtTheEstimate() {
-        let listView = ListView(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
-        let adapter = ReflowingHeightAdapter()
-        listView.adapter = adapter
-        let dataSource = ListViewDiffableDataSource<ReflowItem>(listView: listView)
-        dataSource.applySnapshot(using: (0 ..< 3).map { ReflowItem(id: $0) })
-        drain(listView)
+        let listView = ListView<ReflowItem>(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .when { $0.id < 0 }
+                .height { _, _ in 999 }
+                .configure { _, _, _ in }
+        }
+        // No registration claims these items, so nothing can measure them.
+        // The layout that `apply` runs has to settle them anyway.
+        listView.apply((0 ..< 3).map { ReflowItem(id: $0) })
 
-        // The adapter is weakly held, so it can go while rows are pending.
-        listView.adapter = nil
-        listView.rowLayout.invalidateAll()
-        #expect(listView.rowLayout.pendingRowCount == 3)
-
-        let delta = listView.rowLayout.measureRows(
-            intersecting: listView.contentVisibleRect,
-            anchorY: 0
-        )
-
-        #expect(delta == 0)
         #expect(!listView.rowLayout.hasPendingRows)
         #expect(listView.rowLayout.contentHeight == 3 * listView.estimatedRowHeight)
+        // And nothing is left for the drain to spin on.
+        #expect(listView.rowLayout.measureRows(
+            intersecting: listView.contentVisibleRect,
+            anchorY: 0
+        ) == 0)
     }
 
     @Test
@@ -306,29 +278,18 @@ struct ListViewSlicedLayoutAppKitTests {
         resize(listView, toWidth: 300)
         #expect(listView.rowLayout.hasPendingRows)
 
-        var snapshot = context.dataSource.snapshot()
-        _ = snapshot.remove(at: 10)
-        snapshot.insert(ReflowItem(id: 1_000), at: 5)
-        context.dataSource.applySnapshot(snapshot)
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
+        var items = listView.content
+        items.remove(at: 10)
+        items.insert(ReflowItem(id: 1_000), at: 5)
+        listView.apply(items)
         drain(listView)
 
-        let control = ListView(frame: CGRect(x: 0, y: 0, width: 300, height: 400))
-        let controlAdapter = ReflowingHeightAdapter()
-        let controlDataSource = ListViewDiffableDataSource<ReflowItem>(listView: control)
-        control.adapter = controlAdapter
-        var controlSnapshot = controlDataSource.snapshot()
-        for item in snapshot.elements {
-            controlSnapshot.append(item)
-        }
-        controlDataSource.applySnapshot(controlSnapshot)
-        control.needsLayout = true
-        control.layoutSubtreeIfNeeded()
+        let control = makeListView(width: 300, count: 0).listView
+        control.apply(items)
         drain(control)
 
         #expect(listView.rowLayout.contentHeight == control.rowLayout.contentHeight)
-        for index in 0 ..< snapshot.elements.count {
+        for index in 0 ..< items.count {
             #expect(listView.rowLayout.frame(for: index) == control.rowLayout.frame(for: index))
         }
     }
@@ -342,11 +303,7 @@ struct ListViewSlicedLayoutAppKitTests {
         let heightBefore = listView.rowLayout.contentHeight
         context.adapter.measurementCounts.removeAll()
 
-        var snapshot = context.dataSource.snapshot()
-        snapshot.append(ReflowItem(id: 9_000))
-        context.dataSource.applySnapshot(snapshot)
-        listView.needsLayout = true
-        listView.layoutSubtreeIfNeeded()
+        listView.append(ReflowItem(id: 9_000))
 
         #expect(context.adapter.measurementCounts.isEmpty)
         #expect(listView.rowLayout.pendingRowCount == 1)

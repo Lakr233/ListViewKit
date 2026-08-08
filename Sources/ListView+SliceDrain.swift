@@ -20,7 +20,7 @@ extension ListView {
     /// time rather than row count: cheap rows drain by the hundreds, expensive
     /// text layout stops after a few and leaves the rest of the frame to
     /// rendering. At 120Hz a frame is 8.3ms, so 5ms leaves room to draw.
-    static let sliceBudget: CFTimeInterval = 0.005
+    static var sliceBudget: CFTimeInterval { 0.005 }
 
     /// How long the width must hold still before off-screen measurement
     /// resumes. A churning width — a pane animation, a programmatic resize —
@@ -28,7 +28,7 @@ extension ListView {
     /// measured at a width about to be replaced. `inLiveResize` only covers
     /// AppKit's own window drag; this covers the rest. Visible rows are
     /// unaffected: layout measures them either way.
-    private static let widthChurnHoldOff: CFTimeInterval = 0.15
+    private static var widthChurnHoldOff: CFTimeInterval { 0.15 }
 
     /// Schedules one drain pass on the main run loop. Reentrant-safe: at most
     /// one pass is pending, and each pass reschedules itself while rows remain.

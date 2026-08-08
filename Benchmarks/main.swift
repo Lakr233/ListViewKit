@@ -9,45 +9,20 @@ private struct BenchmarkItem: Identifiable, Hashable {
 }
 
 @MainActor
-private final class BenchmarkAdapter: ListViewAdapter {
-    enum RowKind: Hashable {
-        case row
-    }
-
-    var heightOverrides: [Int: CGFloat] = [:]
-
-    func listView(_: ListView, rowKindFor _: ItemType, at _: Int) -> ListViewAdapter.RowKind {
-        RowKind.row
-    }
-
-    func listViewMakeRow(for _: ListViewAdapter.RowKind) -> ListRowView {
-        ListRowView()
-    }
-
-    func listView(_: ListView, heightFor item: ItemType, at _: Int) -> CGFloat {
-        let item = item as! BenchmarkItem
-        return heightOverrides[item.id, default: 44]
-    }
-
-    func listView(_: ListView, configureRowView _: ListRowView, for _: ItemType, at _: Int) {}
-}
-
-@MainActor
 private struct Context {
-    let listView: ListView
-    let dataSource: ListViewDiffableDataSource<BenchmarkItem>
-    let adapter: BenchmarkAdapter
+    let listView: ListView<BenchmarkItem>
+    /// Overrides let a benchmark change one row's height without touching the
+    /// registration.
+    static var heightOverrides: [Int: CGFloat] = [:]
 
     init(itemCount: Int) {
         listView = ListView(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
-        adapter = BenchmarkAdapter()
-        dataSource = ListViewDiffableDataSource<BenchmarkItem>(listView: listView)
-        listView.adapter = adapter
-
-        dataSource.applySnapshot(
-            using: (0 ..< itemCount).map { BenchmarkItem(id: $0) },
-            animatingDifferences: false
-        )
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { item, _ in Context.heightOverrides[item.id, default: 44] }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< itemCount).map { BenchmarkItem(id: $0) })
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
     }
@@ -98,23 +73,28 @@ private enum ListViewKitBenchmarks {
         // A growing streaming response: one item changes height repeatedly
         // without diffing a snapshot.
         Benchmark(key: "update", label: "1k tail item updates", iterations: 1_000) { context, count in
-            let itemID = max(0, context.dataSource.snapshot().count - 1)
+            let itemID = max(0, context.listView.content.count - 1)
             context.listView.setContentOffset(context.listView.minimumContentOffset, animated: false)
             for iteration in 0 ..< count {
-                context.adapter.heightOverrides[itemID] = 44 + CGFloat(iteration % 120)
-                context.dataSource.updateItem(BenchmarkItem(id: itemID, revision: iteration + 1))
+                Context.heightOverrides[itemID] = 44 + CGFloat(iteration % 120)
+                context.listView.update(BenchmarkItem(id: itemID, revision: iteration + 1))
                 context.listView.layoutSubtreeIfNeeded()
             }
         },
-        // Appending through a complete snapshot diff, the path a chat client
-        // takes for every new message.
-        Benchmark(key: "append", label: "200 snapshot appends", iterations: 200) { context, count in
-            var nextID = context.dataSource.snapshot().count
+        // One new message at a time, the path a chat client takes.
+        Benchmark(key: "append", label: "200 appends", iterations: 200) { context, count in
+            let listView = context.listView
             for _ in 0 ..< count {
-                var snapshot = context.dataSource.snapshot()
-                snapshot.append(BenchmarkItem(id: nextID))
-                nextID += 1
-                context.dataSource.applySnapshot(snapshot, animatingDifferences: false)
+                listView.append(BenchmarkItem(id: listView.content.count))
+            }
+        },
+        // The same growth expressed as a whole-array replacement, which has to
+        // diff everything to discover the one new row.
+        Benchmark(key: "reapply", label: "200 whole-array applies", iterations: 200) { context, count in
+            var items = context.listView.content
+            for _ in 0 ..< count {
+                items.append(BenchmarkItem(id: items.count))
+                context.listView.apply(items)
             }
         },
         // Alternating widths, each invalidating every cached height.

@@ -2,8 +2,6 @@
 //  ListView+API.swift
 //  ListViewKit
 //
-//  Created by 秋星桥 on 5/22/25.
-//
 
 import Foundation
 
@@ -17,16 +15,32 @@ import Foundation
 
 public extension ListView {
     var visibleRowViews: [ListRowView] {
-        visibleRows.values.map(\.self)
+        visibleRows.values.map(\.view)
     }
 
     var indicesForVisibleRows: [Int] {
         Array(rowLayout.indices(intersecting: contentVisibleRect))
     }
 
+    /// The row view showing `identifier`, if it is on screen.
+    func rowView(for identifier: Item.ID) -> ListRowView? {
+        visibleRows[identifier]?.view
+    }
+
+    func rectForRow(at index: Int) -> CGRect {
+        guard var frame = rowLayout.frame(for: index) else { return .zero }
+        frame.origin.y += topInset
+        return frame
+    }
+
+    func rectForRow(with identifier: Item.ID) -> CGRect {
+        guard let index = index(of: identifier) else { return .zero }
+        return rectForRow(at: index)
+    }
+
     /// Invalidates every row height.
     ///
-    /// Prefer ``invalidateLayout(forRowWithID:)`` when one self-sizing row
+    /// Prefer ``invalidateLayout(forRowWith:)`` when one self-sizing row
     /// changes: keeping the other measurements is substantially cheaper for
     /// streaming or expandable content.
     func invalidateLayout() {
@@ -36,48 +50,36 @@ public extension ListView {
 
     /// Invalidates the measured height of one row.
     ///
-    /// The identifier must match the item's `Identifiable.id`, not its row
-    /// kind. Unknown identifiers are ignored. The row keeps its current height
-    /// as an estimate until the adapter is asked again during the next layout
-    /// pass or drain.
-    func invalidateLayout(forRowWithID identifier: some Hashable) {
-        rowLayout.invalidateHeights(for: CollectionOfOne(AnyHashable(identifier)))
+    /// Use this when hosted or expandable content changes size without the
+    /// item itself changing. The row keeps its current height as an estimate
+    /// until it is measured again.
+    func invalidateLayout(forRowWith identifier: Item.ID) {
+        rowLayout.invalidateHeights(for: CollectionOfOne(identifier))
         requestLayout()
     }
+}
 
-    func rowView(at index: Int) -> ListRowView? {
-        guard let identifier = dataSource?.itemIdentifier(at: index, in: self) else {
-            return nil
+/// Internal collaboration with ``ListRowLayout``.
+extension ListView {
+    func index(of identifier: Item.ID) -> Int? {
+        indexByID[identifier]
+    }
+
+    /// Height the row at `index` should have, or nil when no registration
+    /// claims its item.
+    func measuredHeight(at index: Int) -> CGFloat? {
+        let item = content[index]
+        guard let registrationIndex = registrationIndex(for: item) else { return nil }
+        let registration = registration(registrationIndex)
+        let context = context(at: index, purpose: .measurement)
+        if let height = registration.height {
+            return height(item, context)
         }
-        return visibleRows[AnyHashable(identifier)]
+        return selfSizingHeight(for: item, registrationIndex: registrationIndex, context: context)
     }
 
-    func rectForRow(at index: Int) -> CGRect {
-        guard var location = rowLayout.frame(for: index) else { return .zero }
-        location.origin.y += topInset
-        return location
-    }
-
-    func rectForRow(with identifier: some Hashable) -> CGRect {
-        guard let index = dataSource?.itemIndex(for: identifier, in: self) else {
-            return .zero
-        }
-        return rectForRow(at: index)
-    }
-
-    func reloadData() {
-        visibleRows.forEach { $0.value.removeFromSuperview() }
-        visibleRows.removeAll()
-        removeUnusedRowsFromSuperview()
-        reusableRows.removeAll()
-        invalidateLayout()
-    }
-
-    internal func requestLayout() {
-        #if canImport(UIKit)
-            setNeedsLayout()
-        #elseif canImport(AppKit)
-            needsLayout = true
-        #endif
+    func estimatedHeight(for item: Item) -> CGFloat {
+        guard let index = registrationIndex(for: item) else { return estimatedRowHeight }
+        return registration(index).estimatedHeight ?? estimatedRowHeight
     }
 }
