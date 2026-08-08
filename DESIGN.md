@@ -323,35 +323,123 @@ final class MessageListController {
 
 ---
 
-## 4. 不支持 Auto Layout —— 明确成契约
+## 4. Auto Layout：支持，但按 row kind opt-in
 
-这个决定是对的，但 2.x 里只是「碰巧没实现」，3.0 里要写成契约。
+「给定宽度，反推高度」是可行的 —— 这就是 `UITableView.automaticDimension` 那套。
+3.0 支持它，但**不做成全局模式**，而是注册 row kind 时二选一。原因是两条路径的
+单行成本差两到三个数量级，切片调度必须知道自己面对的是哪一种。
+
+### 4.1 两种测高来源
 
 ```
-   ┌──────────────────────────────────────────────────────────────────┐
-   │  ListView 只写 row.frame。                                        │
-   │                                                                   │
-   │  它不读 intrinsicContentSize，                                     │
-   │  不调 systemLayoutSizeFitting，                                    │
-   │  不给 row 装任何约束，                                              │
-   │  不参与 constraint 求解。                                           │
-   └──────────────────────────────────────────────────────────────────┘
+   A. 闭包测高（默认，快路径）
+   ─────────────────────────────────────────────────────────────────────
+      list.register(TextRow.self, for: .text) { row, item, ctx in
+          row.configure(item.text)
+      } height: { item, ctx in
+          TextRow.height(for: item.text, width: ctx.width)
+      }
 
-   row 内部 ─┬─ 想用 Auto Layout 排自己的子视图？可以，那是你的事。
-             │   ListViewKit 给你一个确定的 bounds，你在里面自便。
-             │
-             └─ 但**行高必须由 height 闭包算出来**，不能指望
-                 systemLayoutSizeFitting 反推。因为切片模型要在
-                 row view 还不存在的时候就知道它多高。
+      · 不需要 view，纯计算
+      · 典型 1–10 µs / 行
+      · 2ms 的切片预算一帧能测 200–2000 行
 
-   ListRowView 会强制:
-       translatesAutoresizingMaskIntoConstraints = true     (UIKit)
-       #if DEBUG 断言 row 自身没有约束自身尺寸的 constraint
+   B. Auto Layout 自测高（opt-in）
+   ─────────────────────────────────────────────────────────────────────
+      list.register(CardRow.self, for: .card, estimatedHeight: 80) {
+          row, item, ctx in row.configure(item)
+      }
+      // 没有 height 闭包 ⇒ 走 fittingSize
+
+      · 每个 kind 一个常驻 prototype，配置一次量一次
+      · 典型 50–500 µs / 行
+      · 2ms 的切片预算一帧只能测 4–40 行
 ```
 
-为什么这条对性能是实打实的：profile 里 AppKit 的
-`_findAnySubviewNeedingAutoLayoutEngine` 和 `_NSAddKeyValueDependency` 是热点之一，
-每次布局 AppKit 都在遍历视图树找约束客户。行视图不碰约束，这份成本就是零。
+### 4.2 测量管线
+
+```
+   engine 说「第 i 行还没测，宽度 W」
+        │
+        ├── kind 注册了 height 闭包 ──▶ height(item, ctx)          ~µs
+        │                                                    ──▶ engine.setHeight
+        │
+        └── kind 没有 height 闭包   ──▶ ┌─────────────────────────────────┐
+                                        │  prototype(for: kind)            │
+                                        │    · 每个 kind 一个，全局复用      │
+                                        │    · 挂在 ListView 上但 isHidden  │
+                                        │      （要继承 trait / appearance） │
+                                        │    · translatesAutoresizing = false│
+                                        │      —— 它是量具，不是行           │
+                                        ├─────────────────────────────────┤
+                                        │  widthConstraint.constant = W    │
+                                        │  configure(proto, item,          │
+                                        │            ctx.purpose(.measuring))│
+                                        │  UIKit : systemLayoutSizeFitting  │
+                                        │          (.required, .fitting)    │
+                                        │  AppKit: layoutSubtreeIfNeeded()  │
+                                        │          → fittingSize.height     │
+                                        └─────────────┬───────────────────┘
+                                                      ▼  ~50–500 µs
+                                                engine.setHeight
+```
+
+`ctx.purpose` 是 `.measuring` / `.display`。量高的时候 configure 会跑在一个永远不上屏
+的 prototype 上，所以：
+
+```
+   func configure(_ row: CardRow, _ item: Item, _ ctx: ListRowContext) {
+       row.title.text = item.title           // 影响高度，必须做
+       guard ctx.purpose == .display else { return }
+       row.avatar.load(item.avatarURL)       // 不影响高度，量高时别做
+   }
+```
+
+没有这个开关，一次全量 drain 会对 10 万行各发一次头像请求。
+
+### 4.3 prototype 是量具，行是行 —— 两者规则不同
+
+```
+   ┌─ prototype（离屏，每 kind 一个）──────────────────────────────────┐
+   │   translatesAutoresizingMaskIntoConstraints = false               │
+   │   宽度由一根可变 width 约束钉住                                     │
+   │   高度由内部约束自己撑出来 → fittingSize.height                     │
+   │   永不上屏，isHidden = true，不参与命中测试                          │
+   └───────────────────────────────────────────────────────────────────┘
+
+   ┌─ 真正显示的 row ─────────────────────────────────────────────────┐
+   │   translatesAutoresizingMaskIntoConstraints = true                │
+   │   frame 由 ListView 直接写死（engine 算出来的）                     │
+   │   内部子视图想用 Auto Layout 随便，那是 row 自己的事                 │
+   │   ListView 不读它的 intrinsicContentSize，                         │
+   │   不调它的 systemLayoutSizeFitting，不给它装任何约束                 │
+   └───────────────────────────────────────────────────────────────────┘
+```
+
+这条边界是关键：**行的外框永远是 frame 驱动的**。Auto Layout 只在量具上跑一次，
+量完就把一个 `CGFloat` 交给 engine，之后布局路径跟闭包测高完全一样。所以
+profile 里那些 `_findAnySubviewNeedingAutoLayoutEngine` / `_NSAddKeyValueDependency`
+的成本只发生在 prototype 上，不会随可见行数放大。
+
+### 4.4 为什么反而是切片模型让 Auto Layout 变得可用
+
+```
+   2.x 的同步模型 + Auto Layout 自测高
+       10 万行 × 200 µs = 20 秒的同步测量 ────▶ 直接 ANR，不可用
+
+   3.0 的切片模型 + Auto Layout 自测高
+       视口内 ~14 行同步     14 × 200 µs = 2.8 ms   ← 可接受
+       其余 99 986 行切片     每帧 2ms 预算，约 10 行/帧
+                            → 约 10 000 帧 ≈ 80 秒后台补完
+       期间列表用估算高度撑着，可滚动、可交互、滚动条平滑
+```
+
+代价是诚实的：**大列表 + Auto Layout 自测高，滚动条比例会在后台补测的过程中慢慢
+收敛到准确值。** 这是所有自测高列表都有的性质（`UITableView` 同样如此），换来的是
+不卡。想要精确滚动条就给 height 闭包。
+
+文档里会明确写：**行数上万时优先用 height 闭包；Auto Layout 自测高适合几百行以内、
+或者行结构复杂到手算高度不现实的场景。**
 
 ---
 
