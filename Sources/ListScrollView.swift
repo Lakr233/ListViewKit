@@ -179,6 +179,15 @@ import SpringInterpolation
         private func applyContentOffset(_ contentOffset: CGPoint) {
             super.setContentOffset(contentOffset, animated: false)
         }
+
+        override open func layoutSubviews() {
+            super.layoutSubviews()
+            layoutContent()
+        }
+
+        /// Where a subclass lays out its content. Mirrors the AppKit hook so
+        /// `ListView` needs no platform split.
+        func layoutContent() {}
     }
 
 #elseif canImport(AppKit)
@@ -389,19 +398,54 @@ import SpringInterpolation
         private let scrollerDocumentView = ListScrollerDocumentView(frame: .zero)
         private var _isVerticalScrollerTracking = false
 
+        /// Everything ``applyScrollerGeometry(_:)`` reads. Re-tiling an
+        /// `NSScrollView` walks the view tree, re-runs Auto Layout, and
+        /// re-derives scroller metrics — an order of magnitude more work than
+        /// a scroll frame's own layout. None of it depends on the content
+        /// offset, so the pass runs only when one of these inputs moves.
+        private struct ScrollerGeometry: Equatable {
+            var boundsSize: CGSize
+            /// Normalized to zero while hidden so a growing content size cannot
+            /// re-tile a scroller nobody can see.
+            var scrollableRange: CGFloat
+            var showsScroller: Bool
+            var autohidesScrollers: Bool
+            /// Padding that keeps overlay knob endpoints clear of rounded
+            /// window corners, already netted against the overlay's own safe
+            /// area so an underlapping titlebar is not counted twice.
+            var knobEndpointInsets: (top: CGFloat, bottom: CGFloat)
+
+            static func == (lhs: Self, rhs: Self) -> Bool {
+                lhs.boundsSize == rhs.boundsSize
+                    && lhs.scrollableRange == rhs.scrollableRange
+                    && lhs.showsScroller == rhs.showsScroller
+                    && lhs.autohidesScrollers == rhs.autohidesScrollers
+                    && lhs.knobEndpointInsets == rhs.knobEndpointInsets
+            }
+        }
+
+        private var appliedScrollerGeometry: ScrollerGeometry?
+
+        /// Overlay placement already applied: where the chrome was pinned, and
+        /// where the knob sits inside its track. Both derive from the content
+        /// offset and the insets, so comparing them also answers "did the
+        /// content move, should the overlay flash".
+        private var appliedScrollerPlacement: (origin: CGPoint, knobOffsetY: CGFloat)?
+
+        /// Number of times the expensive geometry pass actually ran. Tests use
+        /// this to prove that scrolling alone does not re-tile the scroller.
+        private(set) var scrollerGeometryPassCount: Int = 0
+
         public var hasVerticalScroller: Bool = true {
-            didSet { updateVerticalScroller() }
+            didSet { needsLayout = true }
         }
 
         public var autohidesScrollers: Bool = true {
-            didSet { updateVerticalScroller() }
+            didSet { needsLayout = true }
         }
 
         open var contentInsets: NSEdgeInsets = .init() {
-            didSet {
-                needsLayout = true
-                updateVerticalScroller()
-            }
+            didSet { needsLayout = true }
         }
 
         var alwaysBounceVertical: Bool = true
@@ -428,7 +472,6 @@ import SpringInterpolation
                 _contentOffset = newValue
                 setBoundsOrigin(newValue)
                 needsLayout = true
-                updateVerticalScroller(flash: true)
             }
         }
 
@@ -440,7 +483,7 @@ import SpringInterpolation
                 let currentOffset = contentOffset
                 _contentSize = newValue
                 applyContentOffset(currentOffset)
-                updateVerticalScroller()
+                needsLayout = true
                 let clampedOffset = nearestScrollLocationInBounds(offset: currentOffset)
                 let clampedTarget = scrollingTarget.map { nearestScrollLocationInBounds(offset: $0) }
                 if clampedOffset != currentOffset {
@@ -490,8 +533,16 @@ import SpringInterpolation
 
         override open func layout() {
             super.layout()
+            layoutContent()
+            // After `layoutContent`, which may have changed `contentSize`.
+            // AppKit will not re-enter `layout()` for an invalidation raised
+            // from inside it, so a scroller synced first would stay stale.
             updateVerticalScroller()
         }
+
+        /// Where a subclass lays out its content. Runs inside the same layout
+        /// pass that refreshes the scroller.
+        func layoutContent() {}
 
         override open func didAddSubview(_ subview: NSView) {
             super.didAddSubview(subview)
@@ -516,13 +567,61 @@ import SpringInterpolation
             )
         }
 
-        private func updateVerticalScroller(flash: Bool = false) {
+        /// Brings the overlay scroller in line with the current content. Driven
+        /// from ``layout()``, so any number of offset writes within one frame
+        /// cost a single update.
+        private func updateVerticalScroller() {
             let minOffset = minimumContentOffset.y
-            let maxOffset = maximumContentOffset.y
-            let scrollableRange = maxOffset - minOffset
-            let canScroll = scrollableRange > 0 && bounds.height > 0
-            let shouldShowScroller = hasVerticalScroller && canScroll
+            let scrollableRange = maximumContentOffset.y - minOffset
+            let showsScroller = hasVerticalScroller && scrollableRange > 0 && bounds.height > 0
 
+            // NSScrollView already applies its own safe area when tiling the
+            // scroller, so only the remainder is ours to add.
+            let endpointInset = ceil(NSScroller.scrollerWidth(
+                for: .regular,
+                scrollerStyle: .overlay
+            ) / 2)
+            let safeAreaInsets = scrollerOverlay.safeAreaInsets
+            let geometry = ScrollerGeometry(
+                boundsSize: bounds.size,
+                scrollableRange: showsScroller ? scrollableRange : 0,
+                showsScroller: showsScroller,
+                autohidesScrollers: autohidesScrollers,
+                knobEndpointInsets: (
+                    top: max(0, endpointInset - safeAreaInsets.top),
+                    bottom: max(0, endpointInset - safeAreaInsets.bottom)
+                )
+            )
+            if geometry != appliedScrollerGeometry {
+                appliedScrollerGeometry = geometry
+                scrollerGeometryPassCount &+= 1
+                applyScrollerGeometry(geometry)
+            }
+
+            let placement = (origin: bounds.origin, knobOffsetY: contentOffset.y - minOffset)
+            guard showsScroller else { return }
+            if let applied = appliedScrollerPlacement, applied == placement { return }
+            appliedScrollerPlacement = placement
+            // Scrolling moves the bounds origin, and the overlay is chrome
+            // rather than content, so it has to be dragged back. Moving the
+            // origin does not re-tile the way resizing does.
+            scrollerOverlay.setFrameOrigin(placement.origin)
+            // Overscroll is owned by the rubber-band animation; leaving the knob
+            // where it is matches AppKit's own behaviour at the edges.
+            if placement.knobOffsetY >= 0, placement.knobOffsetY <= scrollableRange {
+                scrollerOverlay.isSynchronizing = true
+                scrollerOverlay.contentView.scroll(to: .init(x: 0, y: placement.knobOffsetY))
+                scrollerOverlay.reflectScrolledClipView(scrollerOverlay.contentView)
+                scrollerOverlay.isSynchronizing = false
+            }
+            // Wheel events reach the overlay directly and AppKit flashes it
+            // itself; this covers programmatic and compensated motion.
+            scrollerOverlay.flashScrollers()
+        }
+
+        /// Re-tiles the overlay. Expensive, and correct only for the inputs
+        /// captured in ``ScrollerGeometry``.
+        private func applyScrollerGeometry(_ geometry: ScrollerGeometry) {
             // List updates may run inside an implicit AppKit animation context.
             // The overlay is infrastructure, not list content: keep its geometry
             // current even while hidden and never interpolate it into position.
@@ -532,24 +631,15 @@ import SpringInterpolation
 
                 scrollerOverlay.frame = bounds
                 scrollerOverlay.scrollerStyle = .overlay
-                scrollerOverlay.autohidesScrollers = shouldShowScroller
-                    ? autohidesScrollers
+                scrollerOverlay.autohidesScrollers = geometry.showsScroller
+                    ? geometry.autohidesScrollers
                     : false
                 scrollerOverlay.hasVerticalScroller = true
 
-                // NSScrollView already applies its own safe area when tiling the
-                // scroller. Add only the remainder needed to protect overlay knob
-                // endpoints from rounded window corners; copying safeAreaInsets
-                // into scrollerInsets would count an underlapping titlebar twice.
-                let endpointInset = ceil(NSScroller.scrollerWidth(
-                    for: .regular,
-                    scrollerStyle: .overlay
-                ) / 2)
-                let overlaySafeAreaInsets = scrollerOverlay.safeAreaInsets
                 scrollerOverlay.scrollerInsets = NSEdgeInsets(
-                    top: max(0, endpointInset - overlaySafeAreaInsets.top),
+                    top: geometry.knobEndpointInsets.top,
                     left: 0,
-                    bottom: max(0, endpointInset - overlaySafeAreaInsets.bottom),
+                    bottom: geometry.knobEndpointInsets.bottom,
                     right: 0
                 )
                 scrollerOverlay.layoutSubtreeIfNeeded()
@@ -559,39 +649,23 @@ import SpringInterpolation
                     origin: .zero,
                     size: CGSize(
                         width: max(1, viewportSize.width),
-                        height: shouldShowScroller
-                            ? max(viewportSize.height, scrollableRange + viewportSize.height)
+                        height: geometry.showsScroller
+                            ? max(viewportSize.height, geometry.scrollableRange + viewportSize.height)
                             : viewportSize.height
                     )
                 )
                 scrollerOverlay.tile()
                 scrollerOverlay.layoutSubtreeIfNeeded()
 
-                guard shouldShowScroller else {
-                    scrollerOverlay.isHidden = true
-                    return
-                }
-
-                let isOverscrolled = contentOffset.y < minOffset || contentOffset.y > maxOffset
-                if !isOverscrolled {
-                    let clampedOffset = min(max(contentOffset.y, minOffset), maxOffset)
-                    scrollerOverlay.isSynchronizing = true
-                    scrollerOverlay.contentView.scroll(to: .init(
-                        x: 0,
-                        y: clampedOffset - minOffset
-                    ))
-                    scrollerOverlay.reflectScrolledClipView(scrollerOverlay.contentView)
-                    scrollerOverlay.isSynchronizing = false
-                }
-
-                scrollerOverlay.isHidden = false
+                // AppKit places the scroller against the track it knew about
+                // when tiling, so the new document size needs a second pass.
+                scrollerOverlay.isHidden = !geometry.showsScroller
+                guard geometry.showsScroller else { return }
                 scrollerOverlay.tile()
                 scrollerOverlay.layoutSubtreeIfNeeded()
             }
-
-            if flash, shouldShowScroller {
-                scrollerOverlay.flashScrollers()
-            }
+            // The knob has to be re-placed against the new track.
+            appliedScrollerPlacement = nil
         }
 
         fileprivate func verticalScrollerTrackingDidBegin() {
@@ -879,7 +953,6 @@ import SpringInterpolation
             _contentOffset.y += dy
             setBoundsOrigin(_contentOffset)
             needsLayout = true
-            updateVerticalScroller()
             _trackingRawOffsetY += dy
             _momentumAnimation?.initialOffset.y += dy
             _rubberBandAnimation?.targetOffset.y += dy

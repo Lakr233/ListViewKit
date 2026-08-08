@@ -105,20 +105,7 @@ open class ListView: ListScrollView {
         }
     }
 
-    #if canImport(UIKit)
-        override open func layoutSubviews() {
-            super.layoutSubviews()
-            performLayout()
-        }
-
-    #elseif canImport(AppKit)
-        override open func layout() {
-            super.layout()
-            performLayout()
-        }
-    #endif
-
-    private func performLayout() {
+    override func layoutContent() {
         let bounds = bounds
         layoutCache.contentBounds = bounds
         if deferredSizeCalculation, layoutCache.hasEstimatedHeights {

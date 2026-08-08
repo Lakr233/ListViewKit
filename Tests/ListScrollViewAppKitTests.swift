@@ -94,6 +94,7 @@ struct ListScrollViewAppKitTests {
         #expect(abs(scroller.knobProportion - 0.2) < 0.000_001)
 
         scrollView.contentOffset = CGPoint(x: 0, y: 400)
+        scrollView.layoutSubtreeIfNeeded()
 
         #expect(abs(scroller.doubleValue - 0.5) < 0.000_001)
         let frameInScrollView = scroller.convert(scroller.bounds, to: scrollView)
@@ -115,8 +116,147 @@ struct ListScrollViewAppKitTests {
         #expect(scrollView.contentOffset == scrollView.maximumContentOffset)
 
         scrollView.nativeScrollerDidScroll(to: 600)
+        scrollView.layoutSubtreeIfNeeded()
         #expect(scrollView.contentOffset.y == 600)
         #expect(abs(scroller.doubleValue - 0.75) < 0.000_001)
+    }
+
+    /// Re-tiling an NSScrollView costs roughly ten times a scroll frame's own
+    /// layout, and none of it depends on the content offset. Scrolling must
+    /// reach the knob without paying for it.
+    @Test
+    func scrollingMovesTheKnobWithoutRetilingTheScroller() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 1_000)
+        scrollView.layoutSubtreeIfNeeded()
+        let scroller = try #require(
+            scrollView.subviews
+                .flatMap(\.subviews)
+                .compactMap { $0 as? NSScroller }
+                .first
+        )
+        let passesAfterSetup = scrollView.scrollerGeometryPassCount
+
+        for step in 1 ... 50 {
+            scrollView.contentOffset = CGPoint(x: 0, y: CGFloat(step) * 16)
+            scrollView.layoutSubtreeIfNeeded()
+        }
+
+        #expect(scrollView.scrollerGeometryPassCount == passesAfterSetup)
+        #expect(abs(scroller.doubleValue - 800 / 800) < 0.000_001)
+
+        // Many offset writes inside one frame still cost a single update.
+        let passesBeforeCoalescing = scrollView.scrollerGeometryPassCount
+        for step in 1 ... 50 {
+            scrollView.contentOffset = CGPoint(x: 0, y: CGFloat(step))
+        }
+        scrollView.layoutSubtreeIfNeeded()
+        #expect(scrollView.scrollerGeometryPassCount == passesBeforeCoalescing)
+        #expect(abs(scroller.doubleValue - 50 / 800) < 0.000_001)
+    }
+
+    /// The memo has to notice everything the tiling pass reads, or the knob
+    /// silently keeps a stale track.
+    @Test
+    func scrollerGeometryIsRebuiltWhenItsInputsChange() {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 1_000)
+        scrollView.layoutSubtreeIfNeeded()
+
+        func passesAfter(_ mutate: () -> Void) -> Int {
+            let before = scrollView.scrollerGeometryPassCount
+            mutate()
+            scrollView.layoutSubtreeIfNeeded()
+            return scrollView.scrollerGeometryPassCount - before
+        }
+
+        #expect(passesAfter { scrollView.contentSize = CGSize(width: 200, height: 2_000) } == 1)
+        #expect(passesAfter { scrollView.frame.size.height = 300 } == 1)
+        #expect(passesAfter { scrollView.contentInsets = NSEdgeInsets(top: 20, left: 0, bottom: 0, right: 0) } == 1)
+        #expect(passesAfter { scrollView.autohidesScrollers = false } == 1)
+        #expect(passesAfter { scrollView.hasVerticalScroller = false } == 1)
+        #expect(passesAfter {} == 0)
+    }
+
+    /// A content pass that grows `contentSize` has to be reflected by the same
+    /// layout. AppKit will not re-enter `layout()` for an invalidation raised
+    /// from inside it, so a scroller synced first stays stale indefinitely.
+    @Test
+    func scrollerReflectsContentSizeSetDuringTheSameLayoutPass() throws {
+        final class ContentGrowingScrollView: ListScrollView {
+            override func layoutContent() {
+                contentSize = CGSize(width: 200, height: 1_000)
+            }
+        }
+
+        let scrollView = ContentGrowingScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.layoutSubtreeIfNeeded()
+
+        let scroller = try #require(
+            scrollView.subviews
+                .flatMap(\.subviews)
+                .compactMap { $0 as? NSScroller }
+                .first
+        )
+        #expect(try !#require(scroller.superview).isHidden)
+        #expect(abs(scroller.knobProportion - 0.2) < 0.000_001)
+    }
+
+    /// Insets can move the scroll range without resizing it, which leaves the
+    /// geometry memo untouched while the knob's position inside the track
+    /// changes.
+    @Test
+    func insetChangeThatPreservesTheScrollRangeStillMovesTheKnob() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 1_000)
+        scrollView.contentInsets = NSEdgeInsets(top: 10, left: 0, bottom: 10, right: 0)
+        scrollView.contentOffset = CGPoint(x: 0, y: 400)
+        scrollView.layoutSubtreeIfNeeded()
+        let scroller = try #require(
+            scrollView.subviews
+                .flatMap(\.subviews)
+                .compactMap { $0 as? NSScroller }
+                .first
+        )
+        let range = scrollView.maximumContentOffset.y - scrollView.minimumContentOffset.y
+        let passesBefore = scrollView.scrollerGeometryPassCount
+
+        scrollView.contentInsets = NSEdgeInsets(top: 20, left: 0, bottom: 0, right: 0)
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(scrollView.maximumContentOffset.y - scrollView.minimumContentOffset.y == range)
+        #expect(scrollView.scrollerGeometryPassCount == passesBefore)
+        #expect(abs(scroller.doubleValue - (400 + 20) / range) < 0.000_001)
+    }
+
+    /// AppKit keeps delivering native momentum after a gesture has been handed
+    /// off to the local rebound. The overlay observes those events to drive its
+    /// own elastic knob, and that must not feed back into the list's knob
+    /// placement while the list offset stands still.
+    @Test
+    func observedMomentumTailDoesNotFeedBackIntoTheKnob() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        let scroller = try #require(
+            scrollView.subviews
+                .flatMap(\.subviews)
+                .compactMap { $0 as? NSScroller }
+                .first
+        )
+
+        // Overscrolling under momentum hands off to the rebound animation and
+        // starts ignoring the native tail.
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 100, momentumPhase: .began))
+        scrollView.cancelCurrentScrolling()
+        scrollView.contentOffset = CGPoint(x: 0, y: 900)
+        scrollView.layoutSubtreeIfNeeded()
+        let knobBeforeTail = scroller.doubleValue
+
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 100, momentumPhase: .changed))
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(scrollView.contentOffset.y == 900)
+        #expect(abs(scroller.doubleValue - knobBeforeTail) < 0.000_001)
     }
 
     @Test
@@ -162,6 +302,7 @@ struct ListScrollViewAppKitTests {
         let scrollerContainer = try #require(scroller.superview)
 
         scrollView.contentSize = CGSize(width: 200, height: 100)
+        scrollView.layoutSubtreeIfNeeded()
         #expect(scrollerContainer.isHidden)
         #expect(scrollerContainer.frame == scrollView.bounds)
         let hiddenScrollerFrame = scroller.convert(scroller.bounds, to: scrollView)
@@ -171,11 +312,13 @@ struct ListScrollViewAppKitTests {
             context.duration = 0.5
             context.allowsImplicitAnimation = true
             scrollView.contentSize = CGSize(width: 200, height: 1_000)
+            scrollView.layoutSubtreeIfNeeded()
         }
         #expect(!scrollerContainer.isHidden)
         #expect(scrollerContainer.frame == scrollView.bounds)
 
         scrollView.hasVerticalScroller = false
+        scrollView.layoutSubtreeIfNeeded()
         #expect(scrollerContainer.isHidden)
     }
 
