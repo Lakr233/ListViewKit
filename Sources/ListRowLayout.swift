@@ -152,7 +152,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     ///
     /// Returns the total height change above the anchor, which is what the
     /// content offset must move by to keep the anchor visually stationary.
-    func measureRows(intersecting rect: CGRect) -> CGFloat {
+    func measureRows(intersecting rect: CGRect, anchoredAt viewport: CGRect) -> CGFloat {
         var offsetDelta: CGFloat = 0
         // A measured row resizes the viewport's contents, so the visible span
         // has to be re-derived. Rows shorter than their estimate pull more of
@@ -162,7 +162,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         while true {
             let indices = indices(intersecting: rect)
             guard engine.pendingCount(in: indices) > 0 else { return offsetDelta }
-            let anchor = anchorIndex(in: rect)
+            let anchor = anchorIndex(in: viewport)
             for index in indices where engine.isPending(at: index) {
                 offsetDelta += measure(at: index, anchorIndex: anchor)
             }
@@ -171,8 +171,12 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
     /// Measures pending rows nearest the anchor, closest first, until
     /// `deadline`. Returns the same offset delta as ``measureRows``.
-    func drainPendingRows(intersecting rect: CGRect, deadline: CFTimeInterval) -> CGFloat {
-        let anchor = anchorIndex(in: rect)
+    func drainPendingRows(
+        intersecting rect: CGRect,
+        anchoredAt viewport: CGRect,
+        deadline: CFTimeInterval
+    ) -> CGFloat {
+        let anchor = anchorIndex(in: viewport)
         var offsetDelta: CGFloat = 0
         var now = CACurrentMediaTime()
         while now < deadline, let next = engine.nextPending(near: anchor) {

@@ -392,7 +392,7 @@ struct ListViewScrollAppKitTests {
 
     /// The rows the layout mounts are the rows the public viewport reports.
     ///
-    /// Both read `contentVisibleRect` today. Step 4 of the scroll-spring work
+    /// Both read `viewportRect` today. Step 4 of the scroll-spring work
     /// widens the mounting rectangle and deliberately breaks this equality, so
     /// it is worth having stated before then rather than after.
     @Test

@@ -134,7 +134,7 @@ struct ListRowAnimatorShapeTests {
         #expect(listView.animatorTickCount == 0)
         #expect(listView.rowAnimatorLink == nil)
 
-        let viewport = listView.contentVisibleRect
+        let viewport = listView.viewportRect
         for row in listView.visibleRowViews {
             let expected = (row.placedFrame.midY - viewport.midY) / viewport.height * animator.depth
             #expect(abs(row.presentationOffset - expected) < 1e-9)

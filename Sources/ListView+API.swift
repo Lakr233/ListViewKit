@@ -19,10 +19,16 @@ public extension ListView {
     }
 
     var indicesForVisibleRows: [Int] {
-        Array(rowLayout.indices(intersecting: contentVisibleRect))
+        Array(rowLayout.indices(intersecting: viewportRect))
     }
 
-    /// The row view showing `identifier`, if it is on screen.
+    /// The row view showing `identifier`, if one is mounted.
+    ///
+    /// Mounted is not quite the same as visible. A ``rowAnimator`` that
+    /// displaces rows makes the list keep a margin of them mounted past the
+    /// viewport, so that a row displaced into view is already there; this
+    /// returns those too, while ``indicesForVisibleRows`` does not. Without an
+    /// animator the two agree, which is the default.
     func rowView(for identifier: Item.ID) -> ListRowView? {
         visibleRows[identifier]?.view
     }

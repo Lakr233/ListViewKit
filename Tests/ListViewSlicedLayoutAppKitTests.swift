@@ -155,7 +155,7 @@ struct ListViewSlicedLayoutAppKitTests {
         #expect(!listView.rowLayout.hasPendingRows)
         #expect(listView.rowLayout.contentHeight == 3 * listView.estimatedRowHeight)
         // And nothing is left for the drain to spin on.
-        #expect(listView.rowLayout.measureRows(intersecting: listView.contentVisibleRect) == 0)
+        #expect(listView.rowLayout.measureRows(intersecting: listView.mountRect, anchoredAt: listView.viewportRect) == 0)
     }
 
     @Test

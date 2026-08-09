@@ -61,6 +61,35 @@ struct ListViewAnchorAppKitTests {
         listView.rectForRow(at: index).minY - listView.contentOffset.y
     }
 
+
+    /// The anchor stays on the real viewport when an animator widens what is
+    /// mounted.
+    ///
+    /// Mounting has to reach past the viewport so a displaced row is already
+    /// there. Measuring must not follow it: anchored on the wider rectangle,
+    /// the first row whose top is inside it sits above the screen, so a row
+    /// the reader can see is treated as being above the anchor and its
+    /// remeasure is compensated for — which is precisely the compensation
+    /// that makes the visible rows move.
+    @Test
+    func measurementStaysAnchoredOnTheViewportWhileAnAnimatorWidensMounting() {
+        let context = makeContext()
+        let listView = context.listView
+        listView.rowAnimator = ListScrollSpring(maximumStretch: 120)
+        listView.setContentOffset(.init(x: 0, y: 250), animated: false)
+        listView.layoutSubtreeIfNeeded()
+
+        #expect(listView.mountRect.minY < listView.viewportRect.minY)
+        let before = screenY(listView, of: 3)
+        #expect(before == 50)
+
+        context.probe.height = 40
+        listView.invalidateLayout()
+        drain(listView)
+
+        #expect(screenY(listView, of: 3) == before)
+    }
+
     /// REPRO 1: the viewport top lands inside a row. That row is measured, is
     /// shorter than it was, and everything below it slides up.
     @Test

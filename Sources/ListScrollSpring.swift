@@ -34,12 +34,12 @@ import SpringInterpolation
 /// row should be displaced.
 ///
 /// Not `Sendable`: the `SpringInterpolation` it stores does not conform.
-struct ListScrollSpring: Equatable {
+public struct ListScrollSpring: Equatable {
     /// How far the content may stretch, in points.
     ///
     /// This bounds the displacement of every row, so it is also what the list
     /// has to overscan its mounting rectangle by.
-    var maximumStretch: CGFloat {
+    public var maximumStretch: CGFloat {
         didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24) }
     }
 
@@ -48,12 +48,12 @@ struct ListScrollSpring: Equatable {
     ///
     /// Larger values spread the falloff over more rows, which reads as a
     /// stiffer sheet; smaller values concentrate it near the anchor.
-    var resistanceFactor: CGFloat {
+    public var resistanceFactor: CGFloat {
         didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 500) }
     }
 
     /// How quickly the stretch returns to zero, in radians per second.
-    var angularFrequency: Double {
+    public var angularFrequency: Double {
         didSet {
             angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 60)
             spring.config.angularFrequency = angularFrequency
@@ -62,7 +62,7 @@ struct ListScrollSpring: Equatable {
 
     /// Below 1 the stretch overshoots zero and comes back; at 1 it settles
     /// without crossing.
-    var dampingRatio: Double {
+    public var dampingRatio: Double {
         didSet {
             dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 1)
             spring.config.dampingRatio = dampingRatio
@@ -78,7 +78,7 @@ struct ListScrollSpring: Equatable {
     private var spring: SpringInterpolation
     private var anchorY: CGFloat = 0
 
-    init(
+    public init(
         maximumStretch: CGFloat = 24,
         resistanceFactor: CGFloat = 500,
         angularFrequency: Double = 60,
@@ -105,7 +105,7 @@ struct ListScrollSpring: Equatable {
 
     /// How far the content is stretched right now, in points. Signed: positive
     /// means rows below the anchor have fallen behind.
-    var stretch: CGFloat { CGFloat(spring.value) }
+    public var stretch: CGFloat { CGFloat(spring.value) }
 
     /// Whether the spring has nothing left to do.
     ///
@@ -113,7 +113,7 @@ struct ListScrollSpring: Equatable {
     /// and ignores the velocity, so it reads as true for the one frame a fast
     /// spring spends crossing zero. Sampling that to decide whether to keep a
     /// display link alive would cut the animation off mid-flight.
-    var isAtRest: Bool {
+    public var isAtRest: Bool {
         abs(spring.value) <= Double(Self.restingStretch)
             && abs(spring.context.currentVel) <= Self.restingVelocity
     }
@@ -129,7 +129,7 @@ struct ListScrollSpring: Equatable {
     ///   - deltaTime: Already clamped by the caller. A long frame integrated
     ///     literally would overshoot.
     ///   - anchorY: Where the stretch is zero, in content coordinates.
-    mutating func advance(scrollDelta: CGFloat, deltaTime: TimeInterval, anchorY: CGFloat) {
+    public mutating func advance(scrollDelta: CGFloat, deltaTime: TimeInterval, anchorY: CGFloat) {
         self.anchorY = anchorY
         guard maximumStretch > 0 else {
             spring.setCurrent(0, 0)
@@ -162,11 +162,11 @@ struct ListScrollSpring: Equatable {
     /// Compensation shifts the offset so rows above it can resize without
     /// visible motion. The rows do not move, but the space they are addressed
     /// in does, and the anchor is a coordinate in it.
-    mutating func rebase(byContentOffset delta: CGFloat) {
+    public mutating func rebase(byContentOffset delta: CGFloat) {
         anchorY += delta
     }
 
-    mutating func reset() {
+    public mutating func reset() {
         spring.setCurrent(0, 0)
         spring.setTarget(0)
         anchorY = 0
@@ -181,7 +181,7 @@ struct ListScrollSpring: Equatable {
     /// `1 + |stretch| / resistanceFactor` on the far side — so rows that were
     /// laid out edge to edge stay in order and never overlap, whatever their
     /// heights are.
-    func displacement(forRowCenteredAt center: CGFloat) -> CGFloat {
+    public func displacement(forRowCenteredAt center: CGFloat) -> CGFloat {
         let stretch = stretch
         guard stretch != 0 else { return 0 }
         let offsetFromAnchor = center - anchorY
@@ -190,6 +190,17 @@ struct ListScrollSpring: Equatable {
         guard offsetFromAnchor.sign == stretch.sign else { return 0 }
         let weight = min(1, abs(offsetFromAnchor) / resistanceFactor)
         return stretch * weight
+    }
+
+    // MARK: - Presets
+
+    /// The iMessage feel: rows spread noticeably, and settle without bouncing.
+    public static var messages: Self { .init() }
+
+    /// The same idea at a quarter of the volume, for lists where the effect
+    /// should be felt rather than seen.
+    public static var subtle: Self {
+        .init(maximumStretch: 12, resistanceFactor: 800, angularFrequency: 120)
     }
 
     // MARK: - Validation
@@ -214,10 +225,10 @@ struct ListScrollSpring: Equatable {
 /// whole type, and the model is meant to be usable — and testable — without
 /// one.
 extension ListScrollSpring: ListRowAnimator {
-    var maximumDisplacement: CGFloat { maximumStretch }
-    var wantsNextFrame: Bool { !isAtRest }
+    public var maximumDisplacement: CGFloat { maximumStretch }
+    public var wantsNextFrame: Bool { !isAtRest }
 
-    mutating func willUpdate(_ context: ListAnimatorContext) {
+    public mutating func willUpdate(_ context: ListAnimatorContext) {
         advance(
             scrollDelta: context.scrollDelta,
             deltaTime: context.deltaTime,
@@ -226,7 +237,7 @@ extension ListScrollSpring: ListRowAnimator {
     }
 
     @MainActor
-    func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
+    public func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
         row.setPresentationOffset(displacement(forRowCenteredAt: frame.midY))
     }
 

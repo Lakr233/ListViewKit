@@ -54,22 +54,66 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Rows placed this pass, still holding the previous item's arrangement.
     private var rowsPendingSettle: [ListRowView] = []
 
-    /// Displaces rows on top of the layout while the list scrolls. Nil is the
-    /// default and costs nothing: no link, no per-row work, no ledger reads.
+    /// Displaces rows on top of the layout while the list scrolls.
+    ///
+    /// ```swift
+    /// list.rowAnimator = ListScrollSpring.messages
+    /// ```
+    ///
+    /// Nil is the default and costs nothing: no display link, no per-row work,
+    /// no overscan. Replacing or clearing one resets the previous animator and
+    /// returns every row to where it was placed, so no displacement survives a
+    /// change of mind.
+    ///
+    /// Ignored while the system asks for reduced motion.
     ///
     /// An existential on a per-frame path is a deliberate exception to what
     /// `DESIGN.md` says about `any`. That objection is about the per-row paths
     /// that run a hundred thousand times; this runs once per mounted row per
     /// frame, which is a couple of thousand calls a second at 120Hz.
-    var rowAnimator: (any ListRowAnimator)?
+    public var rowAnimator: (any ListRowAnimator)? {
+        didSet {
+            // The list mutates the animator in place every frame — `willUpdate`
+            // and `rebase` are mutating requirements — and each of those is a
+            // write to this property. Only a write from outside is a change of
+            // animator.
+            guard !isDrivingRowAnimator else { return }
+            rowAnimatorDidChange(from: oldValue)
+        }
+    }
 
     /// Runs the animator a frame at a time while it says it has more to do.
     var rowAnimatorLink: RowAnimatorDisplayLink?
-    /// Guards the list against an animator that lays out from inside a tick.
-    var isRunningRowAnimator = false
+
+    /// Whether the list is currently inside the animator.
+    ///
+    /// This exists for `rowAnimator`'s observer, which cannot otherwise tell a
+    /// caller installing a new animator from the list mutating the one it has.
+    /// An earlier version also used it to defer a layout requested from inside
+    /// `update`; that turned out to be defending against something both
+    /// platforms already prevent, and it is gone.
+    var isDrivingRowAnimator = false
+
+    /// How far past the viewport rows are kept mounted.
+    ///
+    /// Cached rather than read where it is used. `maximumDisplacement` is a
+    /// live getter on someone else's type, and mounting and recycling reading
+    /// two different answers within one pass is exactly the disagreement that
+    /// remounts a row every frame.
+    var mountOverscan: CGFloat = 0
     /// How many frames the animator has been advanced for, so a test can show
     /// an idle list never ticks and a scrolling one ticks once per frame.
     var animatorTickCount: Int = 0
+
+    /// Layout passes currently on the stack, and the deepest that has ever
+    /// been.
+    ///
+    /// Nothing here enforces the depth; AppKit and UIKit both decline to run a
+    /// layout inside a layout. It is measured so that the invariant an
+    /// animator relies on — that the mounted set is not rearranged underneath
+    /// `update` — is asserted rather than assumed to be inherited.
+    private var layoutContentDepth = 0
+    var deepestLayoutContentDepth = 0
 
     var isSliceDrainScheduled = false
     /// When the content width last turned measured heights back into
@@ -269,11 +313,30 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
     /// The visible rectangle in the space row frames are measured in, which
     /// sits `topInset` above the scroll coordinate space.
-    var contentVisibleRect: CGRect {
+    ///
+    /// What the reader can actually see. Compensation is anchored here and
+    /// ``indicesForVisibleRows`` reports it; neither means anything measured
+    /// against a rectangle that was widened to hide the seams of an effect.
+    var viewportRect: CGRect {
         .init(
             origin: .init(x: contentOffset.x, y: contentOffset.y - topInset),
             size: bounds.size
         )
+    }
+
+    /// The rectangle rows are kept mounted over.
+    ///
+    /// Wider than the viewport by whatever the animator may displace a row by,
+    /// in both directions, so that a row displaced into view was mounted
+    /// before it got there. Equal to ``viewportRect`` when no animator is
+    /// installed, which is the default.
+    ///
+    /// Mounting, recycling, and measurement coverage all read this one. They
+    /// have to read the same rectangle: a row mounted by one and recycled by
+    /// the other is remounted on the very next pass, for as long as the
+    /// disagreement lasts.
+    var mountRect: CGRect {
+        mountOverscan == 0 ? viewportRect : viewportRect.insetBy(dx: 0, dy: -mountOverscan)
     }
 
     override public var frame: CGRect {
@@ -286,6 +349,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     }
 
     override func layoutContent() {
+        layoutContentDepth += 1
+        deepestLayoutContentDepth = max(deepestLayoutContentDepth, layoutContentDepth)
+        defer { layoutContentDepth -= 1 }
+        refreshMountOverscan()
         measureViewport()
         contentSize = supposedContentSize
 
@@ -352,7 +419,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// coordinate space that has just moved underneath it.
     override func compensateScrollOffset(by dy: CGFloat) {
         super.compensateScrollOffset(by: dy)
-        guard dy != 0 else { return }
+        guard dy != 0, rowAnimator != nil else { return }
+        isDrivingRowAnimator = true
+        defer { isDrivingRowAnimator = false }
         rowAnimator?.rebase(byContentOffset: dy)
     }
 
@@ -360,7 +429,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // The width has to be current first: adopting a new one turns every
         // measurement back into an estimate.
         rowLayout.prepareForLayout()
-        compensateScrollOffset(by: rowLayout.measureRows(intersecting: contentVisibleRect))
+        compensateScrollOffset(
+            by: rowLayout.measureRows(intersecting: mountRect, anchoredAt: viewportRect)
+        )
         scheduleSliceDrain()
     }
 
@@ -447,7 +518,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     }
 
     func prepareVisibleRows() {
-        for index in rowLayout.indices(intersecting: contentVisibleRect) {
+        for index in rowLayout.indices(intersecting: mountRect) {
             ensureRowView(at: index)
         }
     }
@@ -524,7 +595,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// cancelled. An agreement that holds by cancellation is one that breaks
     /// the first time either side is widened.
     private func recycleRowsOutsideViewport() {
-        let visibleRect = contentVisibleRect
+        let visibleRect = mountRect
         let stale = visibleRows.compactMap { identifier, _ -> Item.ID? in
             guard let index = indexByID[identifier],
                   let frame = rowLayout.frame(for: index)

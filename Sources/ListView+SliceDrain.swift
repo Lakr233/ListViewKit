@@ -77,7 +77,8 @@ extension ListView {
         }
 
         let offsetDelta = rowLayout.drainPendingRows(
-            intersecting: contentVisibleRect,
+            intersecting: mountRect,
+            anchoredAt: viewportRect,
             deadline: CACurrentMediaTime() + Self.sliceBudget
         )
         compensateScrollOffset(by: offsetDelta)
