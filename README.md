@@ -89,6 +89,43 @@ leave every other row untouched.
 Items need unique, stable identifiers. Changing an item's hashable value is
 what marks its row for refilling and re-measuring.
 
+### Animations
+
+The list animates what you asked it to animate, and nothing else.
+`apply(_:animated: true)` fades insertions in, fades removals out, and slides
+the rows in between. A second reorder arriving while the first is still running
+adds to it instead of replacing it, so the rows carry their speed through the
+interruption rather than stopping dead and setting off again.
+
+Everything else is layout, and layout does not animate. A row entering the
+viewport is *placed*, not moved: one coming back from the reuse pool is still
+sitting wherever its last item left it, and that is not a position worth
+travelling from. The scroll offset behaves the same way — it animates only
+while the list is driving it frame by frame, never as a side effect of the
+content being re-measured.
+
+This holds even when a list update runs inside an animation of your own, which
+is what keyboard avoidance does:
+
+```swift
+UIView.animate(withDuration: 0.25) {
+    self.list.frame = frameAboveTheKeyboard
+    self.list.layoutIfNeeded()
+}
+```
+
+The list's frame follows your curve, because you set it. The rows that scroll
+into view during that same pass do not: they appear where they belong instead
+of sliding in from the corner or from whichever item used that view last.
+Calling `apply(_:animated: true)` from inside such a block still animates, on
+the list's own curve.
+
+To animate something inside a row with the same timing the list uses:
+
+```swift
+row.withAnimation { row.disclosure.isHidden = false }
+```
+
 ### Rows
 
 Subclass `ListRowView` and clear transient state in `prepareForReuse`:

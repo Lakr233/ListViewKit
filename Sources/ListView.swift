@@ -51,6 +51,8 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
     private var prototypes: [Int: Prototype] = [:]
     private var rowsPendingRemoval: [ListRowView] = []
+    /// Rows placed this pass, still holding the previous item's arrangement.
+    private var rowsPendingSettle: [ListRowView] = []
 
     var isSliceDrainScheduled = false
     /// When the content width last turned measured heights back into
@@ -161,7 +163,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             return
         }
         for identifier in difference.added {
-            setAlpha(0, onRowWith: identifier)
+            setAlpha(0, onRowWith: identifier, animated: false)
         }
         // The rows are about to travel to their new frames. If the shorter
         // content pulls the offset off an edge, the viewport has to travel
@@ -169,9 +171,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         animatesContentSizeCorrection = true
         defer { animatesContentSizeCorrection = false }
         withListAnimation {
-            self.updateVisibleRowFrames()
+            self.updateVisibleRowFrames(animated: true)
             for identifier in difference.added {
-                self.setAlpha(1, onRowWith: identifier)
+                self.setAlpha(1, onRowWith: identifier, animated: true)
             }
         } completion: { _ in
             MainActor.assumeIsolated {
@@ -232,6 +234,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         }
         visibleRows.removeAll()
         rowsPendingRemoval.removeAll()
+        rowsPendingSettle.removeAll()
         for index in reusePools.indices {
             reusePools[index].removeAll()
         }
@@ -273,7 +276,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             recycleRowsOutsideViewport()
         }
         prepareVisibleRows()
-        updateVisibleRowFrames()
+        updateVisibleRowFrames(animated: false)
 
         #if DEBUG
             var previousMaxY: CGFloat = 0
@@ -284,6 +287,29 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         #endif
 
         removeUnusedRowsFromSuperview()
+        settleNewlyPlacedRows()
+    }
+
+    /// Lays out the rows placed during this pass, with animation suppressed.
+    ///
+    /// A row out of the pool still has its contents arranged for the item it
+    /// used to show, so its first layout moves them the width of the row. That
+    /// rearrangement has no history worth animating, and left to the framework
+    /// it would run once this pass returns — inside whatever block the update
+    /// was called from.
+    ///
+    /// The end of the pass is the one safe place to force it: the list has
+    /// already cleared its own layout flag, so asking a row to lay out cannot
+    /// climb back into `layoutContent`.
+    private func settleNewlyPlacedRows() {
+        guard !rowsPendingSettle.isEmpty else { return }
+        let pending = rowsPendingSettle
+        rowsPendingSettle.removeAll(keepingCapacity: true)
+        withoutListAnimation {
+            for view in pending where view.superview === self {
+                view.layoutNow()
+            }
+        }
     }
 
     /// Measures whatever the viewport needs and leaves the rest to the drain.
@@ -299,20 +325,26 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         scheduleSliceDrain()
     }
 
-    func updateVisibleRowFrames() {
+    /// Moves the visible rows onto their current frames.
+    ///
+    /// `animated` says whether the caller has the list's own animation open
+    /// around this. A layout pass never does, however it was reached: it may
+    /// well be running inside a caller's animation, but that animation is not
+    /// the list's to join.
+    func updateVisibleRowFrames(animated: Bool) {
         rowLayout.prepareForLayout()
         contentSize = supposedContentSize
         for (identifier, entry) in visibleRows {
             guard let index = indexByID[identifier] else { continue }
-            updateFrame(of: entry.view, to: rectForRow(at: index))
+            updateFrame(of: entry.view, to: rectForRow(at: index), animated: animated)
         }
         removeUnusedRowsFromSuperview()
     }
 
-    private func updateFrame(of rowView: ListRowView, to targetFrame: CGRect) {
+    private func updateFrame(of rowView: ListRowView, to targetFrame: CGRect, animated: Bool) {
         guard rowView.frame != targetFrame else { return }
         let sizeChanged = rowView.frame.size != targetFrame.size
-        setRowFrame(targetFrame, on: rowView)
+        setRowFrame(targetFrame, on: rowView, animated: animated)
         guard sizeChanged else { return }
         rowView.requestLayout()
     }
@@ -354,7 +386,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     func prototype(for registrationIndex: Int) -> Prototype {
         if let existing = prototypes[registrationIndex] { return existing }
         let view = registrations[registrationIndex].makeRow()
-        view.isHidden = true
+        // Never displayed, so never worth fading in — and a measurement can
+        // happen inside a caller's animation.
+        withoutListAnimation { view.isHidden = true }
         view.translatesAutoresizingMaskIntoConstraints = false
         addSubview(view)
         let width = view.widthAnchor.constraint(equalToConstant: bounds.width)
@@ -384,19 +418,34 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
         // Reuse the most recently recycled row of this kind: it is the one
         // still warm in cache, and a pool has no ordering to preserve.
-        let view = reusePools[registrationIndex].popLast()
-            ?? registrations[registrationIndex].makeRow()
+        let view: ListRowView
+        if let recycled = reusePools[registrationIndex].popLast() {
+            // Whatever motion is left on it was aimed at the item it used to
+            // show. Cancelling here rather than at recycle time keeps a row
+            // that is only passing through the pool within one pass — still on
+            // screen, still sliding — from losing an animation the list owns.
+            cancelRowAnimations(on: recycled)
+            view = recycled
+        } else {
+            view = registrations[registrationIndex].makeRow()
+        }
+        // Placed before it is filled in or parented. A pooled row is still
+        // sitting at someone else's frame, so configuring it there would lay
+        // its contents out against a size about to change, and parenting it
+        // there would show it in the wrong place for a frame.
+        placeView(rectForRow(at: index), on: view)
+        rowsPendingSettle.append(view)
         view.prepareForReuse()
         registrations[registrationIndex].configure(
             view,
             item,
             context(at: index, purpose: .display)
         )
+        view.requestLayout()
         visibleRows[item.id] = (view, registrationIndex)
         if view.superview !== self {
             addSubview(view)
         }
-        view.frame = rectForRow(at: index)
     }
 
     /// Refills a row that is already on screen.
@@ -453,12 +502,20 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         }
     }
 
-    private func setAlpha(_ alpha: CGFloat, onRowWith identifier: Item.ID) {
+    /// Sets a row's opacity. Hiding it to start the fade is setup rather than
+    /// animation: left to an ambient context it would fade out over the
+    /// caller's duration while the list fades it back in.
+    private func setAlpha(_ alpha: CGFloat, onRowWith identifier: Item.ID, animated: Bool) {
         guard let view = visibleRows[identifier]?.view else { return }
         #if canImport(UIKit)
-            view.alpha = alpha
+            let apply = { view.alpha = alpha }
         #elseif canImport(AppKit)
-            view.alphaValue = alpha
+            let apply = { view.alphaValue = alpha }
         #endif
+        guard animated else {
+            withoutListAnimation(apply)
+            return
+        }
+        apply()
     }
 }

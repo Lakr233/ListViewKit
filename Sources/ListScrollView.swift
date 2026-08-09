@@ -46,7 +46,10 @@ import SpringInterpolation
             set {
                 if super.contentSize != newValue {
                     let currentOffset = contentOffset
-                    super.contentSize = newValue
+                    // Shrinking the content makes UIScrollView pull the offset
+                    // back in by itself. That is a clamp, not a scroll, and
+                    // inside a caller's block it would animate as one.
+                    withoutListAnimation { super.contentSize = newValue }
                     applyContentOffset(currentOffset)
                 }
                 reconcileOffsetWithContentSize()
@@ -170,7 +173,9 @@ import SpringInterpolation
         /// visually stationary.
         func compensateScrollOffset(by dy: CGFloat) {
             guard dy != 0 else { return }
-            super.contentOffset.y += dy
+            // The whole point of this shift is that the reader cannot see it.
+            // Animating it is exactly how it becomes visible.
+            withoutListAnimation { super.contentOffset.y += dy }
             if var target = scrollingTarget {
                 target.y += dy
                 scrollingTarget = target
@@ -210,8 +215,17 @@ import SpringInterpolation
             }
         }
 
+        /// The funnel for every offset this class owns: display-link ticks, the
+        /// clamp after a content-size change, and the unanimated branch of
+        /// `setContentOffset`. None of those is a scroll anyone asked for, so
+        /// none may ride an animation the caller happens to have open. The
+        /// scrolls this class does animate run off the display link, which the
+        /// suppression never touches; the public setter is left alone, since
+        /// animating that one is a fair thing for a host to ask for.
         private func applyContentOffset(_ contentOffset: CGPoint) {
-            super.setContentOffset(contentOffset, animated: false)
+            withoutListAnimation {
+                super.setContentOffset(contentOffset, animated: false)
+            }
         }
 
         override open func layoutSubviews() {
@@ -1007,7 +1021,9 @@ import SpringInterpolation
         func compensateScrollOffset(by dy: CGFloat) {
             guard dy != 0 else { return }
             _contentOffset.y += dy
-            setBoundsOrigin(_contentOffset)
+            // The whole point of this shift is that the reader cannot see it.
+            // Animating it is exactly how it becomes visible.
+            withoutListAnimation { setBoundsOrigin(_contentOffset) }
             needsLayout = true
             _trackingRawOffsetY += dy
             _momentumAnimation?.initialOffset.y += dy
@@ -1117,8 +1133,15 @@ import SpringInterpolation
             }
         }
 
+        /// The funnel for every offset this class owns: display-link ticks, the
+        /// clamp after a content-size change, and the unanimated branch of
+        /// `setContentOffset`. None of those is a scroll anyone asked for, so
+        /// none may ride an animation the caller happens to have open. The
+        /// scrolls this class does animate run off the display link, which the
+        /// suppression never touches; the open setter is left alone, since
+        /// animating that one is a fair thing for a host to ask for.
         private func applyContentOffset(_ contentOffset: CGPoint) {
-            self.contentOffset = contentOffset
+            withoutListAnimation { self.contentOffset = contentOffset }
         }
     }
 

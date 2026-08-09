@@ -20,7 +20,7 @@ extension ListView {
     func animateDisposal(of view: ListRowView) {
         let frameInList = view.convert(view.bounds, to: self)
         guard let snapshot = disposalSnapshot(of: view) else { return }
-        snapshot.frame = frameInList
+        placeView(frameInList, on: snapshot)
         addSubview(snapshot)
         withListAnimation {
             #if canImport(UIKit)

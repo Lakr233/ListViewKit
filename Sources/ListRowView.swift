@@ -38,6 +38,10 @@
         func requestLayout() {
             setNeedsLayout()
         }
+
+        func layoutNow() {
+            layoutIfNeeded()
+        }
     }
 
 #elseif canImport(AppKit)
@@ -81,6 +85,10 @@
 
         func requestLayout() {
             needsLayout = true
+        }
+
+        func layoutNow() {
+            layoutSubtreeIfNeeded()
         }
     }
 
