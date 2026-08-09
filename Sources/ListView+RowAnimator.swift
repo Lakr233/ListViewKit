@@ -158,7 +158,15 @@ extension ListView {
 
     /// Returns a row to its placement, for when it stops being displaced by
     /// anything: recycled, or handed to an animator that no longer exists.
+    ///
+    /// The early return is not a micro-optimisation. Recycling calls this for
+    /// every row it reclaims, and suppression on AppKit means opening an
+    /// `NSAnimationContext` group — so without the check, a list with no
+    /// animator at all paid for one per recycled row, which measured as a 5%
+    /// regression on the scrolling benchmark. `setRowPresentationOffset`
+    /// returns early too, but by then the context has been paid for.
     func clearRowDisplacement(on row: ListRowView) {
+        guard row.presentationOffset != 0 else { return }
         withoutListAnimation { setRowPresentationOffset(0, on: row) }
     }
 

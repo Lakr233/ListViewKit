@@ -280,6 +280,104 @@ struct ListRowAnimatorPublicAPITests {
         #expect(listView.content.count > 200)
     }
 
+    // MARK: - Cost
+
+    /// A list with no animator does none of the work an animator implies.
+    ///
+    /// The benchmark says the scrolling path is unchanged when the feature is
+    /// off; this says why, in terms that fail loudly rather than drift.
+    @Test
+    func aListWithNoAnimatorDoesNoAnimatorWork() {
+        var configureCounts = 0
+        let listView = ListView<APIItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { _, _ in Self.rowHeight }
+                .configure { _, _, _ in configureCounts += 1 }
+        }
+        listView.apply((0 ..< 400).map { APIItem(id: $0) })
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+        for _ in 0 ..< 200 where listView.rowLayout.hasPendingRows {
+            RunLoop.main.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        listView.animatorTickCount = 0
+        configureCounts = 0
+        for step in 0 ..< 60 {
+            listView.contentOffset.y = CGFloat(step) * 120
+            listView.layoutSubtreeIfNeeded()
+        }
+
+        #expect(listView.animatorTickCount == 0)
+        #expect(listView.rowAnimatorLink == nil)
+        #expect(listView.mountOverscan == 0)
+        #expect(listView.mountRect == listView.viewportRect)
+        // Rows were mounted as the viewport moved, so the pass was doing real
+        // work — this is not a test of a list that never scrolled.
+        #expect(configureCounts > 0)
+        for row in listView.visibleRowViews {
+            #expect(row.presentationOffset == 0)
+            #expect(row.frame == row.placedFrame)
+        }
+    }
+
+    /// A frame advances the animator once, however many layouts it takes.
+    @Test
+    func oneFramePerTickAndNoTicksWithoutFrames() {
+        let listView = makeListView()
+        let window = NSWindow(
+            contentRect: listView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = listView
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = ListScrollSpring.messages
+        listView.animatorTickCount = 0
+
+        for _ in 0 ..< 10 {
+            listView.contentOffset.y += 20
+            // Several layouts inside one frame, which is what a content-size
+            // write or a nested `layoutNow` produces.
+            listView.layoutSubtreeIfNeeded()
+            listView.needsLayout = true
+            listView.layoutSubtreeIfNeeded()
+            listView.tickRowAnimator(duration: 1.0 / 120.0)
+        }
+        #expect(listView.animatorTickCount == 10)
+
+        // Settled, and then left alone: no further frames are taken.
+        for _ in 0 ..< 400 {
+            listView.tickRowAnimator(duration: 1.0 / 120.0)
+        }
+        let settled = listView.animatorTickCount
+        for _ in 0 ..< 10 {
+            listView.needsLayout = true
+            listView.layoutSubtreeIfNeeded()
+        }
+        #expect(listView.animatorTickCount == settled)
+        #expect(listView.rowAnimatorLink == nil)
+    }
+
+    /// Recycling a row that was never displaced costs nothing.
+    ///
+    /// Clearing a displacement means suppressing animation, and on AppKit that
+    /// is an `NSAnimationContext` group. Paying for one per recycled row was a
+    /// measurable regression for lists that had no animator at all.
+    @Test
+    func clearingAnUndisplacedRowDoesNotOpenAnAnimationContext() {
+        let listView = makeListView()
+        let row = try! #require(listView.visibleRowViews.first)
+        #expect(row.presentationOffset == 0)
+
+        let framesBefore = row.frame
+        listView.clearRowDisplacement(on: row)
+        #expect(row.frame == framesBefore)
+    }
+
     // MARK: - Presets
 
     @Test

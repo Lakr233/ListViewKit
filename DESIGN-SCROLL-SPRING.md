@@ -940,39 +940,64 @@ DEBUG 那条断言改查 `placedFrame`（§4.1），所以它继续在布局真�
                                               · 非法参数（0/负/NaN）不破坏以上任何一条
                                               · dt 上钳到 1/30 后仍收敛
 
-  2  feat: display link + 位移落地             写入点记账、link 生命周期与弱 proxy、
-     placedFrame 真值通道                      UIKit transform / AppKit frame 分流、
-     applyRowAnimator 统一落地点               CATransaction 批写
-                                              测试（仿 ListViewScrollAppKitTests）：
-                                              · 静止后位移归零、link 撤掉、账本为空
-                                              · 补偿期间 S 不动，anchorY 跟着搬家
-                                              · 一帧内多次 layout 只积分一次
-                                              · placedFrame 全程等于 rectForRow
-                                              · 移出 window 后 link 撤掉
-                                              观测：一趟布局里权重的最大变化量（§7.3）
+  2  feat: display link + 位移落地  ✅        写入点分类改成**按排除法**：UIKit 的拖拽/
+     placedFrame 真值通道                      惯性根本不经过本包，能标注的只有我们
+     applyRowAnimator 统一落地点               自己做的那几次平移，其余一律计入
+                                              UIKit transform / AppKit frame 分流
+                                              14 条测试，全部经故障注入验证。
+                                              其中 4 条最初注入错误也不红，重写了：
+                                              两条是空过、一条依赖 apply 的内部行为、
+                                              一条断言的性质两种实现都成立
+                                              —— 最后那条退掉了一处改动（见下）
 
-  3  refactor: 抽出 ListRowAnimator            协议 / ListAnimatorContext 定型
-     弹簧成为它的第一份实现                     Example 里同时写第二份（视差或层叠），
-                                              用它来验协议形状 —— 特别是验
-                                              rebase / reset / maximumDisplacement
-                                              这三个是不是真的够用
+  3  refactor: 抽出 ListRowAnimator  ✅        协议 / ListAnimatorContext 定型
+     弹簧成为它的第一份实现                     第二份实现写在**测试里**而不是 Example：
+                                              这样它会被真的跑到。视差 animator 与弹簧
+                                              处处相反（无时间状态、从不要帧、两侧都位移），
+                                              它能跑通才说明协议描述的是 animator 而不是
+                                              这个弹簧
+                                              rebase 被它逼成了 compensateScrollOffset
+                                              的 override —— 原先分散在两个调用点
 
-  4  feat: ListView.rowAnimator 公开           viewportRect / mountRect 拆分、
-                                              Reduce Motion、复位契约、重入防护、
-                                              rowView(for:) 文档注释修正（§7.7）、
-                                              Example 参数面板，
-                                              真机 + 触控板定锚点、定「指针那行动不动」、
-                                              确认 ω = 60（§2.5 是纸面推的）
+  4  feat: ListView.rowAnimator 公开  ✅       viewportRect / mountRect 拆分、
+                                              Reduce Motion、复位契约、
+                                              rowView(for:) 文档注释修正（§7.7）
+                                              Example 参数面板与真机选参**未做**
 
-  5  perf: 回归确认                            关闭时 benchmark 与现基线一致；
-                                              animatorTickCount 计数器
-                                              （对标 scrollerGeometryPassCount），
-                                              证明闲置时一次都不 tick、
-                                              且每帧只 willUpdate 一次
+  5  perf: 回归确认  ✅                        见 §8.1
 
  ────────────────────────────────────────────────────────────────────────────
   6  refactor: insert / delete 并入协议         §7.8，独立一次重构，本文不承诺
 ```
+
+### 8.1 性能：找到一处真回归，剩下的测不出来
+
+第一次跑基线读到 70.8ms，与 HEAD 的 96.9ms 一比像是 37% 回归。**那个读数是冷启动离群值**——
+把只改文档、代码与基线完全相同的那个 commit 拿来跑，得到 90.0 / 91.2 / 90.3ms。
+真实基线是 ~90ms。教训：单次读数在这台机器上不构成证据。
+
+交替测 8 轮（两种顺序各 4 轮）之后，`1k scroll layouts` 上有一处稳定的 ~5% 回归，
+按 commit 二分定位到第 2 步。原因是：
+
+```
+   recycleRow 里新加的 clearRowDisplacement 是 withoutListAnimation { ... }
+   AppKit 上那是一个 NSAnimationContext.runAnimationGroup —— 每回收一行开一次
+   setRowPresentationOffset 里确实有提前返回，但抑制的代价在它外面
+   于是一个根本没装 animator 的列表，也在为每一行回收付这笔钱
+```
+
+加一句 `guard row.presentationOffset != 0` 之后回归消失（中位 100.3 → 94.8ms，
+当轮基线 ~95ms）。
+
+**剩下的 0–4% 无法归因。** 把 in-process 采样从 3 提到 21 之后仍能看到 ~4% 的差，
+但逐项还原（去掉 presentedFrame、去掉每趟的 animator 开销、把 mountRect 换回
+viewportRect）没有一项能把它降下来，而 control 自己在同一段时间里从 97.9 漂到 104.2ms。
+**机器的热漂移比要测的效应大**，就此打住，不编造归因。
+
+不变的是 3.0 公布过的那两个数：`20k offset writes` 和 `20k visible queries` 全程无变化。
+
+关闭时「不做任何 animator 的工作」这一条改成用计数器断言（`animatorTickCount`、
+`mountOverscan`、`rowAnimatorLink`），那是确定性的，不受机器状态影响。
 
 ### 为什么协议不在第 1 步就定
 
