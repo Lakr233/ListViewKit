@@ -56,7 +56,12 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
     /// Displaces rows on top of the layout while the list scrolls. Nil is the
     /// default and costs nothing: no link, no per-row work, no ledger reads.
-    var scrollSpring: ListScrollSpring?
+    ///
+    /// An existential on a per-frame path is a deliberate exception to what
+    /// `DESIGN.md` says about `any`. That objection is about the per-row paths
+    /// that run a hundred thousand times; this runs once per mounted row per
+    /// frame, which is a couple of thousand calls a second at 120Hz.
+    var rowAnimator: (any ListRowAnimator)?
 
     /// Runs the animator a frame at a time while it says it has more to do.
     var rowAnimatorLink: RowAnimatorDisplayLink?
@@ -337,6 +342,20 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Compensation has to precede any contentSize update so the clamped
     /// offset lands inside the new bounds without turning into a programmatic
     /// scroll.
+    /// Moves an animator's stored positions with the content space.
+    ///
+    /// Overridden rather than called alongside each compensation, because the
+    /// two always go together and a compensation site added later would
+    /// otherwise have to remember. Keeping compensation out of `scrollDelta`
+    /// only says it was not scrolling; it does nothing for an animator holding
+    /// a position from an earlier frame, since that position is stated in a
+    /// coordinate space that has just moved underneath it.
+    override func compensateScrollOffset(by dy: CGFloat) {
+        super.compensateScrollOffset(by: dy)
+        guard dy != 0 else { return }
+        rowAnimator?.rebase(byContentOffset: dy)
+    }
+
     private func measureViewport() {
         // The width has to be current first: adopting a new one turns every
         // measurement back into an estimate.

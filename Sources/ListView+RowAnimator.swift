@@ -63,26 +63,46 @@ extension ListView {
     /// A displacement changes every frame for rows that did not move at all,
     /// so it needs a pass that visits every mounted row unconditionally.
     func applyRowAnimator() {
-        guard scrollSpring != nil else { return }
+        guard rowAnimator != nil else { return }
         applyRowDisplacements()
         updateRowAnimatorLink()
     }
 
+    /// The context handed to the animator for this pass.
+    private func animatorContext(scrollDelta: CGFloat, deltaTime: TimeInterval) -> ListAnimatorContext {
+        .init(
+            viewportRect: contentVisibleRect,
+            scrollDelta: scrollDelta,
+            deltaTime: deltaTime,
+            isUserInteracting: isUserInteractingWithScroll
+        )
+    }
+
     private func applyRowDisplacements() {
-        guard let spring = scrollSpring else { return }
-        // Snapshot before iterating: a row's own layout can reach back into
-        // the list, and the mounted set must not change under the loop.
-        let rows = visibleRows.values.map(\.view)
+        guard let animator = rowAnimator else { return }
+        // Snapshot before iterating. `update` is other people's code on the
+        // hottest path there is, and it can reach back into the list; the
+        // mounted set must not change under the loop.
+        let rows: [(index: Int, view: ListRowView)] = visibleRows.compactMap { identifier, entry in
+            guard let index = indexByID[identifier] else { return nil }
+            return (index, entry.view)
+        }
         guard !rows.isEmpty else { return }
+        let context = animatorContext(scrollDelta: 0, deltaTime: 0)
         // Suppressed once for the whole pass rather than per row. A layout
         // pass routinely runs inside a caller's animation — the keyboard
         // pattern puts one around the whole thing — and a displacement is
         // never that caller's to animate.
+        let wasRunning = isRunningRowAnimator
+        isRunningRowAnimator = true
+        defer { isRunningRowAnimator = wasRunning }
         withoutListAnimation {
             for row in rows {
-                setRowPresentationOffset(
-                    spring.displacement(forRowCenteredAt: row.placedFrame.midY),
-                    on: row
+                animator.update(
+                    row: row.view,
+                    at: row.index,
+                    frame: row.view.placedFrame,
+                    in: context
                 )
             }
         }
@@ -102,36 +122,24 @@ extension ListView {
     /// beats layout to the offset still sees this frame's motion rather than
     /// last frame's.
     func tickRowAnimator(duration: TimeInterval) {
-        guard var spring = scrollSpring, !isRunningRowAnimator else { return }
-        isRunningRowAnimator = true
-        defer { isRunningRowAnimator = false }
+        guard rowAnimator != nil, !isRunningRowAnimator else { return }
         animatorTickCount &+= 1
 
         scrollLedger.accrue(offsetY: contentOffset.y)
-        let delta = scrollLedger.consume()
-        spring.advance(
-            scrollDelta: delta,
-            deltaTime: min(duration, Self.longestAnimatorFrame),
-            anchorY: restingEdge(ofViewport: contentVisibleRect, stretch: spring.stretch, delta: delta)
+        let context = animatorContext(
+            scrollDelta: scrollLedger.consume(),
+            deltaTime: min(duration, Self.longestAnimatorFrame)
         )
-        scrollSpring = spring
+        do {
+            isRunningRowAnimator = true
+            defer { isRunningRowAnimator = false }
+            rowAnimator?.willUpdate(context)
+        }
 
         applyRowDisplacements()
         updateRowAnimatorLink()
     }
 
-    /// Where the stretch is zero, until a pointer position replaces it.
-    ///
-    /// Displacement is one-sided, so only rows on the far side of this move.
-    /// Anchoring at the edge the content is receding from puts every visible
-    /// row on that side, which is what makes the whole viewport spread rather
-    /// than half of it.
-    private func restingEdge(ofViewport viewport: CGRect, stretch: CGFloat, delta: CGFloat) -> CGFloat {
-        // The stretch already in hand decides it; the incoming travel only
-        // matters when there is none, which is the frame the motion starts on.
-        let direction = stretch != 0 ? stretch : delta
-        return direction >= 0 ? viewport.minY : viewport.maxY
-    }
 
     /// Keeps a link alive exactly as long as something is owed a frame.
     ///
@@ -140,11 +148,11 @@ extension ListView {
     /// the second can start the loop — at rest with an empty ledger nothing
     /// would ever light the first frame.
     private func updateRowAnimatorLink() {
-        guard let spring = scrollSpring, window != nil else {
+        guard let animator = rowAnimator, window != nil else {
             rowAnimatorLink = nil
             return
         }
-        guard !spring.isAtRest || scrollLedger.pending != 0 else {
+        guard animator.wantsNextFrame || scrollLedger.pending != 0 else {
             rowAnimatorLink = nil
             return
         }
@@ -155,9 +163,13 @@ extension ListView {
     }
 
     /// Drops the animator's state and everything it put on screen.
+    ///
+    /// The order matters: the animator is told first, and the list clears the
+    /// rows afterwards, so an implementation cannot leave a displacement
+    /// behind by declining to clear one itself.
     func resetRowAnimator() {
         rowAnimatorLink = nil
-        scrollSpring?.reset()
+        rowAnimator?.reset()
         scrollLedger.reset(offsetY: contentOffset.y)
         for row in visibleRows.values.map(\.view) {
             clearRowDisplacement(on: row)

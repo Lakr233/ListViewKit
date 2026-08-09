@@ -14,6 +14,20 @@ private struct AnimatorItem: Identifiable, Hashable {
     let id: Int
 }
 
+/// The built-in animator, when that is what is installed.
+///
+/// The list holds `any ListRowAnimator`, which is the point of the protocol;
+/// the assertions here are about what the spring in particular did.
+private extension ListView {
+    var spring: ListScrollSpring? { rowAnimator as? ListScrollSpring }
+}
+
+/// Never settles, which the list has to tolerate: a continuous effect is a
+/// legitimate thing to write, so the link is not forced off.
+private struct NeverSettlingAnimator: ListRowAnimator {
+    var wantsNextFrame: Bool { true }
+}
+
 /// Ticks are driven by hand rather than by a display link.
 ///
 /// A link needs a window and delivers frames on the system's schedule, which
@@ -69,7 +83,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func placedFrameTracksTheLayoutAndIgnoresDisplacement() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         for _ in 0 ..< 20 {
             scroll(listView, by: 40)
@@ -88,7 +102,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func rowsAreShownAtTheirPlacementPlusTheDisplacement() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         scroll(listView, by: 200)
         listView.tickRowAnimator(duration: Self.frame)
@@ -104,7 +118,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func displacementReturnsToZeroAndTheLedgerEmpties() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         scroll(listView, by: 300)
         listView.tickRowAnimator(duration: Self.frame)
@@ -114,7 +128,7 @@ struct ListViewRowAnimatorAppKitTests {
             listView.tickRowAnimator(duration: Self.frame)
         }
 
-        #expect(listView.scrollSpring?.isAtRest == true)
+        #expect(listView.spring?.isAtRest == true)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
         #expect(listView.scrollLedger.pending == 0)
         for row in listView.visibleRowViews {
@@ -129,15 +143,15 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func compensationIsNotFedToTheSpring() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
-        let before = listView.scrollSpring?.stretch
+        let before = listView.spring?.stretch
         listView.compensateScrollOffset(by: 250)
         listView.tickRowAnimator(duration: Self.frame)
 
-        #expect(listView.scrollSpring?.stretch == before)
+        #expect(listView.spring?.stretch == before)
         #expect(listView.scrollLedger.pending == 0)
     }
 
@@ -145,7 +159,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func anUnanimatedOffsetJumpIsNotTravel() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
@@ -153,7 +167,7 @@ struct ListViewRowAnimatorAppKitTests {
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
-        #expect(listView.scrollSpring?.isAtRest == true)
+        #expect(listView.spring?.isAtRest == true)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
     }
 
@@ -162,21 +176,21 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func scrollingIsTravelAndIsCountedExactlyOnce() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
         // No layout between the write and the tick.
         listView.contentOffset.y += 50
         listView.tickRowAnimator(duration: Self.frame)
-        let afterFirst = try! #require(listView.scrollSpring?.stretch)
+        let afterFirst = try! #require(listView.spring?.stretch)
         #expect(afterFirst > 0)
 
         // Laying out afterwards must not deliver the same travel again.
         listView.layoutSubtreeIfNeeded()
-        let stretchBefore = try! #require(listView.scrollSpring?.stretch)
+        let stretchBefore = try! #require(listView.spring?.stretch)
         listView.tickRowAnimator(duration: Self.frame)
-        let afterSecond = try! #require(listView.scrollSpring?.stretch)
+        let afterSecond = try! #require(listView.spring?.stretch)
         // With nothing new arriving the spring only decays.
         #expect(afterSecond < stretchBefore)
     }
@@ -187,13 +201,13 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func repeatedLayoutInOneFrameAdvancesTheSpringOnce() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
         listView.contentOffset.y += 60
         listView.tickRowAnimator(duration: Self.frame)
-        let afterTick = try! #require(listView.scrollSpring?.stretch)
+        let afterTick = try! #require(listView.spring?.stretch)
         let ticks = listView.animatorTickCount
 
         for _ in 0 ..< 5 {
@@ -202,14 +216,14 @@ struct ListViewRowAnimatorAppKitTests {
         }
 
         #expect(listView.animatorTickCount == ticks)
-        #expect(listView.scrollSpring?.stretch == afterTick)
+        #expect(listView.spring?.stretch == afterTick)
     }
 
     /// An idle list must not cost a frame.
     @Test
     func anIdleListNeverTicks() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         listView.animatorTickCount = 0
 
         for _ in 0 ..< 10 {
@@ -246,7 +260,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func aPooledRowDoesNotCarryDisplacementIntoAListWithNoAnimator() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 40)
@@ -256,7 +270,7 @@ struct ListViewRowAnimatorAppKitTests {
 
         // Far enough that every mounted row is recycled into the pool.
         scroll(listView, by: 3000)
-        listView.scrollSpring = nil
+        listView.rowAnimator = nil
         // Back again, which mounts those same views for new items.
         scroll(listView, by: -3000)
 
@@ -276,7 +290,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func rowsMountedByALayoutPassAreDisplacedByIt() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 40)
@@ -289,7 +303,7 @@ struct ListViewRowAnimatorAppKitTests {
         scroll(listView, by: 250)
         #expect(!Set(listView.visibleRows.keys).subtracting(before).isEmpty)
 
-        let spring = try! #require(listView.scrollSpring)
+        let spring = try! #require(listView.spring)
         for row in listView.visibleRowViews {
             #expect(row.presentationOffset == spring.displacement(forRowCenteredAt: row.placedFrame.midY))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
@@ -306,7 +320,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func aReorderAnimatesPlacementTravelAndNotTheDisplacement() throws {
         let listView = makeListView(count: 8)
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 30)
@@ -335,7 +349,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func resetLeavesNoResidue() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         scroll(listView, by: 300)
         listView.tickRowAnimator(duration: Self.frame)
@@ -343,10 +357,102 @@ struct ListViewRowAnimatorAppKitTests {
 
         listView.resetRowAnimator()
 
-        #expect(listView.scrollSpring?.isAtRest == true)
+        #expect(listView.spring?.isAtRest == true)
         #expect(listView.scrollLedger.pending == 0)
         #expect(listView.rowAnimatorLink == nil)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
+    }
+
+    // MARK: - The link
+
+    /// Puts the list in a real window, which is what the link requires.
+    ///
+    /// Everything above drives ticks by hand and so never reaches this branch.
+    /// Whether a link is running is a separate question from what a tick does,
+    /// and it needs a host to be asked at all.
+    private func windowed(_ listView: ListView<AnimatorItem>) -> NSWindow {
+        let window = NSWindow(
+            contentRect: listView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = listView
+        listView.frame = window.contentView?.bounds ?? listView.frame
+        drain(listView)
+        return window
+    }
+
+    @Test
+    func travelStartsALinkAndRestStopsIt() {
+        let listView = makeListView()
+        let window = windowed(listView)
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = ListScrollSpring()
+        #expect(listView.rowAnimatorLink == nil)
+
+        // Accruing travel is what lights the first frame: at rest with an
+        // empty ledger nothing would ever ask for one.
+        scroll(listView, by: 200)
+        #expect(listView.rowAnimatorLink != nil)
+
+        for _ in 0 ..< 400 {
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+        #expect(listView.spring?.isAtRest == true)
+        #expect(listView.rowAnimatorLink == nil)
+    }
+
+    /// An animator that never settles keeps its link, and that is allowed.
+    @Test
+    func anAnimatorThatAlwaysWantsFramesKeepsItsLink() {
+        let listView = makeListView()
+        let window = windowed(listView)
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = NeverSettlingAnimator()
+        scroll(listView, by: 100)
+        #expect(listView.rowAnimatorLink != nil)
+
+        for _ in 0 ..< 50 {
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+        #expect(listView.rowAnimatorLink != nil)
+    }
+
+    /// Leaving the window drops the link whatever the animator wants.
+    @Test
+    func leavingTheWindowStopsTheLink() {
+        let listView = makeListView()
+        let window = windowed(listView)
+
+        listView.rowAnimator = NeverSettlingAnimator()
+        scroll(listView, by: 100)
+        #expect(listView.rowAnimatorLink != nil)
+
+        window.contentView = nil
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+        #expect(listView.rowAnimatorLink == nil)
+    }
+
+    /// Taking the animator away stops the link too.
+    @Test
+    func clearingTheAnimatorStopsTheLink() {
+        let listView = makeListView()
+        let window = windowed(listView)
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = NeverSettlingAnimator()
+        scroll(listView, by: 100)
+        #expect(listView.rowAnimatorLink != nil)
+
+        listView.resetRowAnimator()
+        listView.rowAnimator = nil
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+        #expect(listView.rowAnimatorLink == nil)
     }
 
     // MARK: - Shape on screen
@@ -355,7 +461,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func displacedRowsStayInOrderAndOpenGaps() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
 
         var sawAGap = false
         for _ in 0 ..< 60 {

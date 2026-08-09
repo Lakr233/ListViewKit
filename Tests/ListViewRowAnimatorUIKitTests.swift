@@ -12,6 +12,14 @@ private struct AnimatorItem: Identifiable, Hashable {
     let id: Int
 }
 
+/// The built-in animator, when that is what is installed.
+///
+/// The list holds `any ListRowAnimator`, which is the point of the protocol;
+/// the assertions here are about what the spring in particular did.
+private extension ListView {
+    var spring: ListScrollSpring? { rowAnimator as? ListScrollSpring }
+}
+
 /// The half of the displacement story that only exists here.
 ///
 /// Displacement lands on the transform under UIKit, and a view with a
@@ -66,7 +74,7 @@ struct ListViewRowAnimatorUIKitTests {
     @Test
     func displacementLandsOnTheTransformAndLeavesThePlacementAlone() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         displace(listView)
 
         var sawDisplacement = false
@@ -87,7 +95,7 @@ struct ListViewRowAnimatorUIKitTests {
     @Test
     func layoutComparesPlacementsRatherThanFrames() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         displace(listView)
 
         let displaced = listView.visibleRowViews.filter { $0.presentationOffset != 0 }
@@ -110,7 +118,7 @@ struct ListViewRowAnimatorUIKitTests {
     @Test
     func hitTestingFollowsTheDisplacement() throws {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         displace(listView)
 
         let row = try #require(listView.visibleRowViews.first { $0.presentationOffset > 1 })
@@ -126,7 +134,7 @@ struct ListViewRowAnimatorUIKitTests {
     @Test
     func restClearsTheTransform() {
         let listView = makeListView()
-        listView.scrollSpring = ListScrollSpring()
+        listView.rowAnimator = ListScrollSpring()
         displace(listView)
 
         for _ in 0 ..< 400 {

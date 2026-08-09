@@ -32,6 +32,8 @@ import SpringInterpolation
 /// Nothing here knows about views, frames, or time sources. It takes a scroll
 /// delta and a duration and answers, for a row centred anywhere, how far that
 /// row should be displaced.
+///
+/// Not `Sendable`: the `SpringInterpolation` it stores does not conform.
 struct ListScrollSpring: Equatable {
     /// How far the content may stretch, in points.
     ///
@@ -167,6 +169,7 @@ struct ListScrollSpring: Equatable {
     mutating func reset() {
         spring.setCurrent(0, 0)
         spring.setTarget(0)
+        anchorY = 0
     }
 
     // MARK: - Displacement
@@ -206,3 +209,36 @@ struct ListScrollSpring: Equatable {
     }
 }
 
+/// Stated in an extension rather than on the type: conforming to a
+/// main-actor protocol at the declaration would infer that isolation for the
+/// whole type, and the model is meant to be usable — and testable — without
+/// one.
+extension ListScrollSpring: ListRowAnimator {
+    var maximumDisplacement: CGFloat { maximumStretch }
+    var wantsNextFrame: Bool { !isAtRest }
+
+    mutating func willUpdate(_ context: ListAnimatorContext) {
+        advance(
+            scrollDelta: context.scrollDelta,
+            deltaTime: context.deltaTime,
+            anchorY: restingEdge(of: context.viewportRect, delta: context.scrollDelta)
+        )
+    }
+
+    @MainActor
+    func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
+        row.setPresentationOffset(displacement(forRowCenteredAt: frame.midY))
+    }
+
+    /// Where the stretch is zero.
+    ///
+    /// Displacement is one-sided, so only rows on the far side of this move.
+    /// Anchoring at the edge the content is receding from puts every visible
+    /// row on that side, which is what makes the whole viewport spread rather
+    /// than half of it. The stretch in hand decides which edge that is; the
+    /// incoming travel only matters on the frame the motion starts.
+    private func restingEdge(of viewport: CGRect, delta: CGFloat) -> CGFloat {
+        let direction = stretch != 0 ? stretch : delta
+        return direction >= 0 ? viewport.minY : viewport.maxY
+    }
+}
