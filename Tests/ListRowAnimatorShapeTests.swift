@@ -40,6 +40,15 @@ private struct ParallaxAnimator: ListRowAnimator {
     /// Content-space state, which is what `rebase` exists for.
     private(set) var origin: CGFloat = 0
 
+    /// Whatever the last `update` was told, so a test can compare a context
+    /// against the frame it was handed alongside it.
+    final class LastCall {
+        var frames: [CGRect] = []
+        var context: ListAnimatorContext?
+    }
+
+    let lastCall = LastCall()
+
     var maximumDisplacement: CGFloat { depth }
 
     mutating func willUpdate(_ context: ListAnimatorContext) {
@@ -51,6 +60,8 @@ private struct ParallaxAnimator: ListRowAnimator {
     func update(row: ListRowView, at index: Int, frame: CGRect, in context: ListAnimatorContext) {
         journal.updateCount += 1
         journal.indices.append(index)
+        lastCall.frames.append(frame)
+        lastCall.context = context
         let viewport = context.viewportRect
         guard viewport.height > 0 else { return }
         let fromCentre = (frame.midY - viewport.midY) / viewport.height
@@ -115,12 +126,51 @@ struct ListRowAnimatorShapeTests {
         }
     }
 
-    /// An effect with no clock still works, and costs no frames.
+    /// The context's rectangles and the frame handed alongside them are in one
+    /// coordinate space, `topInset` included.
+    ///
+    /// The list keeps two spaces. The engine lays rows out from zero, and
+    /// ``ListView/rectForRow(at:)`` adds `topInset` on the way to a view — so
+    /// `viewportRect`, which the compensation anchor and the mounting rectangle
+    /// are measured against, sits `topInset` above the frame an animator is
+    /// handed for the same row. Passing that one straight through made every
+    /// distance an implementation computes wrong by exactly `topInset`, which
+    /// on a list with a header is the difference between the first row being
+    /// graded and being saturated.
+    ///
+    /// Asserted against the row frames rather than against `topInset`, since
+    /// what an animator can act on is the two things it is given.
+    @Test
+    func theContextAndTheRowFramesShareOneSpace() {
+        let inset: CGFloat = 80
+        let listView = makeListView()
+        listView.topInset = inset
+        listView.layoutSubtreeIfNeeded()
+
+        let animator = ParallaxAnimator()
+        listView.rowAnimator = animator
+        scroll(listView, by: 40)
+
+        let context = try! #require(animator.lastCall.context)
+        let topmost = animator.lastCall.frames.min { $0.minY < $1.minY }!
+        #expect(context.contentRect.minY == topmost.minY, "the content starts where the first row does")
+        #expect(context.contentRect.height == CGFloat(60) * Self.rowHeight)
+        #expect(context.viewportRect.minY == listView.contentOffset.y)
+        // The inset is real, so this is not passing by both being zero.
+        #expect(topmost.minY == inset)
+    }
+
+    /// An effect with no clock still works, and costs no display link.
     ///
     /// Displacement is recomputed by the layout pass, and scrolling is a
-    /// layout pass, so a purely geometric animator needs no display link at
-    /// all. If this needed one, the protocol would be describing the spring
-    /// rather than animators.
+    /// layout pass, so a purely geometric animator needs no link at all. If
+    /// this needed one, the protocol would be describing the spring rather
+    /// than animators.
+    ///
+    /// It does get a `willUpdate`, and that is the point of the requirement: a
+    /// pass that carries travel is a frame, and an animator that wants the
+    /// delta but not a link is entitled to hear about it. A pass that carries
+    /// no travel is not a frame and says nothing.
     @Test
     func aStatelessAnimatorIsDrivenByLayoutAndNeverAsksForAFrame() {
         let listView = makeListView()
@@ -129,10 +179,18 @@ struct ListRowAnimatorShapeTests {
 
         scroll(listView, by: 250)
 
-        #expect(animator.journal.willUpdateCount == 0)
+        #expect(animator.journal.willUpdateCount == 1, "the travel was not handed over")
         #expect(animator.journal.updateCount > 0)
-        #expect(listView.animatorTickCount == 0)
         #expect(listView.rowAnimatorLink == nil)
+
+        // Laying out again without moving is not another frame.
+        let advances = listView.animatorTickCount
+        for _ in 0 ..< 5 {
+            listView.needsLayout = true
+            listView.layoutSubtreeIfNeeded()
+        }
+        #expect(animator.journal.willUpdateCount == 1)
+        #expect(listView.animatorTickCount == advances)
 
         let viewport = listView.viewportRect
         for row in listView.visibleRowViews {

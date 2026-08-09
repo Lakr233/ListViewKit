@@ -94,12 +94,16 @@ public extension ListRowAnimator {
 
 /// What the list knows about the frame being drawn.
 public struct ListAnimatorContext: Sendable {
-    /// The visible rectangle, in the space row frames are measured in.
+    /// The visible rectangle, in the space the row frames handed to `update`
+    /// are stated in.
     ///
     /// The real viewport, not the wider rectangle rows are mounted over.
     public let viewportRect: CGRect
 
     /// The rectangle the rows occupy, in the same space.
+    ///
+    /// Its origin is `topInset`, not zero: an inset is space the list leaves
+    /// above the content, and the frames rows are placed at carry it.
     ///
     /// The viewport is not a reliable stand-in for it. It runs off the end of
     /// the content during an overscroll, and it is larger than the content

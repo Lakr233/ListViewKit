@@ -364,11 +364,61 @@ struct ListRowAnimatorPublicAPITests {
         #expect(listView.rowAnimatorLink != nil, "and nothing was scheduled to fix it later")
     }
 
-    /// A frame advances the animator once, however many layouts it takes.
+    /// And so is a frame that arrives while a link is already running.
     ///
-    /// Plus exactly one more for the whole run: the frame a gesture starts on,
-    /// which the layout pass has to integrate itself because the link it is
-    /// about to create will not call back until the next one.
+    /// The first version of the catch-up asked whether a link existed, which is
+    /// not the same question as whether this frame's travel had been consumed.
+    /// A gesture that starts while the previous one is still unwinding has a
+    /// live link, and the order within the frame can be tick-then-offset: the
+    /// tick consumes nothing, the touch moves the offset afterwards, and a pass
+    /// that trusts the link's existence lands a stale displacement anyway.
+    ///
+    /// Driven in exactly that order, and asserted on what the rows show at the
+    /// end of the pass rather than on the spring, since a spring that advanced
+    /// after the rows were placed is the defect rather than the fix.
+    @Test
+    func aFrameThatArrivesWhileTheLinkIsRunningIsAlsoIntegrated() {
+        let listView = makeListView()
+        let window = NSWindow(
+            contentRect: listView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = listView
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = ListScrollSpring.messages
+        // A gesture, then a link left running by the stretch still unwinding.
+        listView.contentOffset.y += 24
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: 1.0 / 120.0)
+        #expect(listView.rowAnimatorLink != nil, "the spring settled early; nothing is being tested")
+
+        // The tick for this frame lands before the offset moves, so it has
+        // nothing of this frame's to consume.
+        listView.tickRowAnimator(duration: 1.0 / 120.0)
+        let before = displacements(of: listView)
+        listView.contentOffset.y += 24
+        listView.layoutSubtreeIfNeeded()
+        let after = displacements(of: listView)
+
+        #expect(after != before, "the pass landed the new offset with the previous frame's displacement")
+    }
+
+    private func displacements(of listView: ListView<APIItem>) -> [CGFloat] {
+        listView.visibleRowViews
+            .sorted { $0.placedFrame.minY < $1.placedFrame.minY }
+            .map(\.presentationOffset)
+    }
+
+    /// The layout pass owns the travel and the link owns the clock, so a frame
+    /// hands over each exactly once however many layouts it takes.
+    ///
+    /// Two advances per frame here, not one: the pass that moved the offset
+    /// injects that travel with no time attached, and the tick that follows
+    /// integrates the time with nothing left to inject. Layouts that move
+    /// nothing are not frames and cost nothing.
     @Test
     func oneFramePerTickAndNoTicksWithoutFrames() {
         let listView = makeListView()
@@ -393,7 +443,7 @@ struct ListRowAnimatorPublicAPITests {
             listView.layoutSubtreeIfNeeded()
             listView.tickRowAnimator(duration: 1.0 / 120.0)
         }
-        #expect(listView.animatorTickCount == 11, "ten frames plus the one the gesture started on")
+        #expect(listView.animatorTickCount == 20, "ten frames of travel and ten of time")
 
         // Settled, and then left alone: no further frames are taken.
         for _ in 0 ..< 400 {

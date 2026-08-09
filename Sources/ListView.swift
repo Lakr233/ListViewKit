@@ -432,8 +432,14 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     override func compensateScrollOffset(by dy: CGFloat) {
         super.compensateScrollOffset(by: dy)
         guard dy != 0, rowAnimator != nil else { return }
+        // Saved and restored rather than cleared. Compensation can be reached
+        // from inside the animator — measurement runs during a layout an
+        // implementation asked for — and clearing the flag on the way out of
+        // the inner call would let the outer one's writeback be mistaken for a
+        // caller installing a new animator, which resets the whole thing.
+        let wasRunning = isDrivingRowAnimator
         isDrivingRowAnimator = true
-        defer { isDrivingRowAnimator = false }
+        defer { isDrivingRowAnimator = wasRunning }
         rowAnimator?.rebase(byContentOffset: dy)
     }
 

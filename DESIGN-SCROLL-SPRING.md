@@ -1088,7 +1088,8 @@ display link 只负责松手之后的自由松弛。
 **短列表、以及任何列表滚到两端时都是常态**。§5 挂起的「锚点选型」欠的就是这个，
 不是手感取向问题。
 
-两条的修法与量法见 8.2.2（第一条）与 8.2.1（第二条）。
+两条的修法与量法见 8.2.2（第一条）与 8.2.1（第二条）；8.2.3 是顺带查出来的
+第三条，8.2.4 记的是一条看着像缺陷、实际不是的东西。
 
 
 ### 8.2.1 锚点滑出内容：真机录屏把它量成了一条直线（已修）
@@ -1150,7 +1151,7 @@ return direction >= 0
 一起红。
 
 
-### 8.2.2 两个时钟：真正错开的只有手势的第一帧（已修）
+### 8.2.2 两个时钟：layout 负责行程，link 负责时钟（已修）
 
 8.2 第一条说的是「同一个视觉量由两个时钟写」。把这句话收窄到可判定的形式，
 它只在**一帧**上成立：
@@ -1168,28 +1169,75 @@ return direction >= 0
 是共模的。锚点钉到内容上之后它变成十几 pt 的**相对**位移晚到一帧，
 正是模拟器那段录屏在按下瞬间量到的 ~30pt 抖动。
 
-修法就是让这一帧自己积分：`applyRowAnimator()` 在**即将创建 link** 时
-（`rowAnimatorLink == nil && window != nil && scrollLedger.pending != 0`）
-先推进一帧再落位移。条件里的 `window != nil` 不是防御性的——没有 window 就没有
-link，那时 layout 去积分就不是「补一帧」而是「充当整个时钟」，那是另一回事。
+**第一版的修法只覆盖了这一条，是不够的**（codex review 指出，已修正）。
+按「link 存不存在」来决定要不要补帧，问的不是「这一帧的行程有没有被积分」。
+上一次手势还没松弛完时 link 是活的，而一帧之内的顺序完全可以是
+「link 先 tick（此时 offset 还没动，消费到 0）→ 触摸改 offset → layout」——
+这时 layout 看见 link 活着就不补，照样落一个陈旧的位移。共用一个 run loop turn
+救不了它：tick 不可能积分一个当时还没发生的位移。§8.2.2 早先写的
+「谁先谁后都不产生可见误差」是错的，只在 link 已经消费过本帧行程时才成立。
 
-第一帧用 1/120 积分：还没有任何一帧被量过，取两种刷新率里短的那个，
-宁可欠松弛也不过松弛，而且下一帧带着真实 duration 会把它纠回来。
+**最终的分工是：layout 负责行程，link 负责时钟。**
 
-两个方向都做了反向注入：
+```swift
+private func integrateTravelThisPassIsAboutToLand() {
+    guard scrollLedger.pending != 0 else { return }
+    advanceRowAnimator(duration: rowAnimatorLink == nil ? Self.unmeasuredFrame : 0)
+}
+```
+
+有行程就注入，位移和它对应的 offset 因此总是同一趟落地；时间留给 link，
+因为只有它知道一帧有多长。`duration: 0` 时 `SpringInterpolation` 的系数退化成
+恒等式，所以那是一次纯冲量——一帧仍然只被松弛一次，由拥有它的那次 tick。
+没有 link 时（包括没有 window 的场景）这一趟顺带充当一帧的时钟，
+用 1/120：还没有任何一帧被量过，取两种刷新率里短的那个，宁可欠松弛也不过松弛。
+
+副作用：`prefersReducedMotion` 那条提前返回现在会顺手 `scrollLedger.reset`。
+关掉动效期间没人消费账本，攒一整程的行程会在重新打开的那一帧一次性花掉。
+
+反向注入：
 
 ```
-   去掉补帧            theFrameAGestureStartsOnIsAlreadyDisplaced 红
-                       （第一帧全部行 presentationOffset == 0）
-   去掉 link == nil    oneFramePerTickAndNoTicksWithoutFrames 红
-   这个条件            （每趟 layout 都积分，10 帧变成 30 次）
+   去掉补帧             theFrameAGestureStartsOnIsAlreadyDisplaced 红
+                        （第一帧全部行 presentationOffset == 0）
+   换回 link == nil     aFrameThatArrivesWhileTheLinkIsRunningIsAlsoIntegrated 红
+   这个条件             （tick → 改 offset → layout，位移不动）
+   去掉 pending 判断    oneFramePerTickAndNoTicksWithoutFrames 红
 ```
 
-`oneFramePerTickAndNoTicksWithoutFrames` 的期望值从 10 改成 11：多的那一次
-就是手势起手的那一帧，不是回归。
+`oneFramePerTickAndNoTicksWithoutFrames` 的期望值从 10 改成 20：一帧两次推进，
+一次是 layout 交行程（不带时间），一次是 tick 交时间（没有行程可交）。
+不动的 layout 不是帧，一次都不推进。
+
+`aStatelessAnimatorIsDrivenByLayoutAndNeverAsksForAFrame` 里
+`willUpdateCount == 0` 也改成 1：带行程的 layout 就是一帧，
+想要 delta 但不想要 link 的实现有权收到它——之前它一次都收不到。
 
 
-### 8.2.3 弹簧全程顶在上限，不是缺陷
+### 8.2.3 上下文和行 frame 不在同一个坐标系（codex review 发现，已修）
+
+列表内部有两个纵坐标系：engine 从 0 开始摆行（`rowLayout.frame(for:)`），
+而 `rectForRow(at:)` 在交给视图之前加上 `topInset`——`placedFrame` 存的是后者。
+`viewportRect` 是 `contentOffset.y - topInset`，属于前者。
+
+于是 `ListScrollSpring.update` 里拿 `frame.midY`（后者）去减 `restingEdge`
+算出来的锚点（前者），**差一个 `topInset`**。`topInset = 80`、首行高 92、R = 120
+时，正确的 `|c − a|` 是 46（权重 0.383），实际算成 126（权重饱和到 1）——
+恰好在带 header 的聊天式布局上把最该分级的第一行压成刚性。
+
+这条在锚点改之前就存在（那时 `restingEdge` 取的也是 `viewportRect` 的边），
+只是那时全部饱和，看不出来。三个新测试全都用 `topInset = 0`，都漏了。
+
+修法是在**构造 `ListAnimatorContext` 时**把两个矩形平移 `topInset`，
+内部用的 `viewportRect` / `mountRect` 不动——补偿锚点、挂载、回收、测量覆盖
+仍然在 engine 的坐标系里，它们本来就该在那儿。
+
+`theContextAndTheRowFramesShareOneSpace` 拿 `context.contentRect.minY` 和
+本趟 `update` 收到的最上面那个 `frame.minY` 直接比，不比 `topInset`——
+实现能拿到的就这两样东西。反向注入（不平移）两条断言一起红。
+
+
+### 8.2.4 弹簧全程顶在上限，不是缺陷
 
 8.2.1 顺带暴露的一件事：回弹速度约 600pt/s，而 `2ζv/ω = maximumStretch`
 在 ω = 20、ζ = 0.75 时对应 267pt/s——任何称得上滚动的速度都会把 stretch 顶到

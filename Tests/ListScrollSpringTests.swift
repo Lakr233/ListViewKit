@@ -423,6 +423,21 @@ struct ListScrollSpringTests {
                 "\(overscroll)pt of overscroll moved the first row's lag to \(lag) from \(unstretched)"
             )
         }
+
+        // And the clamp is a clamp, not a replacement. Anchoring at the content
+        // unconditionally would pass everything above and be wrong everywhere
+        // else: a viewport in the middle of a long list is measured from its
+        // own edge, which is where the rows are entering from.
+        var midList = ListScrollSpring()
+        for _ in 0 ..< 30 {
+            midList.willUpdate(Self.context(viewportTop: 500, contentHeight: 1800, scrollDelta: 10))
+        }
+        // 100pt below the viewport's top edge, and 600 below the content's.
+        let nearEdge = midList.displacement(forRowCenteredAt: 600)
+        #expect(
+            abs(nearEdge - midList.stretch * (100 / 120)) < 1e-9,
+            "a row 100pt into the viewport read \(nearEdge) against a stretch of \(midList.stretch)"
+        )
     }
 
     /// A list too short to fill its own viewport still spreads.
@@ -444,11 +459,15 @@ struct ListScrollSpringTests {
         }
         #expect(spring.stretch < 0)
 
+        // Pinned to the last row, not merely to somewhere that happens to grade
+        // these two: the last row's centre is 46pt from the content's bottom,
+        // and the first row's is 322pt, which is past `resistanceFactor`.
         let first = spring.displacement(forRowCenteredAt: Self.firstRowCentre)
         let last = spring.displacement(forRowCenteredAt: Self.lastRowCentre)
+        #expect(abs(first - spring.stretch) < 1e-9, "the far row should read the whole stretch")
         #expect(
-            abs(first - last) > 1,
-            "every row read the same weight: the list moved rigidly, by \(first)"
+            abs(last - spring.stretch * (46 / 120)) < 1e-9,
+            "the last row read \(last) against a stretch of \(spring.stretch)"
         )
     }
 
