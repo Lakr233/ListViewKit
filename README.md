@@ -210,6 +210,20 @@ list.scrollToRow(with: message.id, at: .nearest)
 list.scrollToBottom()
 ```
 
+### The scroller
+
+A list whose content outgrows its viewport draws an overlay scroller. Hosts
+that would rather it did not say so with one sentence on either platform:
+
+```swift
+list.showsVerticalScrollIndicator = false
+```
+
+UIKit inherits the property from `UIScrollView`; the AppKit list declares its
+own, which also keeps the scroller's geometry pass from running at all. Either
+way this hides the report, not the range: everything still scrolls exactly as
+far as it did.
+
 ## Migrating from 2.x
 
 | 2.x | 3.0 |

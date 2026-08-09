@@ -387,6 +387,23 @@ import SpringInterpolation
             true
         }
 
+        /// Whether the list draws a scroller.
+        ///
+        /// Named after `UIScrollView`'s property, which the UIKit side of this
+        /// class inherits for real, so a host that wants no scroller says the
+        /// same sentence on both platforms.
+        ///
+        /// This is one more reason *not* to show a scroller, not a second
+        /// mechanism: it feeds the same geometry pass that already decides
+        /// whether the content is long enough to warrant one, so turning it
+        /// off also stops that pass from tiling a scroller nobody can see.
+        open var showsVerticalScrollIndicator: Bool = true {
+            didSet {
+                guard showsVerticalScrollIndicator != oldValue else { return }
+                needsLayout = true
+            }
+        }
+
         var scrollingDisplayLink: DisplayLink?
         var scrollingContext: SpringInterpolation2D = .init(
             .init(
@@ -608,7 +625,9 @@ import SpringInterpolation
         private func updateVerticalScroller() {
             let minOffset = minimumContentOffset.y
             let scrollableRange = maximumContentOffset.y - minOffset
-            let showsScroller = scrollableRange > 0 && bounds.height > 0
+            let showsScroller = showsVerticalScrollIndicator
+                && scrollableRange > 0
+                && bounds.height > 0
 
             // NSScrollView already applies its own safe area when tiling the
             // scroller, so only the remainder is ours to add.
