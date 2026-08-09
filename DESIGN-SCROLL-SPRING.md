@@ -257,7 +257,7 @@ setter 里 clamp 到 `maximumStretch ∈ [0, 200]`、`resistanceFactor ∈ [1, 1
 **没有「锚点行」这个东西。** 第一版的图给 row i 标了 `d = 0`，那是把点锚点
 当成了行锚点。公式判的是**行中心**相对锚点的位置：锚点只要不恰好落在 row i 的中心，
 row i 自己就会动一点（`|c − a|` 是它中心到锚点的距离，通常是几到几十 pt，
-除以 `resistanceFactor = 500` 之后是个小权重）。
+除以 `resistanceFactor`（实测取 120，见 §2.5.1）之后是个小权重）。
 
 这不破坏 §2.3 的证明——它只关心 d 随 i 非降——但它改变了承诺给用户的手感：
 「手指按住的那一行纹丝不动」和「手指附近的行几乎不动」不是一回事。
@@ -304,11 +304,40 @@ row i 自己就会动一点（`|c − a|` 是它中心到锚点的距离，通�
 注入改成与 dt 无关的形式，那会牵动整个积分器——但大到不该等以后偶然发现，
 已经用测试钉住这两个比值。
 
-结论方向不变，而且被实测确认：ω = 60 时 600 pt/s 的常速滚动拉伸 17.5pt，
-在 24pt 预算内**有梯度**；1200 pt/s 才顶满。退回第一版的 ω = 30 会在常速下直接饱和——
-这条现在是一条会失败的测试，不再只是一个论证。
+依赖方向照旧：ω 翻倍则稳态减半，v 翻倍则稳态翻倍。
 
-依赖方向照旧：ω 翻倍则稳态减半，v 翻倍则稳态翻倍。剩下的是手感取向，第 4 步真机定。
+### 2.5.1 实测：ω = 60 是错的，整段推导的方向也是错的
+
+上面那套「让常速滚动刚好不饱和」的推导，被一段 macOS Messages 的录屏推翻了。
+
+量法：逐帧跟踪会话里的气泡边界，取相邻两行之间的**间隙**随时间的变化——间隙是
+差分量，不受整体滚动干扰，也不受积分漂移影响。取两次手势（会话里不同位置）的
+松手段，各自对二阶响应做最小二乘：
+
+```
+   手势 C   ω = 19.0   ζ = 0.74   峰值 15.6pt   rms 0.55px（10 个采样点）
+   手势 A   ω = 21.0   ζ = 0.60   峰值 12.4pt   rms 1.32px（ 8 个采样点）
+```
+
+两次独立手势落在同一处，所以默认值取 **ω = 20、ζ = 0.75**，`maximumStretch = 20`
+（实测单条缝最大张开 25–36px ≈ 11–15pt，按 `pitch/R ≈ 0.65` 反推预算 20pt），
+`resistanceFactor = 120`（78pt 行距下相邻两行差 0.65 个预算，与录屏里「张开集中在
+锚点附近一两行、远场整体平移」一致）。
+
+原来的 ω = 60 **快了三倍**；原来的 `resistanceFactor = 500` 在 78pt 行距下相邻两行
+只差 3.7pt，肉眼近乎没有层次。两个方向都错了。
+
+推导错在哪：它要求常速滚动**不饱和**，理由是饱和就退化成整屏平移、丢掉梯度。
+录屏说 Messages 就是饱和的——整段录像里远场始终作为一个刚体平移，全部张开都挤在
+靠近锚点的一两行里。饱和不是退化，是那个观感本身。按实测参数，约 250 pt/s 以上
+一律顶满预算，手势之间变化的是**预算被占用多久**，不是被占用多少。
+
+这段录屏能支持的到此为止：ζ 和 ω 只由半衰期约束，而半衰期只认 ζω 的乘积，
+所以单靠它分不开两者——是「回弹幅度 ≤ 峰值 8%」（实测 3% 和 0%）把 ζ 卡在 0.75
+附近的。空间衰减律（`min(1, d/R)` 到底对不对）**没有**被这段录屏验证：60Hz 窗口
+录制加上未知的行结构，只够定出「张开集中在一两行、远场刚体」这个量级，定不出函数
+形状。测试 `theDefaultsRelaxLikeTheRecordingTheyWereFittedTo` 钉住的是半衰期和回弹
+幅度，不是整条曲线。
 
 ---
 
@@ -681,10 +710,10 @@ public extension ListView {
 ```swift
 @MainActor
 public struct ListScrollSpring: ListRowAnimator, Equatable {
-    public var maximumStretch: CGFloat = 24      // setter 校验，见 §2.2
-    public var resistanceFactor: CGFloat = 500
-    public var angularFrequency: Double = 60     // 见 §2.5，第一版是 30
-    public var dampingRatio: Double = 1
+    public var maximumStretch: CGFloat = 20      // setter 校验，见 §2.2
+    public var resistanceFactor: CGFloat = 120
+    public var angularFrequency: Double = 20     // 实测拟合，见 §2.5.1
+    public var dampingRatio: Double = 0.75
 
     private var spring = SpringInterpolation(...)
     private var anchorY: CGFloat = 0
@@ -716,7 +745,7 @@ public struct ListScrollSpring: ListRowAnimator, Equatable {
     }
 
     public static let messages = Self()
-    public static let subtle = Self(maximumStretch: 12, resistanceFactor: 800, angularFrequency: 120)
+    public static let subtle = Self(maximumStretch: 8, resistanceFactor: 240, angularFrequency: 26, dampingRatio: 0.9)
 }
 
 list.rowAnimator = ListScrollSpring.messages
@@ -935,7 +964,7 @@ DEBUG 那条断言改查 `placedFrame`（§4.1），所以它继续在布局真�
                                                 （有界，不是连续 —— §2.3）
                                               · 内部状态不超过 maximumStretch
                                               · 高速过零不被误判为静止（§3.4）
-                                              · 常速滚动不饱和、快滑饱和（ω = 60）
+                                              · 半衰期 ~65ms、回弹 <8%（ω = 20, ζ = 0.75，§2.5.1）
                                               · 稳态的帧率依赖被钉住（§2.5）
                                               · 非法参数（0/负/NaN）不破坏以上任何一条
                                               · dt 上钳到 1/30 后仍收敛
@@ -1015,6 +1044,53 @@ CollectionKit 的 `Animator` 有四个方法，是四年里被四类效果逼出
 这条对这个仓库尤其重要——3.0 刚把公开类型从 9 个砍到 4 个，
 现在要往回加一个协议，值得多花一步确认它是对的。
 
+### 8.2 录屏暴露的两处结构性缺陷（已诊断，未修）
+
+参数标定的同一批录屏里，还有一段是 iOS 模拟器上跑本库 Example 的。逐帧跟踪
+（模板匹配 + 索引列灰度质心两种独立量法，结果逐帧一致）之后有两条：
+
+**一、每次手指按下，画面会来回抖 2–3 帧，幅度约 30pt。**
+
+```
+   按下后连续 7 帧，行的屏幕位置（pt，向下为正）
+       0    8.8    1.0   32.1    9.8   16.6   26.4
+   逐帧位移
+          +8.8   −7.8  +31.1  −22.3   +6.8   +9.8
+```
+
+底下那条 ~8.5pt/帧 的平滑斜坡是手指，叠在上面的 ±18pt 振荡不是。两次按下
+（第 15 帧与第 45 帧）各出现一次，稳态拖拽段完全没有。
+
+成因是**同一个视觉量由两个时钟写**：`contentOffset` 由 UIScrollView 每帧写，
+`presentationOffset` 由 `RowAnimatorDisplayLink` 另一条 link 写。两者相减才是
+行的落点，而它们不保证落在同一帧里——link 还是在 `layoutContent()` 末尾按需创建的，
+建立那帧根本不会回调。渲染误差正好等于**一帧内 S 的变化量**：稳态时 ΔS ≈ 0
+（所以拖拽段是干净的），起手时 S 从 0 冲到 30pt（所以抖在起手）。
+
+要修就得让位移和它要抵消的那个 offset 在同一趟里算完：布局趟里推进弹簧
+（`layoutSubviews` 与 offset 改写同一个 runloop turn、同一个 CA 事务），
+display link 只负责松手之后的自由松弛。
+
+**二、锚点会滑出内容，于是整屏一起滞后、一点层次都没有。**
+
+同一段录屏里，四行之间的**相对**位移全程 ≤ 8pt，而整体滞后到了几十 pt——
+即效果完全退化成「整块内容跟不上手指」，这正是「卡」的来源，因为直接操作被打断了。
+
+原因是 `restingEdge` 取的是视口边缘，而那次手势里列表停在顶部并向下过卷，
+视口上沿跑到了内容之上：
+
+```
+   视口 [−77, 343]   行中心 39 / 117 / 195 / 273   R = 120
+   |c − a| = 116 / 194 / 272 / 350   →   w = 0.97 / 1 / 1 / 1     全部饱和
+```
+
+`min(1, |c−a|/R)` 的斜坡段整个落在了内容之外。内容填满视口的长列表里很少碰到，
+**短列表、以及任何列表滚到两端时都是常态**。§5 挂起的「锚点选型」欠的就是这个，
+不是手感取向问题。
+
+这两条都还没修——本节记录的是测量结果，不是已完成的工作。
+
+
 ---
 
 ## 9. 风险
@@ -1033,4 +1109,4 @@ CollectionKit 的 `Animator` 有四个方法，是四年里被四类效果逼出
 | 结构变更（insert/remove）在滚动中发生，权重按新索引求值 | 权重只依赖行的 y 和锚点 y，不依赖索引身份，天然无缝 |
 | 协议一旦公开就是永久 API，而 3.0 刚把公开类型 9 个砍到 4 个 | 第 3 步才定型，且要求先有第二份实现顶着；前两步弹簧是 internal |
 | `maximumDisplacement` 框不住非平移效果 | 明确收窄成平移，写进注释当能力边界，不假装通用（§7.6） |
-| 效果本身可能已经不存在于当代 Messages.app | 未能证实其去留；这是复刻一个 iOS 7 的手感，做成默认关闭的可选项 |
+| ~~效果本身可能已经不存在于当代 Messages.app~~ | **已证实存在**：录屏逐帧可见每行以各自的速度移动，速度剖面在行边界上是分段常数（§2.5.1） |

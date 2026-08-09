@@ -40,7 +40,7 @@ public struct ListScrollSpring: Equatable {
     /// This bounds the displacement of every row, so it is also what the list
     /// has to overscan its mounting rectangle by.
     public var maximumStretch: CGFloat {
-        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24) }
+        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 20) }
     }
 
     /// The distance from the anchor, in points, at which a row lags by the
@@ -49,13 +49,13 @@ public struct ListScrollSpring: Equatable {
     /// Larger values spread the falloff over more rows, which reads as a
     /// stiffer sheet; smaller values concentrate it near the anchor.
     public var resistanceFactor: CGFloat {
-        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 500) }
+        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 120) }
     }
 
     /// How quickly the stretch returns to zero, in radians per second.
     public var angularFrequency: Double {
         didSet {
-            angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 60)
+            angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 20)
             spring.config.angularFrequency = angularFrequency
         }
     }
@@ -64,7 +64,7 @@ public struct ListScrollSpring: Equatable {
     /// without crossing.
     public var dampingRatio: Double {
         didSet {
-            dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 1)
+            dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
             spring.config.dampingRatio = dampingRatio
         }
     }
@@ -79,15 +79,15 @@ public struct ListScrollSpring: Equatable {
     private var anchorY: CGFloat = 0
 
     public init(
-        maximumStretch: CGFloat = 24,
-        resistanceFactor: CGFloat = 500,
-        angularFrequency: Double = 60,
-        dampingRatio: Double = 1
+        maximumStretch: CGFloat = 20,
+        resistanceFactor: CGFloat = 120,
+        angularFrequency: Double = 20,
+        dampingRatio: Double = 0.75
     ) {
-        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24)
-        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 500)
-        self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 60)
-        self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 1)
+        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 20)
+        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 120)
+        self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 20)
+        self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
         // The library's own threshold snaps the value to the target, which at
         // a fast zero crossing would be a dead stop. Rest is decided here
         // instead, on the velocity as well as the value.
@@ -194,13 +194,23 @@ public struct ListScrollSpring: Equatable {
 
     // MARK: - Presets
 
-    /// The iMessage feel: rows spread noticeably, and settle without bouncing.
+    /// The iMessage feel, fitted to a recording of Messages rather than derived.
+    ///
+    /// Two relaxations were tracked frame by frame and the second-order
+    /// response was least-squares fitted to each; they agreed at ω ≈ 19–21 and
+    /// ζ ≈ 0.6–0.75, with a peak stretch of 12–16pt. See §2.5 of the design
+    /// document for the measurement, and ``ListScrollSpringTests`` for the two
+    /// traces the defaults are pinned against.
+    ///
+    /// The earlier values (ω = 60, `resistanceFactor` 500) were paper-derived
+    /// and wrong in both directions: three times too quick to settle, and a
+    /// falloff so wide that neighbouring rows parted by under 4pt.
     public static var messages: Self { .init() }
 
-    /// The same idea at a quarter of the volume, for lists where the effect
-    /// should be felt rather than seen.
+    /// The same idea at half the volume, for lists where the effect should be
+    /// felt rather than seen.
     public static var subtle: Self {
-        .init(maximumStretch: 12, resistanceFactor: 800, angularFrequency: 120)
+        .init(maximumStretch: 8, resistanceFactor: 240, angularFrequency: 26, dampingRatio: 0.9)
     }
 
     // MARK: - Validation

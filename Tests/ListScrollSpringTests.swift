@@ -116,13 +116,18 @@ struct ListScrollSpringTests {
 
     /// What a plausible scroll speed actually stretches by.
     ///
-    /// The point of the frequency is that ordinary scrolling lands inside the
-    /// budget, where rows fall behind by graded amounts, and only a fling
-    /// saturates, where they all lag by the same 24pt and the effect flattens
-    /// out. A frequency low enough to saturate at reading speed would throw
-    /// the whole gradient away.
+    /// This pinned the opposite claim while the frequency was paper-derived:
+    /// that ordinary scrolling stays inside the budget and only a fling
+    /// saturates. Measuring Messages retired it. At the fitted ω the stretch
+    /// reaches the budget from roughly 300pt/s up, and the recording agrees —
+    /// through every flick in it the far field moved as one rigid block, with
+    /// all of the spread concentrated into the first row or two.
+    ///
+    /// So the speed the effect reads is a slow one. Below ~250pt/s the stretch
+    /// is graded; above it the gesture always looks the same, and what varies
+    /// between gestures is how long the budget stays spent, not how big it is.
     @Test
-    func ordinaryScrollingStaysInsideTheBudgetAndFlingsSaturate() {
+    func slowScrollingIsGradedAndAnythingBriskSaturates() {
         func steadyStretch(scrollingAt velocity: CGFloat, hz: Double) -> CGFloat {
             var spring = ListScrollSpring()
             let deltaTime = 1.0 / hz
@@ -136,28 +141,30 @@ struct ListScrollSpringTests {
             return spring.stretch
         }
 
-        #expect(steadyStretch(scrollingAt: 300, hz: 120) < 12)
-        #expect(steadyStretch(scrollingAt: 600, hz: 120) < 20)
-        #expect(steadyStretch(scrollingAt: 2400, hz: 120) == 24)
-        // Monotone in speed, so the effect reads as speed.
-        #expect(steadyStretch(scrollingAt: 300, hz: 120) < steadyStretch(scrollingAt: 600, hz: 120))
+        #expect(steadyStretch(scrollingAt: 100, hz: 120) < 8)
+        #expect(steadyStretch(scrollingAt: 200, hz: 120) < 16)
+        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 20)
+        // Monotone where it is graded, so slow scrolling still reads as speed.
+        #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 200, hz: 120))
     }
 
     /// Steady stretch depends on the frame rate, and the paper figure is an
     /// upper bound rather than the answer.
     ///
     /// Injecting a per-frame delta into a discrete relaxation under-relaxes,
-    /// by more at 60 Hz than at 120 Hz: `2ζv/ω` predicts 20pt for 600pt/s at
-    /// the defaults, and the model gives 17.5pt at 120 Hz and 15.0pt at 60 Hz.
-    /// The gap is small enough to leave alone — the same gesture is ~14%
-    /// slacker on a 60 Hz display — but not small enough to discover by
-    /// accident later.
+    /// by more at 60 Hz than at 120 Hz, so the same gesture is slacker on a
+    /// 60 Hz display. The gap is small enough to leave alone — fixing it means
+    /// making the injection dt-independent, which is the whole integrator —
+    /// but not small enough to discover by accident later.
+    ///
+    /// Measured below the budget, since at the fitted frequency any speed
+    /// worth calling scrolling clamps, and a clamped value hides the ratio.
     @Test
     func steadyStretchIsFrameRateDependentByAKnownAmount() {
         func ratioToContinuousLimit(hz: Double) -> CGFloat {
             var spring = ListScrollSpring()
             let deltaTime = 1.0 / hz
-            let velocity: CGFloat = 600
+            let velocity: CGFloat = 100
             for _ in 0 ..< 3000 {
                 spring.advance(
                     scrollDelta: velocity * CGFloat(deltaTime),
@@ -165,12 +172,65 @@ struct ListScrollSpringTests {
                     anchorY: 0
                 )
             }
-            return spring.stretch / (2 * velocity / CGFloat(spring.angularFrequency))
+            let continuous = 2 * CGFloat(spring.dampingRatio) * velocity
+                / CGFloat(spring.angularFrequency)
+            return spring.stretch / continuous
         }
 
-        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.875) < 0.01)
-        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.751) < 0.01)
+        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.944) < 0.005)
+        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.889) < 0.005)
         #expect(ratioToContinuousLimit(hz: 60) < ratioToContinuousLimit(hz: 120))
+    }
+
+    /// The relaxation the defaults are fitted to.
+    ///
+    /// Two gaps were tracked frame by frame through a screen recording of
+    /// Messages — one per gesture, in different parts of the conversation —
+    /// and each was least-squares fitted to a second-order response. They
+    /// landed at ω = 19.0/ζ = 0.74 and ω = 21.0/ζ = 0.60, which is where the
+    /// defaults come from.
+    ///
+    /// Pinned on how long the opening takes to halve rather than on the whole
+    /// curve: the two traces agree on that to within 4ms (64 and 68), and
+    /// disagree on the tail by a factor the model could not sit inside anyway
+    /// (they reach a tenth at 136ms and 100ms). A 60 Hz window capture is
+    /// worth the half-life and not much past it.
+    @Test
+    func theDefaultsRelaxLikeTheRecordingTheyWereFittedTo() {
+        let hz = 60.0
+        let deltaTime = 1.0 / hz
+        var spring = ListScrollSpring()
+        // Seed the budget and let it go: the fits put the residual velocity at
+        // the peak under 30px/s, which is nothing against a 36px opening.
+        spring.advance(scrollDelta: spring.maximumStretch, deltaTime: 1e-6, anchorY: 0)
+        let peak = spring.stretch
+        #expect(peak > 0)
+
+        var curve: [CGFloat] = [peak]
+        for _ in 0 ..< 40 {
+            spring.advance(scrollDelta: 0, deltaTime: deltaTime, anchorY: 0)
+            curve.append(spring.stretch)
+        }
+
+        func milliseconds(toReach fraction: CGFloat) -> TimeInterval {
+            guard let frame = curve.firstIndex(where: { $0 / peak <= fraction }) else { return .infinity }
+            return Double(frame) / hz * 1000
+        }
+
+        // Measured: 64ms and 68ms.
+        #expect((50.0 ... 85.0).contains(milliseconds(toReach: 0.5)), "half-life \(milliseconds(toReach: 0.5))ms")
+        // Measured: 100ms and 136ms — the traces themselves span that.
+        #expect((85.0 ... 160.0).contains(milliseconds(toReach: 0.1)), "tenth at \(milliseconds(toReach: 0.1))ms")
+        // Monotone down to the tenth: the recording shows no bounce on the way.
+        let toTenth = curve.prefix(while: { $0 / peak > 0.1 })
+        #expect(zip(toTenth, toTenth.dropFirst()).allSatisfy { $0 > $1 })
+
+        // And barely any bounce past it. One trace undershot by 3% of its peak
+        // and the other not at all, which is what keeps the damping near 0.75:
+        // the half-life alone cannot tell ζ from ω, since only their product
+        // sets it. A ζ of 0.3 has the same half-life and rebounds by a third.
+        let undershoot = -(curve.min() ?? 0) / peak
+        #expect(undershoot < 0.08, "rebounds by \\(undershoot * 100)% of the peak")
     }
 
     // MARK: - Bounds
@@ -378,10 +438,10 @@ struct ListScrollSpringTests {
         spring.angularFrequency = 100_000
         spring.dampingRatio = .infinity
 
-        #expect(spring.maximumStretch == 24)
+        #expect(spring.maximumStretch == 20)
         #expect(spring.resistanceFactor == 1)
         #expect(spring.angularFrequency == 500)
-        #expect(spring.dampingRatio == 1)
+        #expect(spring.dampingRatio == 0.75)
     }
 
     /// A zero budget is the off switch, and it has to be free of residue.

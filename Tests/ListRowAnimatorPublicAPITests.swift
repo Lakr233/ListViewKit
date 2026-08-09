@@ -385,8 +385,8 @@ struct ListRowAnimatorPublicAPITests {
         let messages = ListScrollSpring.messages
         let subtle = ListScrollSpring.subtle
 
-        #expect(messages.maximumStretch == 24)
-        #expect(subtle.maximumStretch == 12)
+        #expect(messages.maximumStretch == 20)
+        #expect(subtle.maximumStretch == 8)
         #expect(subtle.maximumStretch < messages.maximumStretch)
         #expect(subtle.angularFrequency > messages.angularFrequency)
         #expect(messages.maximumDisplacement == messages.maximumStretch)

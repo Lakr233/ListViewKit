@@ -18,6 +18,8 @@ final class ViewController: UIViewController {
         edgesForExtendedLayout = []
         view.backgroundColor = .systemBackground
 
+        listView.rowAnimator = ListScrollSpring.messages
+
         listView.rows {
             ListRow(SimpleRow.self)
                 .height { item, context in
