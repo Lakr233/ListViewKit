@@ -152,7 +152,6 @@ CollectionKit 的滚动 animator 全是 `contentOffset` 的纯函数（无状态
 
    每帧：
        Δ  = 本帧可见滚动位移（已扣补偿，见 §3.3）
-       Δ ← clamp(Δ, ±maximumStretch)     单帧注入上限，见 §2.3
        spring.setCurrent(spring.value + Δ, spring.velocity)
        spring.setTarget(0)
        spring.update(dt)                  dt 已上钳到 1/30
@@ -218,10 +217,16 @@ setter 里 clamp 到 `maximumStretch ∈ [0, 200]`、`resistanceFactor ∈ [1, 1
 一个足够大的反向 Δ 可以让 S 直接从 +20 跳到 −20，**中间那个近零状态从来没有被渲染过**。
 旧的一侧全部瞬间归零，新的一侧瞬间弹出。回弹和急停急反手都会碰到，不是病态输入。
 
-处理办法是**限幅，不是消除**：单帧注入的 Δ 钳到 ±`maximumStretch`（§2.2），
-于是过零时的最坏单帧跳变有界，且界就是 `maximumStretch` 本身。实践中远小于这个数，
-因为真实的反转要先减速。这一条要写成 property test：合成一次符号翻转，
-断言任意一行的 `d` 单帧变化量 ≤ `maximumStretch`——**断言的是有界，不是连续**。
+处理办法是**限幅，不是消除**：过零时的最坏单帧跳变有界，界就是 `maximumStretch`。
+这一条写成了 property test：合成符号翻转，断言任意一行的 `d` 单帧变化量
+≤ `maximumStretch`——**断言的是有界，不是连续**。
+
+**本文原先为此加了「单帧注入 Δ 钳到 ±maximumStretch」，落地时删掉了。**
+故障注入证明它不承重：去掉它，全部 18 条测试照样全绿。原因是这个界由另外两条
+性质联合给出，与注入量无关——状态钳制（§2.2）把 `|S|` 压在预算内，而**单边权重
+让任何一行都只读得到一个符号的 S**（另一侧恒为 0）。所以一行的 `d` 只在
+`[0, +max]` 或 `[−max, 0]` 里动，从来不会经历 `−max → +max` 那种 2 倍摆幅。
+注入限幅防的是一个由别处保证的不变量。删了。
 
 所以这里不需要任何逐行钳制的后处理。行序不变是模型的性质，不是补丁。
 
@@ -287,8 +292,23 @@ row i 自己就会动一点（`|c − a|` 是它中心到锚点的距离，通�
 - **`maximumStretch`** 管快滑。`v` 一大 `S` 就顶到上限，此时观感完全由它决定。
 - **`angularFrequency`** 管慢滑和松手后的回落。
 
-这个 60 是纸面推的，第 5 步真机确认。推导本身的价值不在于给出精确值，
-而在于给出**依赖方向**：ω 翻倍则稳态减半，v 翻倍则稳态翻倍。调参时按这个走。
+**落地时实测了，`2ζv/ω` 是上界不是等式。** 每帧注入位移再做一次离散松弛会欠松弛，
+帧率越低欠得越多：默认参数、v = 600 pt/s 下，公式给 20pt，模型给
+
+```
+   120Hz   17.5 pt   （公式的 87.5%）
+    60Hz   15.0 pt   （公式的 75.1%）
+```
+
+所以**同一个手势在 60Hz 屏上比 120Hz 松约 14%**。差值小到不值得补偿——要补就得把
+注入改成与 dt 无关的形式，那会牵动整个积分器——但大到不该等以后偶然发现，
+已经用测试钉住这两个比值。
+
+结论方向不变，而且被实测确认：ω = 60 时 600 pt/s 的常速滚动拉伸 17.5pt，
+在 24pt 预算内**有梯度**；1200 pt/s 才顶满。退回第一版的 ω = 30 会在常速下直接饱和——
+这条现在是一条会失败的测试，不再只是一个论证。
+
+依赖方向照旧：ω 翻倍则稳态减半，v 翻倍则稳态翻倍。剩下的是手感取向，第 4 步真机定。
 
 ---
 
@@ -387,6 +407,43 @@ UIKit 那边「用户拖拽 / 惯性」没有自己的 link，落在 `scrollView
 这样做还顺手解决了启动问题：第一版里 `wantsNextFrame` 静止时是 false，
 而只有 tick 才会注入 Δ，于是**没有任何东西能点燃第一帧**。
 入账即唤醒之后，link 由列表点火、由 animator 决定何时熄火。
+
+### 3.4 熄火判据不能用 `SpringInterpolation.completed`
+
+本文两处写过 `wantsNextFrame: Bool { !spring.completed }`。读了依赖的源码之后
+这条不能要：
+
+```swift
+// SpringInterpolation+Context.swift
+var completed: Bool {
+    abs(context.currentPos.distance(to: context.targetPos)).isLessThanOrEqualTo(config.threshold)
+}
+```
+
+**只比位置，不看速度。** 欠阻尼的弹簧全速穿过零点的那一帧，位置恰好落在
+`threshold` 带里，`completed` 就是 true——而「到达静止」正是我们把状态清零的时机，
+于是弹簧在第一次过零时被当场掐死。
+
+这个坑的阴险之处在于**默认帧率下它是概率性的**。ζ = 0.2、ω = 60 时过零附近的速度
+约 1400 pt/s，120Hz 一帧走 11.8pt，落进 ±0.05 的窗口只有约 0.4% 的机会——
+所以它会表现为「偶尔一次回弹特别短」，而不是稳定复现的 bug。
+
+实测（细采样 dt = 1e-5，让过零一定被采到）：
+
+```
+   自有判据（位置 + 速度）    过零 10 次，首次过零后仍有 12.6pt 摆幅
+   仅位置（= completed）      过零  0 次，首次过零后摆幅 0        ← 当场死亡
+```
+
+所以静止判据自己定，两个量都要看，并且 `SpringInterpolation` 的 `threshold`
+配成 0、`stopWhenHitTarget` 配成 false，把这个决定完全收回来：
+
+```
+   isAtRest  ⟺  |S| ≤ 0.05pt  且  |velocity| ≤ 0.5pt/s
+```
+
+对应的测试不能写成「逐帧断言 not at rest」——那条在 120Hz 下靠运气通过，
+注入错误也发现不了（试过，全绿）。要断言的是**过零穿越的次数**。
 
 ---
 
@@ -633,16 +690,16 @@ public struct ListScrollSpring: ListRowAnimator, Equatable {
     private var anchorY: CGFloat = 0
 
     public var maximumDisplacement: CGFloat { maximumStretch }
-    public var wantsNextFrame: Bool { !spring.completed }
+    public var wantsNextFrame: Bool { !isAtRest }               // 不是 completed，见 §3.4
 
     public mutating func willUpdate(_ context: ListAnimatorContext) {
-        let delta = context.scrollDelta.clamped(to: -maximumStretch ... maximumStretch)
-        spring.setCurrent(spring.value + delta, spring.context.currentVel)
+        spring.setCurrent(spring.value + context.scrollDelta, spring.context.currentVel)
         spring.setTarget(0)
         spring.update(withDeltaTime: context.deltaTime)
         if abs(spring.value) > maximumStretch {                 // 写回状态，速度归零
             spring.setCurrent(spring.value.sign * maximumStretch, 0)
         }
+        if isAtRest { spring.setCurrent(0, 0) }                 // 静止时零残留
         anchorY = context.pointerY ?? trailingEdge(of: context)
     }
 
@@ -867,14 +924,19 @@ DEBUG 那条断言改查 `placedFrame`（§4.1），所以它继续在布局真�
                                                     不重复 configure 已挂载的行
                                                     （注入错位可复现失败）
 
-  1  feat: 弹簧纯模型                          不 import UIKit/AppKit 的 struct
-     标量弹簧 + 单边权重 + 参数校验            property test：
-     钳制写回状态、单帧注入限幅                 · 任意初态都收敛到 0
-     此时还是 internal，不承诺任何形状          · |d| ≤ maximumStretch
+  1  feat: 弹簧纯模型   ✅ 已落地              不 import UIKit/AppKit 的 struct
+     标量弹簧 + 单边权重 + 参数校验            18 条 property test，全部经故障注入
+     钳制写回状态、自有静止判据                 验证过（注入错误必须有测试失败）：
+     此时还是 internal，不承诺任何形状          · 任意初态都收敛到 0，且落到精确 0
+                                              · |d| ≤ maximumStretch
                                               · d(i) 对索引非降（§2.3 的不变量）
+                                              · 任意行高（含 0 与 4000）都不重叠
                                               · 符号翻转时单帧 |Δd| ≤ maximumStretch
                                                 （有界，不是连续 —— §2.3）
                                               · 内部状态不超过 maximumStretch
+                                              · 高速过零不被误判为静止（§3.4）
+                                              · 常速滚动不饱和、快滑饱和（ω = 60）
+                                              · 稳态的帧率依赖被钉住（§2.5）
                                               · 非法参数（0/负/NaN）不破坏以上任何一条
                                               · dt 上钳到 1/30 后仍收敛
 
