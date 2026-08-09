@@ -322,7 +322,53 @@ struct ListRowAnimatorPublicAPITests {
         }
     }
 
+    /// The frame a gesture starts on is already displaced.
+    ///
+    /// Two clocks write the one position a reader sees: `contentOffset`, by the
+    /// scroll view, and `presentationOffset`, by the animator's link. They only
+    /// agree while both are running, and on the first frame of a gesture only
+    /// one is — the link is created by this very pass and a display link does
+    /// not call back on the frame it is built. So the rows were placed at the
+    /// new offset and displaced by the stretch from before the gesture, which
+    /// is zero, and the real value arrived a frame later on top of that frame's
+    /// own travel.
+    ///
+    /// Asserted on `presentationOffset` rather than on the spring, because the
+    /// spring advancing is not the claim — the claim is that what reached the
+    /// rows in this pass matches the offset that reached them in the same pass.
+    @Test
+    func theFrameAGestureStartsOnIsAlreadyDisplaced() {
+        let listView = makeListView()
+        let window = NSWindow(
+            contentRect: listView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = listView
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = ListScrollSpring.messages
+        listView.layoutSubtreeIfNeeded()
+        // Nothing has moved yet, so nothing is owed a frame and no link exists.
+        #expect(listView.rowAnimatorLink == nil)
+        #expect(listView.visibleRowViews.allSatisfy { $0.presentationOffset == 0 })
+
+        // One frame of a brisk drag, landed by one layout pass. No link has
+        // called back, because none existed when the offset changed.
+        listView.contentOffset.y += 24
+        listView.layoutSubtreeIfNeeded()
+
+        let displaced = listView.visibleRowViews.filter { $0.presentationOffset != 0 }
+        #expect(!displaced.isEmpty, "the first frame of the gesture landed with no displacement at all")
+        #expect(listView.rowAnimatorLink != nil, "and nothing was scheduled to fix it later")
+    }
+
     /// A frame advances the animator once, however many layouts it takes.
+    ///
+    /// Plus exactly one more for the whole run: the frame a gesture starts on,
+    /// which the layout pass has to integrate itself because the link it is
+    /// about to create will not call back until the next one.
     @Test
     func oneFramePerTickAndNoTicksWithoutFrames() {
         let listView = makeListView()
@@ -347,7 +393,7 @@ struct ListRowAnimatorPublicAPITests {
             listView.layoutSubtreeIfNeeded()
             listView.tickRowAnimator(duration: 1.0 / 120.0)
         }
-        #expect(listView.animatorTickCount == 10)
+        #expect(listView.animatorTickCount == 11, "ten frames plus the one the gesture started on")
 
         // Settled, and then left alone: no further frames are taken.
         for _ in 0 ..< 400 {

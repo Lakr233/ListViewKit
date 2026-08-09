@@ -63,9 +63,44 @@ extension ListView {
     /// A displacement changes every frame for rows that did not move at all,
     /// so it needs a pass that visits every mounted row unconditionally.
     func applyRowAnimator() {
-        guard rowAnimator != nil, !prefersReducedMotion else { return }
+        guard rowAnimator != nil, !isDrivingRowAnimator, !prefersReducedMotion else { return }
+        catchUpOnTheFrameNoLinkWillDeliver()
         applyRowDisplacements()
         updateRowAnimatorLink()
+    }
+
+    /// What the first frame of a gesture is integrated by.
+    ///
+    /// No link has run, so no frame has been measured. The shorter of the two
+    /// rates a display runs at under-relaxes rather than over-relaxes, and
+    /// either way the next frame — which does have a duration — corrects it.
+    private static var firstFrameOfAGesture: TimeInterval { 1.0 / 120.0 }
+
+    /// Integrates the travel this pass is about to land on screen, on the one
+    /// frame where nothing else will.
+    ///
+    /// The link is created at the end of this pass, and a display link does not
+    /// call back on the frame it is built. So the first frame of every gesture
+    /// used to place the rows at the new offset and displace them by the
+    /// stretch from before the gesture began, which is zero — and the step to
+    /// the real value landed on the next frame, on top of that frame's own
+    /// travel. That is the whole of the two-clock problem: `contentOffset` and
+    /// `presentationOffset` are written by different clocks, and this is the
+    /// one frame in a gesture where they are a frame apart. Once the link is
+    /// running, its callback and the layout pass are in the same run-loop turn
+    /// and reach the render server in one transaction, in either order.
+    ///
+    /// Rows placed at a new offset with a stale displacement were tolerable
+    /// while the anchor kept every row saturated and the difference was a
+    /// common-mode shift. With the anchor on the content it is a dozen points
+    /// of differential appearing a frame late, which is exactly the onset
+    /// wobble the simulator recording measured at ~30pt.
+    private func catchUpOnTheFrameNoLinkWillDeliver() {
+        // `window` is the same condition `updateRowAnimatorLink` creates on: no
+        // window, no link, and then this is not catching up on anything — it is
+        // the whole clock, which is not this function's job to be.
+        guard rowAnimatorLink == nil, window != nil, scrollLedger.pending != 0 else { return }
+        advanceRowAnimator(duration: Self.firstFrameOfAGesture)
     }
 
     /// Re-reads how far the animator may displace a row.
@@ -180,21 +215,22 @@ extension ListView {
     /// last frame's.
     func tickRowAnimator(duration: TimeInterval) {
         guard rowAnimator != nil, !isDrivingRowAnimator, !prefersReducedMotion else { return }
-        animatorTickCount &+= 1
+        advanceRowAnimator(duration: duration)
+        applyRowDisplacements()
+        updateRowAnimatorLink()
+    }
 
+    /// Hands the animator one frame's travel and one frame's worth of time.
+    private func advanceRowAnimator(duration: TimeInterval) {
+        animatorTickCount &+= 1
         scrollLedger.accrue(offsetY: contentOffset.y)
         let context = animatorContext(
             scrollDelta: scrollLedger.consume(),
             deltaTime: min(duration, Self.longestAnimatorFrame)
         )
-        do {
-            isDrivingRowAnimator = true
-            defer { isDrivingRowAnimator = false }
-            rowAnimator?.willUpdate(context)
-        }
-
-        applyRowDisplacements()
-        updateRowAnimatorLink()
+        isDrivingRowAnimator = true
+        defer { isDrivingRowAnimator = false }
+        rowAnimator?.willUpdate(context)
     }
 
     /// Keeps a link alive exactly as long as something is owed a frame.
