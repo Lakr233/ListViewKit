@@ -16,6 +16,10 @@ final class ViewController: NSViewController {
     override func viewDidLoad() {
         super.viewDidLoad()
 
+        // Off unless a host asks for it, which is the whole point of the
+        // extension point — so an example that does not ask shows nothing.
+        listView.rowAnimator = ListScrollSpring.messages
+
         listView.rows {
             ListRow(SimpleRow.self)
                 .height { item, context in
