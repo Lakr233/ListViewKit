@@ -362,10 +362,10 @@ struct ListScrollViewAppKitTests {
         scrollView.contentOffset = CGPoint(x: 0, y: 500)
 
         scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 1, phase: .began))
-        #expect(scrollView.isUserInteractingWithScroll)
+        #expect(scrollView.isScrollOffsetOwnedByUser)
         scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 0, phase: .ended))
 
-        #expect(!scrollView.isUserInteractingWithScroll)
+        #expect(!scrollView.isScrollOffsetOwnedByUser)
         scrollView.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
         #expect(scrollView.scrollingDisplayLink != nil)
         scrollView.cancelCurrentScrolling()
@@ -394,7 +394,7 @@ struct ListScrollViewAppKitTests {
             timestamp: initialTimestamp + 11_000_000
         ))
 
-        #expect(scrollView.isUserInteractingWithScroll)
+        #expect(scrollView.isScrollOffsetOwnedByUser)
         #expect(scrollView.scrollingDisplayLink != nil)
         scrollView.cancelCurrentScrolling()
     }
@@ -445,7 +445,7 @@ struct ListScrollViewAppKitTests {
             timestamp: initialTimestamp + 501_000_000
         ))
         #expect(scrollView.contentOffset == offsetAtFollowUpTouch)
-        #expect(scrollView.isUserInteractingWithScroll)
+        #expect(scrollView.isScrollOffsetOwnedByUser)
         scrollView.scrollWheel(with: try makeWheelEvent(
             deltaY: 0,
             momentumPhase: .ended,
@@ -571,7 +571,7 @@ struct ListScrollViewAppKitTests {
             momentumPhase: .began
         ))
 
-        #expect(!scrollView.isUserInteractingWithScroll)
+        #expect(!scrollView.isScrollOffsetOwnedByUser)
         #expect(scrollView.scrollingDisplayLink != nil)
         let offsetAtHandoff = scrollView.contentOffset
 

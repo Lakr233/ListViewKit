@@ -81,7 +81,7 @@ extension ListView {
                 return
             }
         #endif
-        if isUserInteractingWithScroll {
+        if isScrollOffsetOwnedByUser {
             scheduleSliceDrain(after: Self.interactionPollInterval)
             return
         }

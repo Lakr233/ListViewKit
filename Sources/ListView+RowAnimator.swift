@@ -63,44 +63,56 @@ extension ListView {
     /// A displacement changes every frame for rows that did not move at all,
     /// so it needs a pass that visits every mounted row unconditionally.
     func applyRowAnimator() {
-        guard rowAnimator != nil, !isDrivingRowAnimator, !prefersReducedMotion else { return }
-        catchUpOnTheFrameNoLinkWillDeliver()
+        guard rowAnimator != nil, !isDrivingRowAnimator else { return }
+        guard !prefersReducedMotion else {
+            // Nothing will consume the ledger while the effect is switched
+            // off, and travel banked across a whole session of it would be
+            // spent in one frame if the setting were turned back on.
+            scrollLedger.reset(offsetY: contentOffset.y)
+            return
+        }
+        integrateTravelThisPassIsAboutToLand()
         applyRowDisplacements()
         updateRowAnimatorLink()
     }
 
-    /// What the first frame of a gesture is integrated by.
+    /// What a frame is worth when no link has measured one.
     ///
-    /// No link has run, so no frame has been measured. The shorter of the two
-    /// rates a display runs at under-relaxes rather than over-relaxes, and
-    /// either way the next frame — which does have a duration — corrects it.
-    private static var firstFrameOfAGesture: TimeInterval { 1.0 / 120.0 }
+    /// The shorter of the two rates a display runs at, so an unmeasured frame
+    /// under-relaxes rather than over-relaxes; the next frame, which does have
+    /// a duration, corrects it either way.
+    private static var unmeasuredFrame: TimeInterval { 1.0 / 120.0 }
 
-    /// Integrates the travel this pass is about to land on screen, on the one
-    /// frame where nothing else will.
+    /// Integrates the travel this pass is about to put on screen.
     ///
-    /// The link is created at the end of this pass, and a display link does not
-    /// call back on the frame it is built. So the first frame of every gesture
-    /// used to place the rows at the new offset and displace them by the
-    /// stretch from before the gesture began, which is zero — and the step to
-    /// the real value landed on the next frame, on top of that frame's own
-    /// travel. That is the whole of the two-clock problem: `contentOffset` and
-    /// `presentationOffset` are written by different clocks, and this is the
-    /// one frame in a gesture where they are a frame apart. Once the link is
-    /// running, its callback and the layout pass are in the same run-loop turn
-    /// and reach the render server in one transaction, in either order.
+    /// The division is: **the layout pass owns the travel, the link owns the
+    /// clock.** A pass that has accrued travel injects it here, so the
+    /// displacement it lands is the one that belongs with the offset it lands.
+    /// Time is left to the link, which is the only thing that knows how long a
+    /// frame was — unless there is no link, in which case this pass is also the
+    /// clock for one frame.
     ///
-    /// Rows placed at a new offset with a stale displacement were tolerable
-    /// while the anchor kept every row saturated and the difference was a
-    /// common-mode shift. With the anchor on the content it is a dozen points
-    /// of differential appearing a frame late, which is exactly the onset
+    /// Owning the travel by *link existence* was not enough, which is what the
+    /// first version of this got wrong. It caught the obvious case — the link
+    /// is created at the end of this pass and a display link does not call back
+    /// on the frame it is built, so the first frame of a gesture landed the new
+    /// offset with the stretch from before the gesture, which is zero — but not
+    /// the case where a link is already running because the previous gesture is
+    /// still unwinding. There the link ticks, consumes nothing, and only then
+    /// does the touch move the offset; the pass would see a live link, decline,
+    /// and land a stale displacement anyway. Sharing a run-loop turn does not
+    /// repair that: a tick cannot integrate an offset that had not moved yet.
+    ///
+    /// The travel is injected with no time attached when a link is running, so
+    /// the frame is still relaxed exactly once, by the tick that owns it.
+    ///
+    /// Any of this was tolerable while the anchor kept every row saturated and
+    /// a frame of lag was a common-mode shift. With the anchor on the content
+    /// it is a dozen points of *differential* arriving late, which is the onset
     /// wobble the simulator recording measured at ~30pt.
-    private func catchUpOnTheFrameNoLinkWillDeliver() {
-        // `window` is the same condition `updateRowAnimatorLink` creates on: no
-        // window, no link, and then this is not catching up on anything — it is
-        // the whole clock, which is not this function's job to be.
-        guard rowAnimatorLink == nil, window != nil, scrollLedger.pending != 0 else { return }
-        advanceRowAnimator(duration: Self.firstFrameOfAGesture)
+    private func integrateTravelThisPassIsAboutToLand() {
+        guard scrollLedger.pending != 0 else { return }
+        advanceRowAnimator(duration: rowAnimatorLink == nil ? Self.unmeasuredFrame : 0)
     }
 
     /// Re-reads how far the animator may displace a row.
@@ -152,13 +164,22 @@ extension ListView {
     }
 
     /// The context handed to the animator for this pass.
+    ///
+    /// Both rectangles are shifted into the space `placedFrame` is stated in.
+    /// The list keeps two: the engine lays rows out from zero, and
+    /// ``rectForRow(at:)`` adds `topInset` on the way to a view — so
+    /// ``viewportRect``, which the compensation anchor and the mounting
+    /// rectangle are measured against, sits `topInset` above the frame the
+    /// animator is handed for the same row. Handing over both spaces at once
+    /// would make every distance an implementation computes wrong by exactly
+    /// `topInset`, silently and only on lists that set one.
     private func animatorContext(scrollDelta: CGFloat, deltaTime: TimeInterval) -> ListAnimatorContext {
         .init(
-            viewportRect: viewportRect,
-            contentRect: contentRect,
+            viewportRect: viewportRect.offsetBy(dx: 0, dy: topInset),
+            contentRect: contentRect.offsetBy(dx: 0, dy: topInset),
             scrollDelta: scrollDelta,
             deltaTime: deltaTime,
-            isUserInteracting: isUserInteractingWithScroll
+            isUserInteracting: isScrollOffsetOwnedByUser
         )
     }
 
@@ -228,8 +249,9 @@ extension ListView {
             scrollDelta: scrollLedger.consume(),
             deltaTime: min(duration, Self.longestAnimatorFrame)
         )
+        let wasRunning = isDrivingRowAnimator
         isDrivingRowAnimator = true
-        defer { isDrivingRowAnimator = false }
+        defer { isDrivingRowAnimator = wasRunning }
         rowAnimator?.willUpdate(context)
     }
 

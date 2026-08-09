@@ -66,7 +66,7 @@ struct ListViewSliceDrainAppKitTests {
         #expect(listView.rowLayout.hasPendingRows)
 
         listView.scrollWheel(with: try wheelEvent(phase: .began))
-        #expect(listView.isUserInteractingWithScroll, "the drag never started")
+        #expect(listView.isScrollOffsetOwnedByUser, "the drag never started")
 
         let window = 0.2
         listView.sliceDrainPassCount = 0
@@ -97,7 +97,7 @@ struct ListViewSliceDrainAppKitTests {
         #expect(listView.rowLayout.hasPendingRows, "the drag should have held measurement off")
 
         listView.scrollWheel(with: try wheelEvent(phase: .ended))
-        #expect(!listView.isUserInteractingWithScroll, "the drag never ended")
+        #expect(!listView.isScrollOffsetOwnedByUser, "the drag never ended")
 
         for _ in 0 ..< 100 where listView.rowLayout.hasPendingRows {
             RunLoop.main.run(until: Date().addingTimeInterval(0.02))

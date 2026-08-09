@@ -29,6 +29,19 @@ import SpringInterpolation
         /// correction reads as a jump in the middle of the animation.
         var animatesContentSizeCorrection = false
 
+        /// See ``suppressAutoScroll()``.
+        public private(set) var isAutoScrollSuppressed = false
+
+        /// The viewport size the previous layout pass ran against. Offsets
+        /// route through layout too, so a resize is only recognisable by
+        /// comparing against what was laid out last.
+        var lastLaidOutViewportSize: CGSize?
+
+        /// `UIScrollView` bounces as part of decelerating, which ownership
+        /// already reports. Mirrors the AppKit property so the gate needs no
+        /// platform split.
+        var isReboundingFromOverscroll: Bool { false }
+
         /// The minimum point (in content view coordinates) that the view can be scrolled.
         public var minimumContentOffset: CGPoint {
             .init(x: -adjustedContentInset.left, y: -adjustedContentInset.top)
@@ -94,8 +107,12 @@ import SpringInterpolation
         private func reconcileOffsetWithContentSize() {
             // A finger, momentum or a rebound already owns the offset. Those
             // either clamp themselves every frame or are holding a deliberate
-            // overscroll, and interrupting one cancels the bounce.
-            guard !isUserInteractingWithScroll else { return }
+            // overscroll, and interrupting one cancels the bounce. Asked of
+            // ownership rather than of ``isUserInteractingWithScroll``: an
+            // offset outside the content is wrong regardless of whether the
+            // host is currently allowed to scroll, and this is the only thing
+            // left running that would notice.
+            guard !isScrollOffsetOwnedByUser else { return }
             if let target = scrollingTarget {
                 // A programmatic scroll keeps running, retargeted onto the new
                 // edge so it lands there instead of short of it.
@@ -244,6 +261,14 @@ import SpringInterpolation
 
         override open func layoutSubviews() {
             super.layoutSubviews()
+            // Both of these before `layoutContent`, so the content-size change
+            // it makes already sees the suppression.
+            suppressAutoScrollIfViewportResized()
+            // The platform's own drag and deceleration never call into this
+            // class, so the tail after one is armed from here.
+            if isTracking || isDragging || isDecelerating {
+                suppressAutoScroll()
+            }
             // Every offset change ends up here — changing the bounds is what
             // scrolling is — so this is where travel is counted, including the
             // dragging and deceleration `UIScrollView` performs without ever
@@ -513,6 +538,22 @@ import SpringInterpolation
         /// correction reads as a jump in the middle of the animation.
         var animatesContentSizeCorrection = false
 
+        /// See ``suppressAutoScroll()``.
+        public private(set) var isAutoScrollSuppressed = false
+
+        /// The viewport size the previous layout pass ran against. Offsets
+        /// route through layout too, so a resize is only recognisable by
+        /// comparing against what was laid out last.
+        var lastLaidOutViewportSize: CGSize?
+
+        /// True while the rebound curve is still carrying the content back to
+        /// an edge.
+        ///
+        /// Deliberately not part of ``isScrollOffsetOwnedByUser``: a rebound
+        /// carries a `scrollingTarget`, and the clamp has to stay free to
+        /// retarget that onto an edge the content moved.
+        var isReboundingFromOverscroll: Bool { _isBouncing }
+
         /// The minimum point (in content view coordinates) that the view can be scrolled.
         public var minimumContentOffset: CGPoint {
             .init(x: -contentInsets.left, y: -contentInsets.top)
@@ -589,6 +630,9 @@ import SpringInterpolation
 
         override open func layout() {
             super.layout()
+            // Before `layoutContent`, so the content-size change it makes
+            // already sees the suppression.
+            suppressAutoScrollIfViewportResized()
             // Every offset write marks this view for layout, so this is where
             // travel is counted, whichever of the physics produced it.
             scrollLedger.accrue(offsetY: contentOffset.y)
@@ -738,8 +782,12 @@ import SpringInterpolation
         private func reconcileOffsetWithContentSize() {
             // A finger, momentum or a rebound already owns the offset. Those
             // either clamp themselves every frame or are holding a deliberate
-            // overscroll, and interrupting one cancels the bounce.
-            guard !isUserInteractingWithScroll else { return }
+            // overscroll, and interrupting one cancels the bounce. Asked of
+            // ownership rather than of ``isUserInteractingWithScroll``: an
+            // offset outside the content is wrong regardless of whether the
+            // host is currently allowed to scroll, and this is the only thing
+            // left running that would notice.
+            guard !isScrollOffsetOwnedByUser else { return }
             if let target = scrollingTarget {
                 // A programmatic scroll keeps running, retargeted onto the new
                 // edge so it lands there instead of short of it.
@@ -769,6 +817,9 @@ import SpringInterpolation
 
         fileprivate func verticalScrollerTrackingDidEnd() {
             _isVerticalScrollerTracking = false
+            // The same grace the wheel gets. Letting go of the knob is a reader
+            // finishing a scroll, not inviting one.
+            suppressAutoScroll()
         }
 
         func nativeScrollerDidScroll(to offsetY: CGFloat) {
@@ -806,6 +857,16 @@ import SpringInterpolation
                 }
                 return
             }
+
+            // Armed on every event this view acts on, rather than on the one
+            // that ends the gesture: a discrete wheel has no end to speak of,
+            // and a trackpad gesture has three of them (lift, momentum,
+            // rebound), so re-arming a debounce costs the same as asking which
+            // one this is. Below the return above, though — AppKit goes on
+            // sending momentum for a second after a handoff the view already
+            // stopped acting on, and a window held open by discarded events
+            // would outlast a list that has visibly come to rest.
+            suppressAutoScroll()
 
             // A new direct touch or phase-less wheel event interrupts the rebound
             // and starts a fresh interaction.
@@ -1191,13 +1252,119 @@ import SpringInterpolation
     #error("ListViewKit requires UIKit or AppKit")
 #endif
 
+extension ListScrollView {
+    /// How long auto scroll stays off after the event that suppressed it.
+    ///
+    /// Long enough to bridge the gap between the events of one gesture, and
+    /// short enough that a reader who stops gets their list following the tail
+    /// again without noticing they waited.
+    ///
+    /// The gap that sets the floor is a detented mouse wheel's: momentum
+    /// frames and live-resize ticks arrive every frame, but a wheel turned
+    /// deliberately — one notch at a time, reading back through a log — leaves
+    /// a fifth of a second between notches, and every gap the window fails to
+    /// cover is a frame where the host scrolls the reader back to the tail.
+    /// That is the jitter this exists to remove, so the window is sized to
+    /// outlast a slow notch rather than a fast one.
+    static var autoScrollSuppressionWindow: TimeInterval { 0.25 }
+
+    /// Holds auto scroll off for ``autoScrollSuppressionWindow`` seconds,
+    /// restarting the window if one is already running.
+    ///
+    /// A reader who just moved the viewport — by scrolling it, or by resizing
+    /// the window under it — is looking at what they moved it to. Following
+    /// the content instead would take it away from them, and the events that
+    /// say so arrive in bursts, so the window is a debounce rather than a
+    /// timeout: it expires ``autoScrollSuppressionWindow`` seconds after the
+    /// *last* one.
+    ///
+    /// Scheduled in the common run loop modes, so a live resize — which runs
+    /// its own tracking loop — still both re-arms and expires the window
+    /// while the drag is in progress.
+    func suppressAutoScroll() {
+        isAutoScrollSuppressed = true
+        NSObject.cancelPreviousPerformRequests(
+            withTarget: self,
+            selector: #selector(endAutoScrollSuppression),
+            object: nil
+        )
+        perform(
+            #selector(endAutoScrollSuppression),
+            with: nil,
+            afterDelay: Self.autoScrollSuppressionWindow,
+            inModes: [.common]
+        )
+    }
+
+    @objc private func endAutoScrollSuppression() {
+        isAutoScrollSuppressed = false
+        // An offset the content left outside its bounds while this was set
+        // still has to be clamped: ``reconcileOffsetWithContentSize`` only ever
+        // runs from a layout pass, and with the reader stopped nothing else
+        // would schedule one.
+        //
+        // Only then, though. Invalidating on every expiry would close a loop on
+        // UIKit, where the pass re-arms the window from `isTracking`: a finger
+        // resting motionless on the list would drive a full layout ten times a
+        // second, on content that is not moving at all.
+        guard !isContentOffsetWithinBounds(offset: contentOffset) else { return }
+        #if canImport(UIKit)
+            setNeedsLayout()
+        #elseif canImport(AppKit)
+            needsLayout = true
+        #endif
+    }
+
+    /// Suppresses auto scroll when the viewport changed size since the last
+    /// layout pass.
+    ///
+    /// Reading the bounds rather than the frame is what makes this cheap to
+    /// call from layout: the frame arrives through several setters the
+    /// platforms do not agree on, while every one of them lands here, and
+    /// scrolling moves only the bounds *origin*.
+    func suppressAutoScrollIfViewportResized() {
+        let size = bounds.size
+        // Only a viewport with area is a viewport the reader saw, and only
+        // those are worth remembering. Auto Layout lays a view out at zero
+        // before it lays it out for real, and a list that took that second
+        // pass for a resize would open a conversation at the top: the host's
+        // first scroll to the end arrives well inside the window and would be
+        // declined. Skipping the empty sizes rather than the transitions out
+        // of them also gets a collapsed pane right — reopening one at the size
+        // it had is not a change the reader needs protecting from, and
+        // reopening it at a different size still is.
+        guard size.width > 0, size.height > 0 else { return }
+        defer { lastLaidOutViewportSize = size }
+        guard let previous = lastLaidOutViewportSize, previous != size else { return }
+        suppressAutoScroll()
+    }
+}
+
 public extension ListScrollView {
-    /// Whether direct user scrolling or platform momentum is currently active.
+    /// Whether the list is under the reader's control rather than free to be
+    /// scrolled on its behalf.
+    ///
+    /// True while direct user scrolling, platform momentum or a rebound is
+    /// active, and for ``autoScrollSuppressionWindow`` seconds after either
+    /// that or a change to the viewport's size — see ``suppressAutoScroll()``.
     ///
     /// Consumers can use this to avoid retargeting programmatic scrolling while
     /// the user is inspecting earlier content. Programmatic spring scrolling is
     /// intentionally not reported as user interaction.
+    ///
+    /// This is the question a host asks — may I scroll this list for you —
+    /// and not the question of who is holding the offset right now, which is
+    /// ``isScrollOffsetOwnedByUser``. The two differ by the suppression
+    /// window, and the list itself only ever asks the second one: an offset
+    /// left outside the content has to be clamped whether or not the host
+    /// would have been welcome to scroll.
     var isUserInteractingWithScroll: Bool {
+        isScrollOffsetOwnedByUser || isReboundingFromOverscroll || isAutoScrollSuppressed
+    }
+
+    /// Whether a finger, a trackpad, or the platform's own momentum currently
+    /// owns the content offset.
+    var isScrollOffsetOwnedByUser: Bool {
         #if canImport(UIKit)
             isTracking || isDragging || isDecelerating
         #elseif canImport(AppKit)
