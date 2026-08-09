@@ -74,6 +74,39 @@ struct ListScrollViewAppKitTests {
     }
 
     @Test
+    func turningOffTheScrollIndicatorHidesTheScrollerAndKeepsScrolling() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 1_000)
+        scrollView.layoutSubtreeIfNeeded()
+
+        let scroller = try #require(
+            scrollView.subviews
+                .flatMap(\.subviews)
+                .compactMap { $0 as? NSScroller }
+                .first
+        )
+        let scrollerContainer = try #require(scroller.superview)
+        #expect(!scrollerContainer.isHidden)
+
+        scrollView.showsVerticalScrollIndicator = false
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(scrollerContainer.isHidden)
+        // Hiding the scroller is not hiding the content: the range it reports
+        // has to survive, or the list stops being scrollable along with it.
+        #expect(scrollView.maximumContentOffset.y == 800)
+        scrollView.contentOffset = CGPoint(x: 0, y: 400)
+        scrollView.layoutSubtreeIfNeeded()
+        #expect(scrollView.contentOffset.y == 400)
+
+        scrollView.showsVerticalScrollIndicator = true
+        scrollView.layoutSubtreeIfNeeded()
+
+        #expect(!scrollerContainer.isHidden)
+        #expect(abs(scroller.doubleValue - 0.5) < 0.000_001)
+    }
+
+    @Test
     func verticalScrollerTracksViewportAndContent() throws {
         let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
         scrollView.contentSize = CGSize(width: 200, height: 1_000)
