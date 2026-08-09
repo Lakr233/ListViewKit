@@ -474,11 +474,20 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         entry.view.requestLayout()
     }
 
+    /// Recycles the rows the viewport has left behind.
+    ///
+    /// This reads the same rectangle mounting reads. It used to build its own
+    /// in the scroll space instead, which picked the same rows only because
+    /// `rectForRow(at:)` and the offset each carry `topInset` and the two
+    /// cancelled. An agreement that holds by cancellation is one that breaks
+    /// the first time either side is widened.
     private func recycleRowsOutsideViewport() {
-        let visibleRect = CGRect(origin: contentOffset, size: bounds.size)
+        let visibleRect = contentVisibleRect
         let stale = visibleRows.compactMap { identifier, _ -> Item.ID? in
-            guard let index = indexByID[identifier] else { return identifier }
-            return rectForRow(at: index).intersects(visibleRect) ? nil : identifier
+            guard let index = indexByID[identifier],
+                  let frame = rowLayout.frame(for: index)
+            else { return identifier }
+            return frame.intersects(visibleRect) ? nil : identifier
         }
         for identifier in stale {
             recycleRow(with: identifier)

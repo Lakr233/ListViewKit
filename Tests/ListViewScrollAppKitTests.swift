@@ -350,5 +350,61 @@ struct ListViewScrollAppKitTests {
         listView.scrollToRow(at: 20, at: .bottom, animated: false)
         #expect(listView.contentOffset == CGPoint(x: -10, y: 321))
     }
+
+    /// Recycling and mounting have to select the same rows.
+    ///
+    /// The two compared rectangles that differed by `topInset`, in coordinate
+    /// spaces that differed by the same `topInset`, so they picked the same
+    /// rows by cancellation. Had either side moved, the rows in the gap would
+    /// have been recycled and mounted again on every pass — invisible in the
+    /// mounted set, which settles either way, and invisible in the removal
+    /// count, since a row reclaimed from the pool in the same pass is never
+    /// unparented. It shows up as a row reconfigured for an item it is already
+    /// showing.
+    @Test
+    func repeatedLayoutDoesNotReconfigureMountedRowsUnderATopInset() {
+        var configureCounts: [Int: Int] = [:]
+        let listView = ListView<ScrollItem>(
+            frame: CGRect(x: 0, y: 0, width: 200, height: 200)
+        )
+        listView.rows {
+            ListRow(LayoutCountingRow.self)
+                .height { _, _ in 100 }
+                .configure { _, item, _ in configureCounts[item.id, default: 0] += 1 }
+        }
+        listView.topInset = 60
+        listView.apply((0 ..< 40).map { ScrollItem(id: $0) })
+        listView.contentOffset.y = 500
+        drain(listView)
+
+        let mounted = Set(listView.visibleRows.keys)
+        #expect(!mounted.isEmpty)
+        configureCounts.removeAll()
+
+        for _ in 0 ..< 5 {
+            listView.needsLayout = true
+            listView.layoutSubtreeIfNeeded()
+        }
+
+        #expect(Set(listView.visibleRows.keys) == mounted)
+        #expect(configureCounts.isEmpty)
+    }
+
+    /// The rows the layout mounts are the rows the public viewport reports.
+    ///
+    /// Both read `contentVisibleRect` today. Step 4 of the scroll-spring work
+    /// widens the mounting rectangle and deliberately breaks this equality, so
+    /// it is worth having stated before then rather than after.
+    @Test
+    func mountedRowsMatchTheReportedVisibleIndicesUnderATopInset() {
+        let listView = makeListView(probe: .init(), count: 40)
+        listView.topInset = 60
+        listView.contentOffset.y = 500
+        drain(listView)
+
+        let mounted = Set(listView.visibleRows.keys)
+        let reported = Set(listView.indicesForVisibleRows)
+        #expect(mounted == reported)
+    }
 }
 #endif
