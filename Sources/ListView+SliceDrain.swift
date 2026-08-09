@@ -30,6 +30,20 @@ extension ListView {
     /// unaffected: layout measures them either way.
     private static var widthChurnHoldOff: CFTimeInterval { 0.15 }
 
+    /// How long to wait before asking again whether a drag has finished.
+    ///
+    /// The two "not now" branches used to re-arm through
+    /// ``scheduleSliceDrain()``, which posts the next pass onto the run loop
+    /// itself — so the block re-queued itself as fast as the run loop could
+    /// drain it and the main thread never got to sleep. It spun for the whole
+    /// of every drag and, on UIKit, the deceleration after it, on any list
+    /// still holding an unmeasured row, which is every list long enough for
+    /// deferred measurement to be the point. Starving the main thread during a
+    /// drag is exactly how `contentOffset` ends up arriving in bursts.
+    ///
+    /// One check per frame is enough to notice a finger lifting.
+    private static var interactionPollInterval: CFTimeInterval { 1.0 / 60.0 }
+
     /// Schedules one drain pass on the main run loop. Reentrant-safe: at most
     /// one pass is pending, and each pass reschedules itself while rows remain.
     func scheduleSliceDrain() {
@@ -57,17 +71,18 @@ extension ListView {
 
     private func drainSlice() {
         isSliceDrainScheduled = false
+        sliceDrainPassCount &+= 1
         guard rowLayout.hasPendingRows else { return }
         #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             // Live resize already measures the visible rect every layout tick;
             // spending the rest of the frame off-screen would stutter the drag.
             if inLiveResize {
-                scheduleSliceDrain()
+                scheduleSliceDrain(after: Self.interactionPollInterval)
                 return
             }
         #endif
         if isUserInteractingWithScroll {
-            scheduleSliceDrain()
+            scheduleSliceDrain(after: Self.interactionPollInterval)
             return
         }
         let sinceWidthChange = CACurrentMediaTime() - lastWidthChangeAt

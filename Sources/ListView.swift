@@ -116,6 +116,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     var deepestLayoutContentDepth = 0
 
     var isSliceDrainScheduled = false
+    /// How many drain passes have started, so a test can show that one held
+    /// off by a drag costs a handful of wake-ups rather than a spinning run
+    /// loop.
+    var sliceDrainPassCount: Int = 0
     /// When the content width last turned measured heights back into
     /// estimates. The drain holds off while the width is still churning.
     var lastWidthChangeAt: CFTimeInterval = 0
