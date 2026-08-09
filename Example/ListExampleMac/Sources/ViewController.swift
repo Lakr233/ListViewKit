@@ -69,22 +69,44 @@ final class ViewController: NSViewController {
         listView.apply(listView.content.shuffled(), animated: true)
     }
 
+    /// Whether the streaming scroll asks the list before following the tail.
+    ///
+    /// Off is what an ungated host does, and is here to be compared against:
+    /// scroll the wheel while a response streams and the two fight for the
+    /// offset, a notch at a time.
+    private var gatesAutoScroll = true
+
+    @objc func toggleAutoScrollGate(_ sender: NSToolbarItem) {
+        gatesAutoScroll.toggle()
+        sender.image = NSImage(
+            systemSymbolName: gatesAutoScroll ? "hand.raised.fill" : "hand.raised.slash",
+            accessibilityDescription: "Auto-scroll gate"
+        )
+    }
+
     /// A streaming response: append once, then update that one row as tokens
     /// arrive. `update` never diffs the rest of the list.
+    ///
+    /// Long enough to scroll around in while it runs, which is the only way to
+    /// see what the gate does.
     @objc func compose() {
         var item = ViewModel()
         listView.append(item)
 
-        let text = """
+        let paragraph = """
         Eiusmod officia consequat reprehenderit Lorem eu ut id exercitation veniam veniam nulla. \
         Nisi et reprehenderit nostrud. Cillum aliqua dolore reprehenderit non cupidatat velit Lorem. \
         Laborum dolor voluptate aliquip labore aliquip et aliqua proident quis magna cupidatat minim labore.
         """
+        let text = ([String](repeating: paragraph, count: 8)).joined(separator: "\n\n")
         Task { @MainActor in
             for character in text {
                 try? await Task.sleep(for: .milliseconds(5))
                 item.text.append(character)
                 listView.update(item)
+                // A reader who has scrolled away — or who just did, or who is
+                // resizing the window — is left where they are.
+                if gatesAutoScroll, listView.isUserInteractingWithScroll { continue }
                 listView.scrollToBottom(animated: false)
             }
         }

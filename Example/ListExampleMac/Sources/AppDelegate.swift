@@ -36,15 +36,16 @@ extension NSToolbarItem.Identifier {
     static let addItem = NSToolbarItem.Identifier("AddItem")
     static let shuffle = NSToolbarItem.Identifier("Shuffle")
     static let compose = NSToolbarItem.Identifier("Compose")
+    static let autoScrollGate = NSToolbarItem.Identifier("AutoScrollGate")
 }
 
 extension AppDelegate: NSToolbarDelegate {
     func toolbarAllowedItemIdentifiers(_: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.addItem, .shuffle, .compose, .flexibleSpace]
+        [.addItem, .shuffle, .compose, .autoScrollGate, .flexibleSpace]
     }
 
     func toolbarDefaultItemIdentifiers(_: NSToolbar) -> [NSToolbarItem.Identifier] {
-        [.compose, .flexibleSpace, .addItem, .shuffle]
+        [.compose, .autoScrollGate, .flexibleSpace, .addItem, .shuffle]
     }
 
     func toolbar(_: NSToolbar, itemForItemIdentifier itemIdentifier: NSToolbarItem.Identifier, willBeInsertedIntoToolbar _: Bool) -> NSToolbarItem? {
@@ -60,6 +61,11 @@ extension AppDelegate: NSToolbarDelegate {
             item.image = NSImage(systemSymbolName: "arrow.2.squarepath", accessibilityDescription: "Shuffle")
             item.target = viewController
             item.action = #selector(ViewController.shuffle)
+        case .autoScrollGate:
+            item.label = "Gate"
+            item.image = NSImage(systemSymbolName: "hand.raised.fill", accessibilityDescription: "Auto-scroll gate")
+            item.target = viewController
+            item.action = #selector(ViewController.toggleAutoScrollGate(_:))
         case .compose:
             item.label = "Compose"
             item.image = NSImage(systemSymbolName: "square.and.pencil", accessibilityDescription: "Compose")
