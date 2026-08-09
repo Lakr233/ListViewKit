@@ -2,6 +2,11 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- Without this an app is capped at 60fps on a ProMotion display, whatever
+	     rate its display links ask for. It has to be set by the app, not by a
+	     framework, so a host of ListViewKit that wants 120fps sets it too. -->
+	<key>CADisableMinimumFrameDurationClamp</key>
+	<true/>
 	<key>UIApplicationSceneManifest</key>
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
