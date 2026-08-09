@@ -457,22 +457,36 @@ struct ListViewRowAnimatorAppKitTests {
 
     // MARK: - Shape on screen
 
-    /// Rows spread apart, and never into each other.
+    /// Rows spread apart, and approach each other only within the falloff's
+    /// slope.
+    ///
+    /// Not "never into each other": the Messages trace closes gaps below rest
+    /// in every gesture, and forbidding it is what the retired sign gate did —
+    /// at the price of collapsing the whole field to zero the frame a
+    /// direction changed. The bound that replaced the gate is the slope,
+    /// `maximumStretch / resistanceFactor` of the rows' separation, which the
+    /// defaults keep under 2% — invisible, where the gate's pop was measured
+    /// on a device as a 12px gap snapping shut between two frames.
     @Test
     func displacedRowsStayInOrderAndOpenGaps() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        let spring = ListScrollSpring()
+        listView.rowAnimator = spring
+        let slope = spring.maximumStretch / spring.resistanceFactor
 
         var sawAGap = false
-        for _ in 0 ..< 60 {
-            scroll(listView, by: 25)
+        for pass in 0 ..< 90 {
+            // Down, then caught and dragged back up: the reversal is where
+            // the retired gate snapped and where closing happens at all.
+            scroll(listView, by: pass < 60 ? 25 : -25)
             listView.tickRowAnimator(duration: Self.frame)
 
             let rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
             for (previous, next) in zip(rows, rows.dropFirst()) {
-                // Contiguous before displacement, so any daylight is opened
-                // and never closed.
-                #expect(next.frame.minY >= previous.frame.maxY - 1e-6)
+                // Contiguous before displacement, so any daylight is opened,
+                // and any overlap is bounded by the slope.
+                let separation = next.placedFrame.midY - previous.placedFrame.midY
+                #expect(next.frame.minY >= previous.frame.maxY - separation * slope - 1e-6)
                 if next.frame.minY > previous.frame.maxY + 1e-6 { sawAGap = true }
             }
         }

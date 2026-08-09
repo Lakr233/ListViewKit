@@ -42,6 +42,17 @@ import SpringInterpolation
         /// platform split.
         var isReboundingFromOverscroll: Bool { false }
 
+        /// Where the finger currently holds the content, measured from the
+        /// viewport's top edge, or `nil` when no finger is down.
+        ///
+        /// Viewport-relative on purpose: the consumer remembers it across the
+        /// end of a gesture, and what stays put through momentum is the place
+        /// on the glass, not a point in the content rushing past it.
+        var interactionLocationInViewportY: CGFloat? {
+            guard isTracking else { return nil }
+            return panGestureRecognizer.location(in: self).y - contentOffset.y
+        }
+
         /// The minimum point (in content view coordinates) that the view can be scrolled.
         public var minimumContentOffset: CGPoint {
             .init(x: -adjustedContentInset.left, y: -adjustedContentInset.top)
@@ -475,6 +486,15 @@ import SpringInterpolation
         /// Delta is always applied to this value; rubber-band is applied only for display.
         private var _trackingRawOffsetY: CGFloat = 0
 
+        /// Where the pointer last delivered a scroll event, measured from the
+        /// viewport's top edge. See the UIKit twin for why viewport-relative.
+        ///
+        /// Kept after the gesture ends: unlike a lifted finger, the pointer is
+        /// still on screen, and the next wheel event will land in nearly the
+        /// same place.
+        private var _lastScrollWheelViewportY: CGFloat?
+        var interactionLocationInViewportY: CGFloat? { _lastScrollWheelViewportY }
+
         /// True while AppKit-style overscroll rebound is active.
         private var _isBouncing: Bool = false
 
@@ -856,6 +876,11 @@ import SpringInterpolation
 
         override open func scrollWheel(with event: NSEvent) {
             scrollerOverlay.observeScrollWheel(event)
+
+            // Every wheel event carries the pointer, including momentum ones.
+            if event.window != nil {
+                _lastScrollWheelViewportY = convert(event.locationInWindow, from: nil).y - contentOffset.y
+            }
 
             let min = minimumContentOffset
             let max = maximumContentOffset

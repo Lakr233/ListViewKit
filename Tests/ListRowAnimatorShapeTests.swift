@@ -158,6 +158,34 @@ struct ListRowAnimatorShapeTests {
         #expect(context.viewportRect.minY == listView.contentOffset.y)
         // The inset is real, so this is not passing by both being zero.
         #expect(topmost.minY == inset)
+        // No interaction has been seen in this test, so the grip defaults to
+        // the viewport's bottom edge — in the same space again.
+        #expect(context.interactionAnchorY == context.viewportRect.maxY)
+    }
+
+    /// The grip the list remembers is what the context reports, moved into
+    /// content space fresh each frame.
+    ///
+    /// The default above is the fallback; this is the path a real interaction
+    /// feeds. Held viewport-relative on purpose — through momentum the anchor
+    /// stays at the same place on the glass, not at a point in the content
+    /// rushing past it — so after a scroll the same stored grip must resolve
+    /// to a different content coordinate.
+    @Test
+    func theRememberedGripTravelsWithTheViewport() {
+        let listView = makeListView()
+        let animator = ParallaxAnimator()
+        listView.rowAnimator = animator
+        listView.rowAnimatorGripViewportY = 120
+
+        scroll(listView, by: 40)
+        let first = try! #require(animator.lastCall.context)
+        #expect(first.interactionAnchorY == listView.contentOffset.y + 120)
+
+        scroll(listView, by: 200)
+        let second = try! #require(animator.lastCall.context)
+        #expect(second.interactionAnchorY == listView.contentOffset.y + 120)
+        #expect(second.interactionAnchorY == first.interactionAnchorY + 200)
     }
 
     /// An effect with no clock still works, and costs no display link.

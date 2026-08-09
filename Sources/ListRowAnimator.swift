@@ -112,6 +112,22 @@ public struct ListAnimatorContext: Sendable {
     /// positioning it relative to a place where there are no rows.
     public let contentRect: CGRect
 
+    /// Where the reader is holding the content, in the same space as the row
+    /// frames.
+    ///
+    /// The touch or pointer while one is engaged; where it was last seen, held
+    /// at the same height in the viewport, while momentum carries on; the
+    /// viewport's bottom edge if no interaction has been observed yet — which
+    /// is also what a programmatic scroll gets, and reads as the list being
+    /// pulled from its newest end.
+    ///
+    /// Measured on Messages: the content at the pointer moves rigidly with the
+    /// scroll, and everything below it does too — the lag all sits above,
+    /// graded by distance from this point, not from a content edge. A content
+    /// edge cannot be the reference: it regrades every weight as an overscroll
+    /// unwinds, and mid-list it is nowhere near the rows on screen.
+    public let interactionAnchorY: CGFloat
+
     /// Vertical travel since the last frame, in points.
     ///
     /// Only motion a reader perceives as scrolling: a finger, momentum, a

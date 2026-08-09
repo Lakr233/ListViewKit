@@ -17,17 +17,30 @@ import SpringInterpolation
 /// The elastic lag rows show while the list scrolls, as a pure model.
 ///
 /// One spring, not one per row. Its value is a single scalar — how far the
-/// content is currently stretched, in points — and every row reads the same
-/// one through a weight that grows with its distance from the anchor. Rows
-/// therefore cannot argue with each other about how far the list has moved,
-/// and a row that scrolls in already knows where it belongs; there is no
-/// per-row state to seed, migrate on reuse, or tear down.
+/// scroll has run ahead of the content, in points — and every row reads the
+/// same one through a weight that grows with its distance above the anchor.
+/// Rows therefore cannot argue with each other about how far the list has
+/// moved, and a row that scrolls in already knows where it belongs; there is
+/// no per-row state to seed, migrate on reuse, or tear down.
 ///
-/// The weight is one-sided. Rows on the anchor's far side lag; rows on the
-/// near side sit still. That is not a stylistic choice — rows are laid out
-/// edge to edge, so there is no gap between them to close. Displacement can
-/// only ever open one, and letting both sides move would mean pushing rows
-/// into each other.
+/// The anchor is the reader's grip — the touch or pointer — not a content
+/// edge. Content at and below the grip moves rigidly with the scroll; content
+/// above it trails behind, by more the further up it sits, the way a sheet
+/// dragged from a point hangs from where it is held. Both of those are
+/// measured behaviour: in a frame-by-frame trace of Messages, everything below
+/// the pointer tracked the scroll to the pixel through six gestures, while the
+/// spread sat above it, graded over hundreds of points, opening some gaps and
+/// closing others as the direction changed.
+///
+/// The weight is deliberately not one-sided in the stretch: a reversal drives
+/// the scalar smoothly through zero and every row follows it, which is what
+/// catching a moving list looks like. An earlier version gated displacement on
+/// the sign of the stretch so rows could never close a gap; the gate collapsed
+/// the whole field to zero on the frame a direction changed, which read as a
+/// pop, and the trace shows Messages closing gaps below rest all the time.
+/// Compression is bounded instead, by the slope: adjacent rows approach each
+/// other by at most `maximumStretch / resistanceFactor` of their separation,
+/// which the defaults put under 2%.
 ///
 /// Nothing here knows about views, frames, or time sources. It takes a scroll
 /// delta and a duration and answers, for a row centred anywhere, how far that
@@ -35,21 +48,27 @@ import SpringInterpolation
 ///
 /// Not `Sendable`: the `SpringInterpolation` it stores does not conform.
 public struct ListScrollSpring: Equatable {
-    /// How far the content may stretch, in points.
+    /// How far a row may trail the scroll, in points.
     ///
     /// This bounds the displacement of every row, so it is also what the list
     /// has to overscan its mounting rectangle by.
     public var maximumStretch: CGFloat {
-        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 20) }
+        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 15) }
     }
 
-    /// The distance from the anchor, in points, at which a row lags by the
+    /// The distance above the anchor, in points, at which a row trails by the
     /// full ``maximumStretch``.
     ///
     /// Larger values spread the falloff over more rows, which reads as a
-    /// stiffer sheet; smaller values concentrate it near the anchor.
+    /// stiffer sheet; smaller values concentrate it near the grip. The default
+    /// grades across a whole viewport, so every visible gap takes a share of
+    /// the spread rather than the nearest one taking all of it.
+    ///
+    /// Displacement grades over `max(resistanceFactor, maximumStretch)`, so no
+    /// configuration can make the falloff steeper than 1:1 — which is the
+    /// slope at which adjacent rows could meet.
     public var resistanceFactor: CGFloat {
-        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 120) }
+        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800) }
     }
 
     /// How quickly the stretch returns to zero, in radians per second.
@@ -79,13 +98,13 @@ public struct ListScrollSpring: Equatable {
     private var anchorY: CGFloat = 0
 
     public init(
-        maximumStretch: CGFloat = 20,
-        resistanceFactor: CGFloat = 120,
+        maximumStretch: CGFloat = 15,
+        resistanceFactor: CGFloat = 800,
         angularFrequency: Double = 20,
         dampingRatio: Double = 0.75
     ) {
-        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 20)
-        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 120)
+        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 15)
+        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800)
         self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 20)
         self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
         // The library's own threshold snaps the value to the target, which at
@@ -103,8 +122,9 @@ public struct ListScrollSpring: Equatable {
 
     // MARK: - State
 
-    /// How far the content is stretched right now, in points. Signed: positive
-    /// means rows below the anchor have fallen behind.
+    /// How far the scroll has run ahead of the far field right now, in points.
+    /// Signed: positive means the content moved up and the rows above the
+    /// anchor are hanging behind, below their placement.
     public var stretch: CGFloat { CGFloat(spring.value) }
 
     /// Whether the spring has nothing left to do.
@@ -128,7 +148,8 @@ public struct ListScrollSpring: Equatable {
     ///     that corresponds to something the reader saw move.
     ///   - deltaTime: Already clamped by the caller. A long frame integrated
     ///     literally would overshoot.
-    ///   - anchorY: Where the stretch is zero, in content coordinates.
+    ///   - anchorY: The reader's grip, in the space the row frames are stated
+    ///     in. Weights are distances above this point.
     public mutating func advance(scrollDelta: CGFloat, deltaTime: TimeInterval, anchorY: CGFloat) {
         self.anchorY = anchorY
         guard maximumStretch > 0 else {
@@ -139,11 +160,12 @@ public struct ListScrollSpring: Equatable {
         // The delta goes in whole. An earlier draft also capped it at
         // `maximumStretch` per frame, on the theory that a fling would
         // otherwise land as a jump. It would not: the clamp below bounds the
-        // state, and a one-sided weight means no row ever reads a value of
-        // both signs, so a row's displacement already cannot move further
-        // than the budget in one frame. Injecting a huge delta and injecting
-        // a capped one both saturate. The cap was defending an invariant that
-        // holds without it.
+        // state, and a weight is a fraction of the scalar, so a row's
+        // displacement already cannot move further than twice the budget in
+        // one frame — and only a full-budget reversal inside a single frame
+        // reaches that. Injecting a huge delta and injecting a capped one
+        // both saturate. The cap was defending an invariant that holds
+        // without it.
         spring.setCurrent(spring.value + Double(scrollDelta), spring.context.currentVel)
         spring.setTarget(0)
         spring.update(withDeltaTime: deltaTime)
@@ -176,41 +198,36 @@ public struct ListScrollSpring: Equatable {
 
     /// How far to displace a row whose centre sits at `center`.
     ///
-    /// The map from a row's position to its displaced position is
-    /// non-decreasing — slope `1` on the near side of the anchor and
-    /// `1 + |stretch| / resistanceFactor` on the far side — so rows that were
-    /// laid out edge to edge stay in order and never overlap, whatever their
-    /// heights are.
+    /// Zero at and below the anchor, growing linearly with distance above it,
+    /// saturating at ``resistanceFactor``. The slope of the displaced-position
+    /// map is bounded by `1 − maximumStretch / resistanceFactor` from below,
+    /// so rows that were laid out edge to edge keep their order and never
+    /// overlap, whatever their heights are.
     public func displacement(forRowCenteredAt center: CGFloat) -> CGFloat {
         let stretch = stretch
         guard stretch != 0 else { return 0 }
-        let offsetFromAnchor = center - anchorY
-        // Rows on the near side have nowhere to go: there is no gap between
-        // them to take up.
-        guard offsetFromAnchor.sign == stretch.sign else { return 0 }
-        let weight = min(1, abs(offsetFromAnchor) / resistanceFactor)
+        let distanceAbove = anchorY - center
+        guard distanceAbove > 0 else { return 0 }
+        let weight = min(1, distanceAbove / max(resistanceFactor, maximumStretch))
         return stretch * weight
     }
 
     // MARK: - Presets
 
-    /// The iMessage feel, fitted to a recording of Messages rather than derived.
+    /// The iMessage feel, fitted to recordings of Messages rather than derived.
     ///
-    /// Two relaxations were tracked frame by frame and the second-order
-    /// response was least-squares fitted to each; they agreed at ω ≈ 19–21 and
-    /// ζ ≈ 0.6–0.75, with a peak stretch of 12–16pt. See §2.5 of the design
-    /// document for the measurement, and ``ListScrollSpringTests`` for the two
-    /// traces the defaults are pinned against.
-    ///
-    /// The earlier values (ω = 60, `resistanceFactor` 500) were paper-derived
-    /// and wrong in both directions: three times too quick to settle, and a
-    /// falloff so wide that neighbouring rows parted by under 4pt.
+    /// The relaxation comes from two gaps tracked frame by frame and fitted to
+    /// a second-order response — ω ≈ 19–21, ζ ≈ 0.6–0.75, peak spread 12–16pt.
+    /// The shape comes from a per-element trace of the same footage: rigid at
+    /// and below the pointer, graded above it over the height of the viewport,
+    /// with gaps closing as well as opening. See §2.5 and §9 of the design
+    /// document for the measurements.
     public static var messages: Self { .init() }
 
     /// The same idea at half the volume, for lists where the effect should be
     /// felt rather than seen.
     public static var subtle: Self {
-        .init(maximumStretch: 8, resistanceFactor: 240, angularFrequency: 26, dampingRatio: 0.9)
+        .init(maximumStretch: 8, resistanceFactor: 1200, angularFrequency: 26, dampingRatio: 0.9)
     }
 
     // MARK: - Validation
@@ -242,46 +259,12 @@ extension ListScrollSpring: ListRowAnimator {
         advance(
             scrollDelta: context.scrollDelta,
             deltaTime: context.deltaTime,
-            anchorY: restingEdge(of: context)
+            anchorY: context.interactionAnchorY
         )
     }
 
     @MainActor
     public func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
         row.setPresentationOffset(displacement(forRowCenteredAt: frame.midY))
-    }
-
-    /// Where the stretch is zero.
-    ///
-    /// Displacement is one-sided, so only rows on the far side of this move.
-    /// Anchoring at the edge the content is receding from puts every visible
-    /// row on that side, which is what makes the whole viewport spread rather
-    /// than half of it. The stretch in hand decides which edge that is; the
-    /// incoming travel only matters on the frame the motion starts.
-    ///
-    /// The edge is the *visible content's*, not the viewport's, and the
-    /// difference is not cosmetic. A weight is a distance from this point, so
-    /// wherever the viewport extends past the rows — an overscroll, or a list
-    /// too short to fill its own height — the viewport edge measures from a
-    /// place with no rows in it, and every row lands beyond
-    /// ``resistanceFactor`` and reads the same saturated weight. The stretch
-    /// then translates the whole list rigidly, which is no effect at all.
-    ///
-    /// Worse, that distance changes as the overscroll unwinds, so the weights
-    /// slide while the spring is doing nothing in particular. A rubber band
-    /// returning to rest is pure common-mode motion, and it was manufacturing
-    /// a differential out of it: measured on a device, the top row parted from
-    /// a rigid slab of the others in exact linear proportion to the offset —
-    /// slope `−maximumStretch / resistanceFactor`, reproduced across three
-    /// gestures to under a fifth of a pixel. Clamping pins the anchor to the
-    /// first or last row for the whole of an overscroll, which is the one
-    /// place it can sit still.
-    private func restingEdge(of context: ListAnimatorContext) -> CGFloat {
-        let direction = stretch != 0 ? stretch : context.scrollDelta
-        let viewport = context.viewportRect
-        let content = context.contentRect
-        return direction >= 0
-            ? max(viewport.minY, content.minY)
-            : min(viewport.maxY, content.maxY)
     }
 }

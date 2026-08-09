@@ -104,6 +104,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// How many frames the animator has been advanced for, so a test can show
     /// an idle list never ticks and a scrolling one ticks once per frame.
     var animatorTickCount: Int = 0
+    /// Where the reader last held the content, measured from the viewport's
+    /// top edge, or `nil` before any interaction has been seen.
+    ///
+    /// Remembered across gestures: momentum keeps scrolling after the finger
+    /// lifts, and the anchor the lag is graded from has to stay where the
+    /// finger was, not jump to a default mid-flight.
+    var rowAnimatorGripViewportY: CGFloat?
 
     /// Layout passes currently on the stack, and the deepest that has ever
     /// been.

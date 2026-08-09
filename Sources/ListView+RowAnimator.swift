@@ -174,9 +174,14 @@ extension ListView {
     /// would make every distance an implementation computes wrong by exactly
     /// `topInset`, silently and only on lists that set one.
     private func animatorContext(scrollDelta: CGFloat, deltaTime: TimeInterval) -> ListAnimatorContext {
-        .init(
-            viewportRect: viewportRect.offsetBy(dx: 0, dy: topInset),
+        if let live = interactionLocationInViewportY, bounds.height > 0 {
+            rowAnimatorGripViewportY = min(max(0, live), bounds.height)
+        }
+        let viewport = viewportRect.offsetBy(dx: 0, dy: topInset)
+        return .init(
+            viewportRect: viewport,
             contentRect: contentRect.offsetBy(dx: 0, dy: topInset),
+            interactionAnchorY: viewport.minY + (rowAnimatorGripViewportY ?? bounds.height),
             scrollDelta: scrollDelta,
             deltaTime: deltaTime,
             isUserInteracting: isScrollOffsetOwnedByUser

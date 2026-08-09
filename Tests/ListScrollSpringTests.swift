@@ -109,7 +109,8 @@ struct ListScrollSpringTests {
             }
 
             #expect(crossings >= 8, "died after \(crossings) crossings at dt \(deltaTime)")
-            #expect(peakAfterFirstCrossing > 8, "no swing left after the first crossing")
+            // At ζ = 0.2 the first rebound carries just over half the peak.
+            #expect(peakAfterFirstCrossing > spring.maximumStretch * 0.4, "no swing left after the first crossing")
             #expect(spring.isAtRest)
         }
     }
@@ -119,13 +120,13 @@ struct ListScrollSpringTests {
     /// This pinned the opposite claim while the frequency was paper-derived:
     /// that ordinary scrolling stays inside the budget and only a fling
     /// saturates. Measuring Messages retired it. At the fitted ω the stretch
-    /// reaches the budget from roughly 300pt/s up, and the recording agrees —
-    /// through every flick in it the far field moved as one rigid block, with
-    /// all of the spread concentrated into the first row or two.
+    /// reaches the budget from roughly 190pt/s up, and the recordings agree —
+    /// through every flick the far field's spread held its ceiling, and what
+    /// varied between gestures was how long it stayed there, not how big it
+    /// got.
     ///
-    /// So the speed the effect reads is a slow one. Below ~250pt/s the stretch
-    /// is graded; above it the gesture always looks the same, and what varies
-    /// between gestures is how long the budget stays spent, not how big it is.
+    /// So the speed the effect reads is a slow one. Below ~190pt/s the stretch
+    /// is graded; above it the gesture always looks the same.
     @Test
     func slowScrollingIsGradedAndAnythingBriskSaturates() {
         func steadyStretch(scrollingAt velocity: CGFloat, hz: Double) -> CGFloat {
@@ -142,10 +143,10 @@ struct ListScrollSpringTests {
         }
 
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < 8)
-        #expect(steadyStretch(scrollingAt: 200, hz: 120) < 16)
-        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 20)
+        #expect(steadyStretch(scrollingAt: 150, hz: 120) < 15)
+        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 15)
         // Monotone where it is graded, so slow scrolling still reads as speed.
-        #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 200, hz: 120))
+        #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 150, hz: 120))
     }
 
     /// Steady stretch depends on the frame rate, and the paper figure is an
@@ -275,22 +276,32 @@ struct ListScrollSpringTests {
 
     // MARK: - Ordering
 
-    /// Rows are laid out edge to edge, so displacement may only open gaps.
+    /// Rows are translated rigidly, so they can approach each other — the
+    /// Messages trace closes gaps below rest all the time — but only by the
+    /// falloff's slope, which the defaults keep under 2% of the rows'
+    /// separation. What must never happen is the order changing.
     @Test
-    func displacementIsNonDecreasingAlongTheContent() {
+    func rowsApproachEachOtherByAtMostTheFalloffSlope() {
         var noise = Noise(seed: 11)
         var spring = ListScrollSpring()
+        let slope = spring.maximumStretch / spring.resistanceFactor
         for _ in 0 ..< 4000 {
             spring.advance(
                 scrollDelta: noise.next(in: -300 ... 300),
                 deltaTime: Self.frame,
                 anchorY: noise.next(in: -800 ... 800)
             )
-            var previous = -CGFloat.greatestFiniteMagnitude
-            for center in Self.rowCenters {
+            var previousCenter = Self.rowCenters[0]
+            var previousDisplaced = spring.displacement(forRowCenteredAt: previousCenter)
+            for center in Self.rowCenters.dropFirst() {
                 let displaced = spring.displacement(forRowCenteredAt: center)
-                #expect(displaced >= previous - 1e-9)
-                previous = displaced
+                let separation = center - previousCenter
+                // Interpenetration bounded by the slope…
+                #expect(previousDisplaced - displaced <= separation * slope + 1e-9)
+                // …and the centres keep their order outright.
+                #expect(center + displaced > previousCenter + previousDisplaced)
+                previousCenter = center
+                previousDisplaced = displaced
             }
         }
     }
@@ -309,42 +320,89 @@ struct ListScrollSpringTests {
 
         var noise = Noise(seed: 13)
         var spring = ListScrollSpring()
+        let slope = spring.maximumStretch / spring.resistanceFactor
         for _ in 0 ..< 2000 {
             spring.advance(
                 scrollDelta: noise.next(in: -300 ... 300),
                 deltaTime: Self.frame,
                 anchorY: noise.next(in: -200 ... 4200)
             )
-            var previousBottom = -CGFloat.greatestFiniteMagnitude
+            var previousCenter = -CGFloat.greatestFiniteMagnitude
+            var previousDisplacedCenter = -CGFloat.greatestFiniteMagnitude
             for (top, height) in zip(tops, heights) {
-                let displaced = spring.displacement(forRowCenteredAt: top + height / 2)
-                #expect(top + displaced >= previousBottom - 1e-9)
-                previousBottom = top + height + displaced
+                let center = top + height / 2
+                let displacedCenter = center + spring.displacement(forRowCenteredAt: center)
+                // Centres in order, and rows into each other by no more than
+                // the slope of the falloff.
+                #expect(displacedCenter >= previousDisplacedCenter - 1e-9)
+                #expect(
+                    previousDisplacedCenter - displacedCenter
+                        <= (center - previousCenter) * slope + 1e-9
+                )
+                previousCenter = center
+                previousDisplacedCenter = displacedCenter
             }
         }
     }
 
     // MARK: - Continuity
 
-    /// Sign reversal is bounded, not continuous. A sample can land either side
-    /// of the anchor, and the weight is one-sided, so displacement does jump —
-    /// what it may not do is jump further than the budget.
+    /// A reversal rides the spring through zero instead of collapsing it.
+    ///
+    /// The first version gated displacement on the sign of the stretch, so the
+    /// frame a direction changed zeroed every row at once — measured on a
+    /// device as a 12px gap snapping shut between two frames. Catching a
+    /// moving list is input like any other: the stretch shrinks by what the
+    /// finger feeds in, and everything the rows do stays continuous in it.
     @Test
-    func displacementChangesByAtMostTheBudgetInOneFrame() {
+    func aReversalRidesThroughZeroInsteadOfSnapping() {
+        var spring = ListScrollSpring()
+        // A firm scroll, saturated.
+        for _ in 0 ..< 30 {
+            spring.advance(scrollDelta: 8, deltaTime: Self.frame, anchorY: 1000)
+        }
+        let farRow: CGFloat = 0 // 1000pt above the grip: reads the whole stretch
+        let saturated = spring.displacement(forRowCenteredAt: farRow)
+        #expect(abs(saturated - spring.maximumStretch) < 1e-9)
+
+        // Caught and dragged the other way at the same speed.
+        var previous = saturated
+        var signChangeFrame: Int?
+        for frame in 0 ..< 30 {
+            spring.advance(scrollDelta: -8, deltaTime: Self.frame, anchorY: 1000)
+            let displaced = spring.displacement(forRowCenteredAt: farRow)
+            // Each frame moves the row by what the finger fed in plus what the
+            // spring relaxed — bounded, not a collapse.
+            #expect(abs(displaced - previous) < 12, "jumped \(previous) → \(displaced) in one frame")
+            if signChangeFrame == nil, displaced < 0 { signChangeFrame = frame }
+            previous = displaced
+        }
+        // It did cross — the other side is reachable — and not on the first
+        // frame of the catch: the finger's own feed is smaller than the
+        // saturated stretch, so an immediate flip could only be a collapse.
+        let crossed = try! #require(signChangeFrame)
+        #expect(crossed >= 1)
+    }
+
+    /// The most a row can move between two frames is out to the budget and
+    /// back through it — a full-budget reversal — and that needs the whole
+    /// reversal fed in within one frame.
+    @Test
+    func displacementChangesByAtMostTwiceTheBudgetInOneFrame() {
         var noise = Noise(seed: 17)
         var spring = ListScrollSpring(maximumStretch: 24)
         var previous = [CGFloat](repeating: 0, count: Self.rowCenters.count)
 
         for _ in 0 ..< 6000 {
-            // Reversals large enough to flip the sign every few frames.
+            // Deltas big enough to slam between the clamps in one frame.
             spring.advance(
-                scrollDelta: noise.next(in: -60 ... 60),
+                scrollDelta: noise.next(in: -80 ... 80),
                 deltaTime: Self.frame,
                 anchorY: 0
             )
             for (offset, center) in Self.rowCenters.enumerated() {
                 let displaced = spring.displacement(forRowCenteredAt: center)
-                #expect(abs(displaced - previous[offset]) <= 24 + 1e-9)
+                #expect(abs(displaced - previous[offset]) <= 48 + 1e-9)
                 previous[offset] = displaced
             }
         }
@@ -355,132 +413,81 @@ struct ListScrollSpringTests {
     @Test
     func rebaseMovesTheAnchorWithTheContentSpace() {
         var spring = ListScrollSpring()
-        spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 100)
+        spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 500)
         let before = spring.displacement(forRowCenteredAt: 300)
+        #expect(before != 0, "the probe row has to be one the anchor grades")
 
         spring.rebase(byContentOffset: 500)
         #expect(spring.displacement(forRowCenteredAt: 800) == before)
     }
 
     /// A list, as the animator is handed one: rows from zero to `contentHeight`
-    /// in a viewport whose top edge is wherever the reader has dragged it.
+    /// in a viewport whose top edge is wherever the reader has dragged it,
+    /// held at `gripY`.
     private static func context(
         viewportTop: CGFloat,
         viewportHeight: CGFloat = 900,
         contentHeight: CGFloat,
+        gripY: CGFloat,
         scrollDelta: CGFloat
     ) -> ListAnimatorContext {
         .init(
             viewportRect: CGRect(x: 0, y: viewportTop, width: 320, height: viewportHeight),
             contentRect: CGRect(x: 0, y: 0, width: 320, height: contentHeight),
+            interactionAnchorY: gripY,
             scrollDelta: scrollDelta,
             deltaTime: frame,
             isUserInteracting: true
         )
     }
 
-    /// Where the first and last rows of a four-row list sit, at 92pt each.
-    private static let firstRowCentre: CGFloat = 46
-    private static let lastRowCentre: CGFloat = 322
-    private static let fourRowsTall: CGFloat = 368
-
-    /// Dragging past the end of the content does not regrade the rows.
-    ///
-    /// An overscroll is common-mode motion: every row moves by the same amount
-    /// and none of them moves relative to another. But a weight is a distance
-    /// from the anchor, and the anchor was a viewport edge — so the distance
-    /// every weight was measured from grew as the rubber band stretched and
-    /// shrank as it returned, turning motion with no differential in it into a
-    /// differential.
-    ///
-    /// Measured on a device: through the return, the top row parted from a
-    /// rigid slab of the other three in exact linear proportion to the offset,
-    /// slope `−maximumStretch / resistanceFactor`, reproduced across three
-    /// separate gestures to under a fifth of a pixel. Nothing about a spring
-    /// is a straight line in the offset. It was the anchor sliding back onto
-    /// the content.
+    /// The weights are distances from the reader's grip, and from nothing
+    /// else. The first version anchored at a content edge clamped to the
+    /// viewport, and both halves of that were measured failing on devices: the
+    /// viewport edge regrades every weight as a rubber band unwinds — the top
+    /// row parted from the others in exact linear proportion to the offset,
+    /// slope `−maximumStretch / resistanceFactor`, across three gestures —
+    /// and the content edge is so far from a mid-list viewport that every
+    /// visible row saturated alike, which is a rigid translation and no
+    /// effect at all.
     @Test
     @MainActor
-    func overscrollDoesNotRegradeTheRows() {
-        func topRowLag(overscrolledBy overscroll: CGFloat) -> CGFloat {
+    func theAnchorIsTheReadersGripNotAContentEdge() {
+        func lag(viewportTop: CGFloat, contentHeight: CGFloat) -> CGFloat {
             var spring = ListScrollSpring()
             for _ in 0 ..< 30 {
                 spring.willUpdate(Self.context(
-                    viewportTop: -overscroll,
-                    contentHeight: 1800,
+                    viewportTop: viewportTop,
+                    contentHeight: contentHeight,
+                    gripY: viewportTop + 800,
                     scrollDelta: 10
                 ))
             }
-            return spring.displacement(forRowCenteredAt: Self.firstRowCentre)
+            // 500pt above the grip, mid-falloff.
+            return spring.displacement(forRowCenteredAt: viewportTop + 300)
         }
 
-        let unstretched = topRowLag(overscrolledBy: 0)
-        #expect(unstretched > 0, "the first row should lag at all")
-        for overscroll in [CGFloat(20), 60, 150, 400] {
-            let lag = topRowLag(overscrolledBy: overscroll)
-            #expect(
-                abs(lag - unstretched) < 0.01,
-                "\(overscroll)pt of overscroll moved the first row's lag to \(lag) from \(unstretched)"
-            )
-        }
-
-        // And the clamp is a clamp, not a replacement. Anchoring at the content
-        // unconditionally would pass everything above and be wrong everywhere
-        // else: a viewport in the middle of a long list is measured from its
-        // own edge, which is where the rows are entering from.
-        var midList = ListScrollSpring()
-        for _ in 0 ..< 30 {
-            midList.willUpdate(Self.context(viewportTop: 500, contentHeight: 1800, scrollDelta: 10))
-        }
-        // 100pt below the viewport's top edge, and 600 below the content's.
-        let nearEdge = midList.displacement(forRowCenteredAt: 600)
-        #expect(
-            abs(nearEdge - midList.stretch * (100 / 120)) < 1e-9,
-            "a row 100pt into the viewport read \(nearEdge) against a stretch of \(midList.stretch)"
-        )
-    }
-
-    /// A list too short to fill its own viewport still spreads.
-    ///
-    /// The viewport's far edge can sit hundreds of points past the last row,
-    /// and every weight measured from out there saturates alike, so the
-    /// stretch came out as a rigid translation of the whole list — the effect
-    /// switched itself off on exactly the lists it is easiest to see it on.
-    @Test
-    @MainActor
-    func aListShorterThanItsViewportStillSpreads() {
-        var spring = ListScrollSpring()
-        for _ in 0 ..< 30 {
-            spring.willUpdate(Self.context(
-                viewportTop: -100,
-                contentHeight: Self.fourRowsTall,
-                scrollDelta: -10
-            ))
-        }
-        #expect(spring.stretch < 0)
-
-        // Pinned to the last row, not merely to somewhere that happens to grade
-        // these two: the last row's centre is 46pt from the content's bottom,
-        // and the first row's is 322pt, which is past `resistanceFactor`.
-        let first = spring.displacement(forRowCenteredAt: Self.firstRowCentre)
-        let last = spring.displacement(forRowCenteredAt: Self.lastRowCentre)
-        #expect(abs(first - spring.stretch) < 1e-9, "the far row should read the whole stretch")
-        #expect(
-            abs(last - spring.stretch * (46 / 120)) < 1e-9,
-            "the last row read \(last) against a stretch of \(spring.stretch)"
-        )
+        let midList = lag(viewportTop: 5000, contentHeight: 20000)
+        #expect(midList != 0, "the effect exists in the middle of a long list")
+        // The same reading whether the viewport is at the top, the bottom,
+        // overscrolled past either end, or the list is shorter than the
+        // viewport — geometry the grip does not care about.
+        #expect(lag(viewportTop: 0, contentHeight: 20000) == midList)
+        #expect(lag(viewportTop: -150, contentHeight: 20000) == midList)
+        #expect(lag(viewportTop: 19100, contentHeight: 20000) == midList)
+        #expect(lag(viewportTop: -100, contentHeight: 368) == midList)
     }
 
     @Test
     func resetLeavesNothingBehind() {
         var spring = ListScrollSpring()
-        spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
+        spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 1000)
         #expect(spring.stretch != 0)
 
         spring.reset()
         #expect(spring.stretch == 0)
         #expect(spring.isAtRest)
-        #expect(spring.displacement(forRowCenteredAt: 900) == 0)
+        #expect(spring.displacement(forRowCenteredAt: 0) == 0)
     }
 
     // MARK: - Configuration
@@ -509,6 +516,10 @@ struct ListScrollSpringTests {
                 angularFrequency: .nan,
                 dampingRatio: .nan
             ),
+            // Legal one at a time and hostile together: a budget bigger than
+            // the falloff distance would let rows swap outright if the slope
+            // were not bounded at use.
+            ListScrollSpring(maximumStretch: 200, resistanceFactor: 1),
         ]
 
         var noise = Noise(seed: 23)
@@ -526,13 +537,18 @@ struct ListScrollSpringTests {
                     anchorY: noise.next(in: -500 ... 500)
                 )
                 #expect(spring.stretch.isFinite)
-                var previous = -CGFloat.greatestFiniteMagnitude
-                for center in Self.rowCenters {
+                var previousCenter = Self.rowCenters[0]
+                var previousDisplaced = Self.rowCenters[0]
+                    + spring.displacement(forRowCenteredAt: Self.rowCenters[0])
+                for center in Self.rowCenters.dropFirst() {
                     let displaced = spring.displacement(forRowCenteredAt: center)
                     #expect(displaced.isFinite)
                     #expect(abs(displaced) <= budget + 1e-9)
-                    #expect(displaced >= previous - 1e-9)
-                    previous = displaced
+                    // Order survives any configuration: the falloff can never
+                    // be steeper than 1:1.
+                    #expect(center + displaced >= previousDisplaced - 1e-9)
+                    previousCenter = center
+                    previousDisplaced = center + displaced
                 }
             }
         }
@@ -547,7 +563,7 @@ struct ListScrollSpringTests {
         spring.angularFrequency = 100_000
         spring.dampingRatio = .infinity
 
-        #expect(spring.maximumStretch == 20)
+        #expect(spring.maximumStretch == 15)
         #expect(spring.resistanceFactor == 1)
         #expect(spring.angularFrequency == 500)
         #expect(spring.dampingRatio == 0.75)
@@ -569,15 +585,21 @@ struct ListScrollSpringTests {
 
     // MARK: - Shape
 
-    /// The near side of the anchor cannot move: there is no gap there to take.
+    /// Content at and below the grip is in the reader's hand and moves with
+    /// it; only content above trails. Measured, not chosen: through six
+    /// gestures of the Messages trace, both directions, the elements below
+    /// the pointer held their spacing to the pixel.
     @Test
-    func onlyTheFarSideOfTheAnchorLags() {
+    func rowsAtAndBelowTheGripStayPut() {
         var spring = ListScrollSpring()
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         #expect(spring.stretch > 0)
-        #expect(spring.displacement(forRowCenteredAt: -500) == 0)
-        #expect(spring.displacement(forRowCenteredAt: 500) > 0)
+        #expect(spring.displacement(forRowCenteredAt: 500) == 0)
+        #expect(spring.displacement(forRowCenteredAt: 0) == 0)
+        #expect(spring.displacement(forRowCenteredAt: -500) > 0)
 
+        // The same side stays put when the direction flips — the grip is a
+        // hand, not a wake.
         spring.reset()
         spring.advance(scrollDelta: -24, deltaTime: Self.frame, anchorY: 0)
         #expect(spring.stretch < 0)
@@ -586,14 +608,14 @@ struct ListScrollSpringTests {
     }
 
     @Test
-    func lagGrowsWithDistanceUntilItSaturates() {
+    func lagGrowsWithDistanceAboveTheGripUntilItSaturates() {
         var spring = ListScrollSpring(resistanceFactor: 500)
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         let full = spring.stretch
 
         #expect(spring.displacement(forRowCenteredAt: 0) == 0)
-        #expect(abs(spring.displacement(forRowCenteredAt: 250) - full / 2) < 1e-9)
-        #expect(abs(spring.displacement(forRowCenteredAt: 500) - full) < 1e-9)
-        #expect(abs(spring.displacement(forRowCenteredAt: 5000) - full) < 1e-9)
+        #expect(abs(spring.displacement(forRowCenteredAt: -250) - full / 2) < 1e-9)
+        #expect(abs(spring.displacement(forRowCenteredAt: -500) - full) < 1e-9)
+        #expect(abs(spring.displacement(forRowCenteredAt: -5000) - full) < 1e-9)
     }
 }
