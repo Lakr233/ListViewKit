@@ -242,7 +242,7 @@ extension ListScrollSpring: ListRowAnimator {
         advance(
             scrollDelta: context.scrollDelta,
             deltaTime: context.deltaTime,
-            anchorY: restingEdge(of: context.viewportRect, delta: context.scrollDelta)
+            anchorY: restingEdge(of: context)
         )
     }
 
@@ -258,8 +258,30 @@ extension ListScrollSpring: ListRowAnimator {
     /// row on that side, which is what makes the whole viewport spread rather
     /// than half of it. The stretch in hand decides which edge that is; the
     /// incoming travel only matters on the frame the motion starts.
-    private func restingEdge(of viewport: CGRect, delta: CGFloat) -> CGFloat {
-        let direction = stretch != 0 ? stretch : delta
-        return direction >= 0 ? viewport.minY : viewport.maxY
+    ///
+    /// The edge is the *visible content's*, not the viewport's, and the
+    /// difference is not cosmetic. A weight is a distance from this point, so
+    /// wherever the viewport extends past the rows — an overscroll, or a list
+    /// too short to fill its own height — the viewport edge measures from a
+    /// place with no rows in it, and every row lands beyond
+    /// ``resistanceFactor`` and reads the same saturated weight. The stretch
+    /// then translates the whole list rigidly, which is no effect at all.
+    ///
+    /// Worse, that distance changes as the overscroll unwinds, so the weights
+    /// slide while the spring is doing nothing in particular. A rubber band
+    /// returning to rest is pure common-mode motion, and it was manufacturing
+    /// a differential out of it: measured on a device, the top row parted from
+    /// a rigid slab of the others in exact linear proportion to the offset —
+    /// slope `−maximumStretch / resistanceFactor`, reproduced across three
+    /// gestures to under a fifth of a pixel. Clamping pins the anchor to the
+    /// first or last row for the whole of an overscroll, which is the one
+    /// place it can sit still.
+    private func restingEdge(of context: ListAnimatorContext) -> CGFloat {
+        let direction = stretch != 0 ? stretch : context.scrollDelta
+        let viewport = context.viewportRect
+        let content = context.contentRect
+        return direction >= 0
+            ? max(viewport.minY, content.minY)
+            : min(viewport.maxY, content.maxY)
     }
 }

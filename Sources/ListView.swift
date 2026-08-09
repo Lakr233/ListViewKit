@@ -328,6 +328,14 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         )
     }
 
+    /// The rectangle the rows occupy, in the same space as ``viewportRect``.
+    ///
+    /// Rows are laid out from zero, so this starts there whatever the insets
+    /// are: an inset is space the list leaves around the content, not content.
+    var contentRect: CGRect {
+        .init(x: 0, y: 0, width: bounds.width, height: rowLayout.contentHeight)
+    }
+
     /// The rectangle rows are kept mounted over.
     ///
     /// Wider than the viewport by whatever the animator may displace a row by,

@@ -120,6 +120,7 @@ extension ListView {
     private func animatorContext(scrollDelta: CGFloat, deltaTime: TimeInterval) -> ListAnimatorContext {
         .init(
             viewportRect: viewportRect,
+            contentRect: contentRect,
             scrollDelta: scrollDelta,
             deltaTime: deltaTime,
             isUserInteracting: isUserInteractingWithScroll

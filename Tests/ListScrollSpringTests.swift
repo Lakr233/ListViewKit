@@ -362,6 +362,96 @@ struct ListScrollSpringTests {
         #expect(spring.displacement(forRowCenteredAt: 800) == before)
     }
 
+    /// A list, as the animator is handed one: rows from zero to `contentHeight`
+    /// in a viewport whose top edge is wherever the reader has dragged it.
+    private static func context(
+        viewportTop: CGFloat,
+        viewportHeight: CGFloat = 900,
+        contentHeight: CGFloat,
+        scrollDelta: CGFloat
+    ) -> ListAnimatorContext {
+        .init(
+            viewportRect: CGRect(x: 0, y: viewportTop, width: 320, height: viewportHeight),
+            contentRect: CGRect(x: 0, y: 0, width: 320, height: contentHeight),
+            scrollDelta: scrollDelta,
+            deltaTime: frame,
+            isUserInteracting: true
+        )
+    }
+
+    /// Where the first and last rows of a four-row list sit, at 92pt each.
+    private static let firstRowCentre: CGFloat = 46
+    private static let lastRowCentre: CGFloat = 322
+    private static let fourRowsTall: CGFloat = 368
+
+    /// Dragging past the end of the content does not regrade the rows.
+    ///
+    /// An overscroll is common-mode motion: every row moves by the same amount
+    /// and none of them moves relative to another. But a weight is a distance
+    /// from the anchor, and the anchor was a viewport edge — so the distance
+    /// every weight was measured from grew as the rubber band stretched and
+    /// shrank as it returned, turning motion with no differential in it into a
+    /// differential.
+    ///
+    /// Measured on a device: through the return, the top row parted from a
+    /// rigid slab of the other three in exact linear proportion to the offset,
+    /// slope `−maximumStretch / resistanceFactor`, reproduced across three
+    /// separate gestures to under a fifth of a pixel. Nothing about a spring
+    /// is a straight line in the offset. It was the anchor sliding back onto
+    /// the content.
+    @Test
+    @MainActor
+    func overscrollDoesNotRegradeTheRows() {
+        func topRowLag(overscrolledBy overscroll: CGFloat) -> CGFloat {
+            var spring = ListScrollSpring()
+            for _ in 0 ..< 30 {
+                spring.willUpdate(Self.context(
+                    viewportTop: -overscroll,
+                    contentHeight: 1800,
+                    scrollDelta: 10
+                ))
+            }
+            return spring.displacement(forRowCenteredAt: Self.firstRowCentre)
+        }
+
+        let unstretched = topRowLag(overscrolledBy: 0)
+        #expect(unstretched > 0, "the first row should lag at all")
+        for overscroll in [CGFloat(20), 60, 150, 400] {
+            let lag = topRowLag(overscrolledBy: overscroll)
+            #expect(
+                abs(lag - unstretched) < 0.01,
+                "\(overscroll)pt of overscroll moved the first row's lag to \(lag) from \(unstretched)"
+            )
+        }
+    }
+
+    /// A list too short to fill its own viewport still spreads.
+    ///
+    /// The viewport's far edge can sit hundreds of points past the last row,
+    /// and every weight measured from out there saturates alike, so the
+    /// stretch came out as a rigid translation of the whole list — the effect
+    /// switched itself off on exactly the lists it is easiest to see it on.
+    @Test
+    @MainActor
+    func aListShorterThanItsViewportStillSpreads() {
+        var spring = ListScrollSpring()
+        for _ in 0 ..< 30 {
+            spring.willUpdate(Self.context(
+                viewportTop: -100,
+                contentHeight: Self.fourRowsTall,
+                scrollDelta: -10
+            ))
+        }
+        #expect(spring.stretch < 0)
+
+        let first = spring.displacement(forRowCenteredAt: Self.firstRowCentre)
+        let last = spring.displacement(forRowCenteredAt: Self.lastRowCentre)
+        #expect(
+            abs(first - last) > 1,
+            "every row read the same weight: the list moved rigidly, by \(first)"
+        )
+    }
+
     @Test
     func resetLeavesNothingBehind() {
         var spring = ListScrollSpring()

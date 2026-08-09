@@ -99,6 +99,15 @@ public struct ListAnimatorContext: Sendable {
     /// The real viewport, not the wider rectangle rows are mounted over.
     public let viewportRect: CGRect
 
+    /// The rectangle the rows occupy, in the same space.
+    ///
+    /// The viewport is not a reliable stand-in for it. It runs off the end of
+    /// the content during an overscroll, and it is larger than the content
+    /// whenever a list does not fill its own height — so an animator that
+    /// positions anything relative to a viewport edge is, in those moments,
+    /// positioning it relative to a place where there are no rows.
+    public let contentRect: CGRect
+
     /// Vertical travel since the last frame, in points.
     ///
     /// Only motion a reader perceives as scrolling: a finger, momentum, a
