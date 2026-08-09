@@ -41,7 +41,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Row views on screen, and the registration each was built from.
     var visibleRows: [Item.ID: (view: ListRowView, registration: Int)] = [:]
     /// Recycled rows, by registration index.
-    private var reusePools: [[ListRowView]] = []
+    var reusePools: [[ListRowView]] = []
     /// Hidden rows kept for Auto Layout measurement, by registration index.
     /// The width constraint is what a self-sizing row solves against.
     struct Prototype {
@@ -53,6 +53,18 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     private var rowsPendingRemoval: [ListRowView] = []
     /// Rows placed this pass, still holding the previous item's arrangement.
     private var rowsPendingSettle: [ListRowView] = []
+
+    /// Displaces rows on top of the layout while the list scrolls. Nil is the
+    /// default and costs nothing: no link, no per-row work, no ledger reads.
+    var scrollSpring: ListScrollSpring?
+
+    /// Runs the animator a frame at a time while it says it has more to do.
+    var rowAnimatorLink: RowAnimatorDisplayLink?
+    /// Guards the list against an animator that lays out from inside a tick.
+    var isRunningRowAnimator = false
+    /// How many frames the animator has been advanced for, so a test can show
+    /// an idle list never ticks and a scrolling one ticks once per frame.
+    var animatorTickCount: Int = 0
 
     var isSliceDrainScheduled = false
     /// When the content width last turned measured heights back into
@@ -279,15 +291,23 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         updateVisibleRowFrames(animated: false)
 
         #if DEBUG
+            // Asserted on the placements, so it keeps checking the layout even
+            // while an animator displaces rows away from it. Whether a
+            // displacement overlaps rows is the animator's business — some
+            // effects overlap on purpose — and ``ListScrollSpring`` proves it
+            // does not.
             var previousMaxY: CGFloat = 0
-            for view in visibleRows.values.map(\.view).sorted(by: { $0.frame.minY < $1.frame.minY }) {
-                assert(view.frame.minY >= previousMaxY)
-                previousMaxY = view.frame.maxY
+            for view in visibleRows.values.map(\.view)
+                .sorted(by: { $0.placedFrame.minY < $1.placedFrame.minY })
+            {
+                assert(view.placedFrame.minY >= previousMaxY)
+                previousMaxY = view.placedFrame.maxY
             }
         #endif
 
         removeUnusedRowsFromSuperview()
         settleNewlyPlacedRows()
+        applyRowAnimator()
     }
 
     /// Lays out the rows placed during this pass, with animation suppressed.
@@ -341,9 +361,12 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         removeUnusedRowsFromSuperview()
     }
 
+    /// Compared against ``ListRowView/placedFrame`` rather than the view's own
+    /// frame, which a row animator's displacement makes meaningless — on UIKit
+    /// literally so, since displacement lands on the transform.
     private func updateFrame(of rowView: ListRowView, to targetFrame: CGRect, animated: Bool) {
-        guard rowView.frame != targetFrame else { return }
-        let sizeChanged = rowView.frame.size != targetFrame.size
+        guard rowView.placedFrame != targetFrame else { return }
+        let sizeChanged = rowView.placedFrame.size != targetFrame.size
         setRowFrame(targetFrame, on: rowView, animated: animated)
         guard sizeChanged else { return }
         rowView.requestLayout()
@@ -433,7 +456,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // sitting at someone else's frame, so configuring it there would lay
         // its contents out against a size about to change, and parenting it
         // there would show it in the wrong place for a frame.
-        placeView(rectForRow(at: index), on: view)
+        setRowFrame(rectForRow(at: index), on: view, animated: false)
         rowsPendingSettle.append(view)
         view.prepareForReuse()
         registrations[registrationIndex].configure(
@@ -497,6 +520,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     @discardableResult
     func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
+        // Whatever the animator was showing belonged to the item leaving, so
+        // it does not travel to the next one on the same view. The scalar
+        // model makes this free: there is no per-row state to tear down.
+        clearRowDisplacement(on: entry.view)
         reusePools[entry.registration].append(entry.view)
         rowsPendingRemoval.append(entry.view)
         return entry.view

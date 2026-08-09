@@ -81,13 +81,42 @@ let listAnimationDuration: TimeInterval = 0.5
     /// whole job here — the AppKit side has to build that behaviour by hand.
     /// That additivity only holds inside the list's own block, which is why the
     /// caller has to say whether it is in one.
+    ///
+    /// Written through `bounds` and `center` rather than `frame`, because a
+    /// row carrying a displacement has a transform on it and `frame` means
+    /// nothing then. The two are equivalent when the transform is the identity
+    /// and animate the same way inside a block.
     @MainActor
     func setRowFrame(_ frame: CGRect, on view: ListRowView, animated: Bool) {
+        view.placedFrame = frame
         guard animated else {
-            placeView(frame, on: view)
+            withoutListAnimation { applyRowGeometry(frame, on: view) }
             return
         }
-        view.frame = frame
+        applyRowGeometry(frame, on: view)
+    }
+
+    @MainActor
+    private func applyRowGeometry(_ frame: CGRect, on view: ListRowView) {
+        view.bounds.size = frame.size
+        view.center = CGPoint(x: frame.midX, y: frame.midY)
+    }
+
+    /// Shows a row `dy` away from where the list placed it.
+    ///
+    /// The transform is a different key path from the position a list
+    /// animation moves, so a displacement written every frame and a reorder
+    /// running underneath it do not overwrite each other. UIKit also hit-tests
+    /// through a transform, so a displaced row still answers touches where it
+    /// is drawn.
+    ///
+    /// Suppression is the caller's job: this runs for every mounted row, and
+    /// wrapping each one separately would cost more than the write.
+    @MainActor
+    func setRowPresentationOffset(_ dy: CGFloat, on view: ListRowView) {
+        guard view.presentationOffset != dy else { return }
+        view.presentationOffset = dy
+        view.transform = dy == 0 ? .identity : CGAffineTransform(translationX: 0, y: dy)
     }
 
 #elseif canImport(AppKit)
@@ -151,6 +180,33 @@ let listAnimationDuration: TimeInterval = 0.5
     @MainActor
     private var slideSequence = 0
 
+    /// A displaced row sits away from where it was placed, so the reader sees
+    /// ``ListRowView/placedFrame`` plus the displacement.
+    @MainActor
+    private func presentedFrame(for view: ListRowView, placedAt frame: CGRect) -> CGRect {
+        frame.offsetBy(dx: 0, dy: view.presentationOffset)
+    }
+
+    /// Shows a row `dy` away from where the list placed it.
+    ///
+    /// The frame, not the transform: AppKit hit testing and accessibility read
+    /// a view's frame and ignore what its backing layer's transform did, so a
+    /// row displaced by a transform would answer clicks somewhere other than
+    /// where it is drawn. Composition survives that choice because the slide
+    /// in `setRowFrame` is additive — it contributes a delta on top of the
+    /// model position rather than driving it, and because a displacement that
+    /// is unchanged across a placement write cancels out of the offset that
+    /// slide is measured by.
+    ///
+    /// Suppression is the caller's job: this runs for every mounted row, and
+    /// wrapping each one separately would cost more than the write.
+    @MainActor
+    func setRowPresentationOffset(_ dy: CGFloat, on view: ListRowView) {
+        guard view.presentationOffset != dy else { return }
+        view.presentationOffset = dy
+        view.frame = presentedFrame(for: view, placedAt: view.placedFrame)
+    }
+
     /// Moves a row to its new frame, adding the slide to whatever is already in
     /// flight rather than replacing it.
     ///
@@ -168,17 +224,23 @@ let listAnimationDuration: TimeInterval = 0.5
     /// where the row was headed to where it is now headed, so the velocities
     /// add up and the row never stalls. Each animates its delta down to zero
     /// and is removed once it lands, leaving nothing behind to drift.
+    ///
+    /// A row carrying a displacement composes with this without special
+    /// handling, as long as the write below carries it too: the offset is the
+    /// difference between two positions taken either side of the write, and a
+    /// displacement present in both cancels out of it.
     @MainActor
     func setRowFrame(_ frame: CGRect, on view: ListRowView, animated: Bool) {
+        view.placedFrame = frame
         guard animated, let layer = view.layer else {
-            placeView(frame, on: view)
+            placeView(presentedFrame(for: view, placedAt: frame), on: view)
             return
         }
         let previousPosition = layer.position
         // The frame moves outright; the slide below is what the reader sees.
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        view.frame = frame
+        view.frame = presentedFrame(for: view, placedAt: frame)
         CATransaction.commit()
 
         let offset = CGPoint(

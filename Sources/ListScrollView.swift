@@ -21,6 +21,8 @@ import SpringInterpolation
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
+        var scrollLedger = ScrollLedger()
+
         /// While set, an offset that a content-size change pushed out of
         /// bounds travels to its new home instead of snapping there. A caller
         /// animating its rows has to move the viewport along with them, or the
@@ -112,7 +114,7 @@ import SpringInterpolation
                 // an idle list lands on the new edge outright: animating every
                 // correction restarts the slide on each pass and reads as the
                 // list scrolling by itself.
-                applyContentOffset(clamped)
+                applyContentOffsetWithoutTravel(clamped)
             }
         }
 
@@ -174,7 +176,9 @@ import SpringInterpolation
         func compensateScrollOffset(by dy: CGFloat) {
             guard dy != 0 else { return }
             // The whole point of this shift is that the reader cannot see it.
-            // Animating it is exactly how it becomes visible.
+            // Animating it is exactly how it becomes visible — and by the same
+            // argument it is not travel a row animator may spring on.
+            scrollLedger.exclude(dy)
             withoutListAnimation { super.contentOffset.y += dy }
             if var target = scrollingTarget {
                 target.y += dy
@@ -211,8 +215,18 @@ import SpringInterpolation
                 scroll(to: contentOffset)
             } else {
                 cancelCurrentScrolling()
-                applyContentOffset(contentOffset)
+                applyContentOffsetWithoutTravel(contentOffset)
             }
+        }
+
+        /// Moves the offset without calling it travel.
+        ///
+        /// A jump to an arbitrary offset and a clamp back inside the bounds
+        /// both relocate the reader rather than carry them, so neither is
+        /// scrolling a row animator should answer.
+        private func applyContentOffsetWithoutTravel(_ offset: CGPoint) {
+            scrollLedger.exclude(offset.y - contentOffset.y)
+            applyContentOffset(offset)
         }
 
         /// The funnel for every offset this class owns: display-link ticks, the
@@ -230,6 +244,11 @@ import SpringInterpolation
 
         override open func layoutSubviews() {
             super.layoutSubviews()
+            // Every offset change ends up here — changing the bounds is what
+            // scrolling is — so this is where travel is counted, including the
+            // dragging and deceleration `UIScrollView` performs without ever
+            // calling into this class.
+            scrollLedger.accrue(offsetY: contentOffset.y)
             layoutContent()
         }
 
@@ -398,6 +417,8 @@ import SpringInterpolation
         )
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
+
+        var scrollLedger = ScrollLedger()
 
         private var _contentOffset: CGPoint = .zero
         private var _contentSize: CGSize = .zero
@@ -568,6 +589,9 @@ import SpringInterpolation
 
         override open func layout() {
             super.layout()
+            // Every offset write marks this view for layout, so this is where
+            // travel is counted, whichever of the physics produced it.
+            scrollLedger.accrue(offsetY: contentOffset.y)
             layoutContent()
             // After `layoutContent`, which may have changed `contentSize`.
             // AppKit will not re-enter `layout()` for an invalidation raised
@@ -734,7 +758,7 @@ import SpringInterpolation
                 // an idle list lands on the new edge outright: animating every
                 // correction restarts the slide on each pass and reads as the
                 // list scrolling by itself.
-                applyContentOffset(clamped)
+                applyContentOffsetWithoutTravel(clamped)
             }
         }
 
@@ -1020,9 +1044,11 @@ import SpringInterpolation
         /// visually stationary.
         func compensateScrollOffset(by dy: CGFloat) {
             guard dy != 0 else { return }
-            _contentOffset.y += dy
             // The whole point of this shift is that the reader cannot see it.
-            // Animating it is exactly how it becomes visible.
+            // Animating it is exactly how it becomes visible — and by the same
+            // argument it is not travel a row animator may spring on.
+            scrollLedger.exclude(dy)
+            _contentOffset.y += dy
             withoutListAnimation { setBoundsOrigin(_contentOffset) }
             needsLayout = true
             _trackingRawOffsetY += dy
@@ -1129,8 +1155,18 @@ import SpringInterpolation
                 scroll(to: contentOffset)
             } else {
                 cancelCurrentScrolling()
-                applyContentOffset(contentOffset)
+                applyContentOffsetWithoutTravel(contentOffset)
             }
+        }
+
+        /// Moves the offset without calling it travel.
+        ///
+        /// A jump to an arbitrary offset and a clamp back inside the bounds
+        /// both relocate the reader rather than carry them, so neither is
+        /// scrolling a row animator should answer.
+        private func applyContentOffsetWithoutTravel(_ offset: CGPoint) {
+            scrollLedger.exclude(offset.y - contentOffset.y)
+            applyContentOffset(offset)
         }
 
         /// The funnel for every offset this class owns: display-link ticks, the
