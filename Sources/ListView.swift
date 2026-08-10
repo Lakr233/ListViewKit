@@ -57,7 +57,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Displaces rows on top of the layout while the list scrolls.
     ///
     /// ```swift
-    /// list.rowAnimator = ListBouncyAnimator(style: .regular)
+    /// list.rowAnimator = ListBouncyAnimator()
     /// ```
     ///
     /// Nil is the default and costs nothing: no display link, no per-row work,

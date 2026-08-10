@@ -486,9 +486,9 @@ struct ListRowAnimatorPublicAPITests {
         #expect(ListBouncyAnimator(style: .subtle) == ListBouncyAnimator(damping: 0.8, frequency: 2))
         #expect(ListBouncyAnimator(style: .regular) == ListBouncyAnimator(damping: 0.7, frequency: 1.5))
         #expect(ListBouncyAnimator(style: .prominent) == ListBouncyAnimator(damping: 0.5, frequency: 1))
-        // The no-argument animator is `.regular`, which is also the original's
-        // default.
-        #expect(ListBouncyAnimator() == ListBouncyAnimator(style: .regular))
+        // The no-argument animator is `.subtle` — the requested default here;
+        // the original's own default is `.regular`.
+        #expect(ListBouncyAnimator() == ListBouncyAnimator(style: .subtle))
         // The overscan is the original's viewport buffer.
         #expect(ListBouncyAnimator().maximumDisplacement == 200)
     }
@@ -496,7 +496,7 @@ struct ListRowAnimatorPublicAPITests {
     /// A knob fed nonsense falls back instead of propagating it.
     @Test
     func knobsSurviveHostileValues() {
-        #expect(ListBouncyAnimator(damping: .nan, frequency: .infinity) == ListBouncyAnimator(style: .regular))
+        #expect(ListBouncyAnimator(damping: .nan, frequency: .infinity) == ListBouncyAnimator(style: .subtle))
         var animator = ListBouncyAnimator()
         animator.damping = -3
         animator.frequency = 0

@@ -48,10 +48,9 @@ import Foundation
 /// - `shouldInvalidateLayout(forBoundsChange:)` → ``willUpdate(_:)``, whose
 ///   `scrollDelta` is the same bounds travel with compensation already
 ///   subtracted.
-/// - `floor(item.center)` after each pump → the pumped displacement is
-///   floored. The original re-floors the cell's absolute centre on every
-///   bounds change; anchors there are floored at attach, so the arithmetic
-///   comes to the same thing.
+/// - `floor(item.center)` after each pump → dropped, deliberately. It exists
+///   to pixel-align `UICollectionView` cell frames; on a transform channel it
+///   only quantised the motion into visible 1pt stairs. See ``pump``.
 /// - `VIEWPORT_BUFFER` (200pt) → ``maximumDisplacement``, which is what the
 ///   list overscans its mounting rectangle by.
 /// - the original tears down and re-adds every behaviour when a visible cell
@@ -87,7 +86,7 @@ public struct ListBouncyAnimator: Equatable {
     /// The attachment's damping ratio. Below 1 a row overshoots its slot and
     /// comes back; the presets all sit below 1 on purpose.
     public var damping: CGFloat {
-        didSet { damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.regular.damping) }
+        didSet { damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.subtle.damping) }
     }
 
     /// The attachment's oscillation frequency, in hertz.
@@ -95,7 +94,7 @@ public struct ListBouncyAnimator: Equatable {
     /// Both knobs are read on every step, so a change reaches the springs
     /// already in flight — there is no per-attachment tuning to go stale.
     public var frequency: CGFloat {
-        didSet { frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.regular.frequency) }
+        didSet { frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.subtle.frequency) }
     }
 
     /// The original divides the distance from the touch by this to grade the
@@ -148,9 +147,12 @@ public struct ListBouncyAnimator: Equatable {
         lhs.damping == rhs.damping && lhs.frequency == rhs.frequency
     }
 
-    public init(damping: CGFloat = BounceStyle.regular.damping, frequency: CGFloat = BounceStyle.regular.frequency) {
-        self.damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.regular.damping)
-        self.frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.regular.frequency)
+    /// The no-argument animator is `.subtle` — the gentlest of the original's
+    /// styles, and the requested default here. The original's own default is
+    /// `.regular`; reach for it, or further, by name.
+    public init(damping: CGFloat = BounceStyle.subtle.damping, frequency: CGFloat = BounceStyle.subtle.frequency) {
+        self.damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.subtle.damping)
+        self.frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.subtle.frequency)
     }
 
     public init(style: BounceStyle) {
@@ -169,14 +171,20 @@ public struct ListBouncyAnimator: Equatable {
     /// `delta < 0 ? max(delta, delta · resistance) : min(delta, delta ·
     /// resistance)` — the resistance grades the pump by distance from the
     /// touch and the min/max caps it at the full delta, both branches picking
-    /// the smaller magnitude. The floor afterwards is the original's
-    /// `item.center = floor(item.center)`. The velocity is untouched, exactly
-    /// as moving a dynamic item's centre does not touch the body's velocity.
+    /// the smaller magnitude. The velocity is untouched, exactly as moving a
+    /// dynamic item's centre does not touch the body's velocity.
+    ///
+    /// The one line of the original deliberately not carried over is
+    /// `item.center = floor(item.center)`. That floor pixel-aligns cell
+    /// frames for `UICollectionView`; here the displacement lands on a
+    /// transform, where sub-pixel is exactly what smoothness is made of, and
+    /// carrying it over quantised every row to 1pt stairs — a slow scroll
+    /// pumped fractions that the floor swallowed whole, then popped.
     private func pump(_ attachment: inout Board.Attachment, delta: CGFloat, touchY: CGFloat) {
         guard delta != 0 else { return }
         let resistance = abs(touchY - attachment.anchorY) / Self.resistanceDistance
         let bite = delta < 0 ? max(delta, delta * resistance) : min(delta, delta * resistance)
-        attachment.displacement = floor(attachment.displacement + bite)
+        attachment.displacement += bite
     }
 
     /// One physics step of the behaviour's spring: Box2D's soft constraint,

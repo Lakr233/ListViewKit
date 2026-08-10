@@ -1484,7 +1484,7 @@ v2 据 Messages 触控板追踪把「指针以下刚性」也搬了过来，真�
 | cell 离开视口摘弹簧 | 一段时间未被 offer 的 attachment 被剪除 |
 | `shouldInvalidateLayout(forBoundsChange:)` 泵入 | `willUpdate` 的 `scrollDelta`（补偿已剔除） |
 | `resistance = abs(touch − anchor) / 1000`，`min/max` 封顶 | 原样 |
-| `floor(item.center)` | 泵入结果取 floor |
+| `floor(item.center)` | 刻意不搬。它是给 UICollectionView 的 cell frame 做像素对齐的；在 transform 通道上它只会把运动量化成肉眼可见的 1pt 台阶（慢滚时小数泵入被整段吞掉再突跳），真机验证后摘除 |
 | `VIEWPORT_BUFFER = 200` | `maximumDisplacement = 200`（挂载外扩） |
 | 三档 `BounceStyle`（0.8/2、0.7/1.5、0.5/1） | 数值原样 |
 | cell 尺寸变化时全部拆掉重挂（会闪一帧） | 槽位移动就地重锚，保留位移——同一修复，没有那一帧闪 |
@@ -1500,10 +1500,11 @@ v2 据 Messages 触控板追踪把「指针以下刚性」也搬了过来，真�
   123/56 六行规格），原版本来就允许 cell 重叠；DEBUG 重叠断言只查
   placement，不查位移。§2.3 的非重叠证明随场模型一起退役。
 
-与原版的全部差异就两处，都写在 `ListBouncyAnimator.swift` 的注释里：
-重锚代替拆重挂（上表最后一行），以及静止吸附到精确槽位而不是
+与原版的全部差异就三处，都写在 `ListBouncyAnimator.swift` 的注释里：
+重锚代替拆重挂（上表最后一行）；静止吸附到精确槽位而不是
 `floor(anchor)`（原版停在向下取整的锚点上，差距亚像素，而列表的回收
-契约要求位移严格归零）。
+契约要求位移严格归零）；以及泵入不取 floor（上表倒数第二行——初版
+照搬了 floor，真机上正是「动画不顺畅」的元凶）。
 
 场模型（`ListScrollSpring`）与其 991 行模型测试一并删除；管线
 （协议、ledger、display link、mount overscan、rebase、placedFrame）

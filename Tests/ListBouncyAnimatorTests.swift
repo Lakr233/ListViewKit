@@ -79,20 +79,22 @@ struct ListBouncyAnimatorTests {
         #expect(animator.displacement(forKey: 0) == -20)
     }
 
-    /// The pumped displacement is floored, exactly as the original floors the
-    /// cell's centre on every bounds change — which rounds towards the
-    /// travel's negative side, not towards zero.
+    /// The pump keeps sub-pixel precision — the one deliberate departure from
+    /// the original, whose `floor(item.center)` pixel-aligns collection view
+    /// cell frames. On a transform channel the floor quantised every row to
+    /// 1pt stairs: a slow scroll pumped fractions the floor swallowed whole,
+    /// then popped.
     @Test
-    func thePumpIsFlooredLikeTheOriginal() {
+    func thePumpKeepsSubpixelPrecision() {
         var animator = ListBouncyAnimator()
         _ = animator.attach(at: -100, key: 0) // 500 out
         animator.willUpdate(context(delta: 41, dt: 0, touchY: 400))
-        #expect(animator.displacement(forKey: 0) == 20) // floor(20.5)
+        #expect(animator.displacement(forKey: 0) == 20.5)
 
         var downward = ListBouncyAnimator()
         _ = downward.attach(at: -100, key: 0)
         downward.willUpdate(context(delta: -41, dt: 0, touchY: 400))
-        #expect(downward.displacement(forKey: 0) == -21) // floor(−20.5)
+        #expect(downward.displacement(forKey: 0) == -20.5)
     }
 
     /// Momentum pumps too. The original feeds every bounds change through

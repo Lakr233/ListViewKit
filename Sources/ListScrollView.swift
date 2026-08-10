@@ -8,7 +8,7 @@
 
     open class ListScrollView: UIScrollView {
         var scrollingDisplayLink: CADisplayLink?
-        var scrollingContext = SoftSpring2D(angularFrequency: 6, dampingRatio: 1, threshold: 0.05)
+        var scrollingContext = SoftSpring2D(angularFrequency: 10, dampingRatio: 1, threshold: 0.05)
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
