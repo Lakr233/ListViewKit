@@ -496,6 +496,17 @@ import SpringInterpolation
         private var _lastScrollWheelViewportY: CGFloat?
         var interactionLocationInViewportY: CGFloat? { _lastScrollWheelViewportY }
 
+        /// When a phase-less wheel event last scrolled the content, in
+        /// `ProcessInfo.systemUptime` terms.
+        ///
+        /// A traditional mouse wheel reports no gesture phases, so there is no
+        /// began/ended pair to hold ``isReaderHoldingScroll`` true between
+        /// notches — each event tears its tracking down before the layout pass
+        /// that consumes the travel even runs. Without a bridge, the animator
+        /// sees every notch as a hand that has already left: the travel is
+        /// dropped and the effect never engages for wheel mice at all.
+        var _lastDiscreteWheelUptime: TimeInterval = -.infinity
+
         /// True while AppKit-style overscroll rebound is active.
         private var _isBouncing: Bool = false
 
@@ -999,7 +1010,10 @@ import SpringInterpolation
             // Traditional mouse wheels do not report gesture phases. Treat every
             // event as a complete interaction so the next delta starts from the
             // current offset and programmatic scrolling is never left blocked.
+            // The debounce window is what keeps ``isReaderHoldingScroll`` true
+            // across the gap to the next notch; tracking itself must not be.
             if isDiscreteWheelEvent {
+                _lastDiscreteWheelUptime = ProcessInfo.processInfo.systemUptime
                 _isTracking = false
                 let clamped = nearestScrollLocationInBounds(offset: contentOffset)
                 if clamped != contentOffset {
@@ -1424,13 +1438,33 @@ public extension ListScrollView {
     /// touch dragging, or a trackpad gesture before the lift, or the scroller
     /// knob held. Momentum and rebounds are the offset still owned but the
     /// hand already gone.
+    ///
+    /// A phase-less wheel counts as a hand for ``wheelInteractionWindow``
+    /// seconds after each notch. There is no lift event to end that grip, so
+    /// it ends by debounce — the same shape, and the same floor, as
+    /// ``autoScrollSuppressionWindow``: the window must outlast the gap
+    /// between notches of a wheel turned deliberately, or the animator sees a
+    /// hand that flickers off between every two clicks of the wheel.
     var isReaderHoldingScroll: Bool {
         #if canImport(UIKit)
             isTracking || isDragging
         #elseif canImport(AppKit)
             _isTracking || _isVerticalScrollerTracking
+                || ProcessInfo.processInfo.systemUptime - _lastDiscreteWheelUptime
+                < Self.wheelInteractionWindow
         #endif
     }
+
+    #if canImport(AppKit)
+        /// How long a notch keeps counting as a hand on the content.
+        ///
+        /// Sized like ``autoScrollSuppressionWindow`` and for the same reason:
+        /// a wheel read notch by notch leaves about a fifth of a second
+        /// between events, and every gap the window fails to bridge is a frame
+        /// where the spread collapses and re-engages — which reads as jitter,
+        /// not as the effect ending.
+        static var wheelInteractionWindow: TimeInterval { 0.25 }
+    #endif
 
     /// Returns whether the vertical offset is at the bottom edge, allowing a
     /// small tolerance for fractional layout and display-scale differences.
