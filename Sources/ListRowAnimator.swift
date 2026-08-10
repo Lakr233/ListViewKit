@@ -131,7 +131,10 @@ public struct ListAnimatorContext: Sendable {
     ///
     /// Only motion a reader perceives as scrolling: a finger, momentum, a
     /// rubber band, an animated scroll. Compensation, a clamp after a resize,
-    /// and an outright jump to an offset are all excluded.
+    /// and an outright jump to an offset are all excluded. So is a discrete
+    /// mouse wheel on macOS — real scrolling, but delivered as line-sized
+    /// jumps with no glide between them, which row effects are not meant to
+    /// answer; the trackpad and the touch screen keep feeding through.
     public let scrollDelta: CGFloat
 
     /// Seconds since the last frame, clamped to 1/30.

@@ -487,6 +487,13 @@
         /// AppKit-matched momentum or rebound animation.
         private var _ignoresMomentumEvents: Bool = false
 
+        /// True while the running programmatic scroll belongs to a discrete
+        /// wheel — the clamp back in bounds after its notches overran an edge.
+        /// Its motion is excluded from travel the same way the notches were:
+        /// rows that stayed rigid through the scroll must not spring on the
+        /// way back.
+        private var _scrollAnimationIsExcludedFromTravel: Bool = false
+
         /// Estimated raw scroll velocity (points/sec) for momentum and rebound handoff.
         private var _scrollVelocityY: CGFloat = 0
         private var _prevScrollTime: CFTimeInterval = 0
@@ -966,7 +973,17 @@
             }
             _prevScrollTime = now
 
-            applyContentOffset(.init(x: contentOffset.x, y: visualY))
+            if isDiscreteWheelEvent {
+                // A detented wheel jumps a line at a time; there is no glide
+                // for an elastic row lag to grade, only steps for it to wobble
+                // on. The motion is real scrolling, but it is excluded from
+                // travel so a row animator never springs on it — the effect
+                // belongs to direct manipulation, the trackpad and the touch
+                // screen.
+                applyContentOffsetWithoutTravel(.init(x: contentOffset.x, y: visualY))
+            } else {
+                applyContentOffset(.init(x: contentOffset.x, y: visualY))
+            }
 
             // Once momentum carries the content past an edge, AppKit hands the
             // remaining motion to its rebound curve and consumes subsequent
@@ -988,6 +1005,10 @@
                 let clamped = nearestScrollLocationInBounds(offset: contentOffset)
                 if clamped != contentOffset {
                     scroll(to: clamped, preserveVelocity: false)
+                    // After `scroll(to:)`, which clears it: the clamp is the
+                    // wheel's own motion unwinding, not a scroll anyone asked
+                    // for, so it is excluded from travel like the notches.
+                    _scrollAnimationIsExcludedFromTravel = true
                 }
                 return
             }
@@ -1082,6 +1103,9 @@
             _rubberBandAnimation = nil
             _momentumAnimation = nil
             _isBouncing = false
+            // A scroll someone asked for is travel. Only the discrete-wheel
+            // clamp re-marks itself, immediately after calling in here.
+            _scrollAnimationIsExcludedFromTravel = false
             let target = nearestScrollLocationInBounds(offset: offset)
             let velocity: CGPoint = if preserveVelocity {
                 .init(
@@ -1120,6 +1144,7 @@
             _isBouncing = false
             _rubberBandAnimation = nil
             _momentumAnimation = nil
+            _scrollAnimationIsExcludedFromTravel = false
             // Do not clear _ignoresMomentumEvents here. AppKit may still be
             // sending native momentum from a gesture owned by a local animation.
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
@@ -1237,7 +1262,11 @@
                 x: scrollingContext.x.value,
                 y: scrollingContext.y.value
             )
-            applyContentOffset(loc)
+            if _scrollAnimationIsExcludedFromTravel {
+                applyContentOffsetWithoutTravel(loc)
+            } else {
+                applyContentOffset(loc)
+            }
         }
 
         open func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {

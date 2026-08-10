@@ -208,6 +208,98 @@ struct ListViewRowAnimatorAppKitTests {
         #expect(afterSecond < valueBefore)
     }
 
+    private func makeWheelEvent(
+        deltaY: Int32,
+        phase: CGScrollPhase? = nil,
+        momentumPhase: CGScrollPhase? = nil
+    ) throws -> NSEvent {
+        let cgEvent = try #require(CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .line,
+            wheelCount: 1,
+            wheel1: deltaY,
+            wheel2: 0,
+            wheel3: 0
+        ))
+        cgEvent.setIntegerValueField(
+            .scrollWheelEventScrollPhase,
+            value: Int64(phase?.rawValue ?? 0)
+        )
+        cgEvent.setIntegerValueField(
+            .scrollWheelEventMomentumPhase,
+            value: Int64(momentumPhase?.rawValue ?? 0)
+        )
+        return try #require(NSEvent(cgEvent: cgEvent))
+    }
+
+    /// A detented wheel scrolls the list but never reaches the attachments:
+    /// the effect is for the scrolling a hand drives directly.
+    @Test
+    func aDiscreteWheelIsNotTravel() throws {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.setContentOffset(CGPoint(x: 0, y: 500), animated: false)
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        listView.scrollWheel(with: try makeWheelEvent(deltaY: 2))
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        #expect(listView.contentOffset.y == 480)
+        #expect(listView.scrollLedger.pending == 0)
+        #expect(listView.bouncy?.wantsNextFrame == false)
+        #expect(displacements(listView).allSatisfy { $0 == 0 })
+    }
+
+    /// The same event with a gesture phase is the trackpad, and the trackpad
+    /// keeps feeding the springs.
+    @Test
+    func aTrackpadGestureIsStillTravel() throws {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.setContentOffset(CGPoint(x: 0, y: 500), animated: false)
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        listView.scrollWheel(with: try makeWheelEvent(deltaY: 20, phase: .began))
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        #expect(displacements(listView).contains { $0 != 0 })
+
+        listView.scrollWheel(with: try makeWheelEvent(deltaY: 0, phase: .ended))
+    }
+
+    /// Notching past an edge rubber-bands and clamps back; that clamp is the
+    /// wheel's own motion unwinding, and it may not spring the rows either.
+    @Test
+    func theClampAfterAWheelOverrunIsNotTravel() throws {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        let bottom = listView.maximumContentOffset
+        listView.setContentOffset(bottom, animated: false)
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        listView.scrollWheel(with: try makeWheelEvent(deltaY: -30))
+        #expect(listView.contentOffset.y > bottom.y)
+
+        for _ in 0 ..< 600 {
+            listView.handleScrollingAnimation(.init(
+                duration: Self.frame,
+                timestamp: 0,
+                targetTimestamp: Self.frame
+            ))
+        }
+        listView.layoutSubtreeIfNeeded()
+        listView.tickRowAnimator(duration: Self.frame)
+
+        #expect(abs(listView.contentOffset.y - bottom.y) <= 1)
+        #expect(listView.scrollLedger.pending == 0)
+        #expect(displacements(listView).allSatisfy { $0 == 0 })
+    }
+
     // MARK: - Frames
 
     /// A layout pass is not a frame. Several can run for one.

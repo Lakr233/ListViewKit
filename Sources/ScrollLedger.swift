@@ -19,7 +19,10 @@ import Foundation
 /// same as every write to `contentOffset`. Deferred measurement shifts the
 /// offset specifically so that nothing appears to move, and a clamp after a
 /// content-size change is a correction rather than a scroll; feeding either
-/// one in would spring the rows for a motion that never happened.
+/// one in would spring the rows for a motion that never happened. A discrete
+/// mouse wheel is excluded too — motion the reader did see, but stepped
+/// rather than continuous, and the row effects are meant for the scrolling a
+/// hand drives directly.
 ///
 /// The classification is by exclusion rather than by enumeration. Under UIKit
 /// the writes that matter most — a finger, momentum, the rubber band — happen
