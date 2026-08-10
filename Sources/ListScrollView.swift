@@ -3,21 +3,12 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
-import SpringInterpolation
-
 #if canImport(UIKit)
     import UIKit
 
     open class ListScrollView: UIScrollView {
         var scrollingDisplayLink: CADisplayLink?
-        var scrollingContext: SpringInterpolation2D = .init(
-            .init(
-                angularFrequency: 6,
-                dampingRatio: 1,
-                threshold: 0.05,
-                stopWhenHitTarget: true
-            )
-        )
+        var scrollingContext = SoftSpring2D(angularFrequency: 6, dampingRatio: 1, threshold: 0.05)
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
@@ -160,8 +151,8 @@ import SpringInterpolation
             // update the context, but we need to keep the velocity
             let velocity: CGPoint = if preserveVelocity {
                 .init(
-                    x: scrollingContext.x.context.currentVel,
-                    y: scrollingContext.y.context.currentVel
+                    x: scrollingContext.x.velocity,
+                    y: scrollingContext.y.velocity
                 )
             } else {
                 .init(x: 0, y: 0)
@@ -172,8 +163,8 @@ import SpringInterpolation
             )
             if let angularFrequency {
                 assert(angularFrequency > 0)
-                scrollingContext.x.config.angularFrequency = angularFrequency
-                scrollingContext.y.config.angularFrequency = angularFrequency
+                scrollingContext.x.angularFrequency = angularFrequency
+                scrollingContext.y.angularFrequency = angularFrequency
             }
             scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
             scrollingTarget = target
@@ -214,8 +205,8 @@ import SpringInterpolation
                 scrollingContext.setCurrent(
                     .init(x: scrollingContext.x.value, y: scrollingContext.y.value + dy),
                     vel: .init(
-                        x: scrollingContext.x.context.currentVel,
-                        y: scrollingContext.y.context.currentVel
+                        x: scrollingContext.x.velocity,
+                        y: scrollingContext.y.velocity
                     )
                 )
                 scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
@@ -460,14 +451,7 @@ import SpringInterpolation
         }
 
         var scrollingDisplayLink: DisplayLink?
-        var scrollingContext: SpringInterpolation2D = .init(
-            .init(
-                angularFrequency: 16,
-                dampingRatio: 1,
-                threshold: 0.05,
-                stopWhenHitTarget: true
-            )
-        )
+        var scrollingContext = SoftSpring2D(angularFrequency: 16, dampingRatio: 1, threshold: 0.05)
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
@@ -1101,8 +1085,8 @@ import SpringInterpolation
             let target = nearestScrollLocationInBounds(offset: offset)
             let velocity: CGPoint = if preserveVelocity {
                 .init(
-                    x: scrollingContext.x.context.currentVel,
-                    y: scrollingContext.y.context.currentVel
+                    x: scrollingContext.x.velocity,
+                    y: scrollingContext.y.velocity
                 )
             } else {
                 .init(x: 0, y: 0)
@@ -1113,8 +1097,8 @@ import SpringInterpolation
             )
             if let angularFrequency {
                 assert(angularFrequency > 0)
-                scrollingContext.x.config.angularFrequency = angularFrequency
-                scrollingContext.y.config.angularFrequency = angularFrequency
+                scrollingContext.x.angularFrequency = angularFrequency
+                scrollingContext.y.angularFrequency = angularFrequency
             }
             scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
             scrollingTarget = target
@@ -1166,8 +1150,8 @@ import SpringInterpolation
                 scrollingContext.setCurrent(
                     .init(x: scrollingContext.x.value, y: scrollingContext.y.value + dy),
                     vel: .init(
-                        x: scrollingContext.x.context.currentVel,
-                        y: scrollingContext.y.context.currentVel
+                        x: scrollingContext.x.velocity,
+                        y: scrollingContext.y.velocity
                     )
                 )
                 scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))

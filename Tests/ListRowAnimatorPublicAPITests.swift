@@ -252,13 +252,13 @@ struct ListRowAnimatorPublicAPITests {
         listView.tickRowAnimator(duration: 1.0 / 120.0)
 
         let bouncy = try! #require(listView.rowAnimator as? ListBouncyAnimator)
-        #expect(bouncy.board.attachments.values.contains { $0.spring.value != 0 })
+        #expect(bouncy.board.attachments.values.contains { $0.displacement != 0 })
         #expect(listView.rowAnimatorLink != nil)
 
         // A compensation drives it too, and must not reset it either.
-        let before = bouncy.board.attachments.mapValues(\.spring.value)
+        let before = bouncy.board.attachments.mapValues(\.displacement)
         listView.compensateScrollOffset(by: 40)
-        #expect((listView.rowAnimator as? ListBouncyAnimator)?.board.attachments.mapValues(\.spring.value) == before)
+        #expect((listView.rowAnimator as? ListBouncyAnimator)?.board.attachments.mapValues(\.displacement) == before)
     }
 
     // MARK: - Reentrancy

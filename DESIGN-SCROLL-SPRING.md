@@ -1479,7 +1479,7 @@ v2 据 Messages 触控板追踪把「指针以下刚性」也搬了过来，真�
 
 | 原版 | 移植 |
 | --- | --- |
-| `UIAttachmentBehavior(damping, frequency)` | 每行一个 `SpringInterpolation`，ζ = damping，ω = 2πf |
+| `UIAttachmentBehavior(damping, frequency)` | 每行一份 Box2D 软约束步进（`SoftConstraint`），ζ = damping，ω = 2πf——UIDynamics 内部就是 Box2D，这不是替身而是同一套算式 |
 | `prepare()` 给进入缓冲视口的 cell 挂弹簧 | `update` 首次见到某行时在其槽位挂上，位移为零 |
 | cell 离开视口摘弹簧 | 一段时间未被 offer 的 attachment 被剪除 |
 | `shouldInvalidateLayout(forBoundsChange:)` 泵入 | `willUpdate` 的 `scrollDelta`（补偿已剔除） |
@@ -1508,3 +1508,15 @@ v2 据 Messages 触控板追踪把「指针以下刚性」也搬了过来，真�
 场模型（`ListScrollSpring`）与其 991 行模型测试一并删除；管线
 （协议、ledger、display link、mount overscan、rebase、placedFrame）
 原封不动——本文档 §3–§7 描述的仍然是现行架构。
+
+### 10.1 求解器与依赖
+
+移植初版把弹簧交给 `SpringInterpolation` 库（闭式阻尼振子）。按用户指示
+换成了 BouncyLayout 里面真正跑的那一个：`UIDynamicAnimator` 是 Box2D 的
+封装，`UIAttachmentBehavior` 的 damping/frequency 就是 Box2D 软约束
+（soft distance joint）的 dampingRatio/frequencyHz。`SoftConstraint.step`
+按质量约掉后的一维形式逐式复刻（半隐式，γ/β 软化，见源码注释），
+`ListBouncyAnimator` 与程序化滚动（`SoftSpring2D`，原参数 ζ=1、
+ω=6/16 不变）共用这一份算式。`SpringInterpolation` 依赖随之从
+Package.swift 移除；§1–§8 中对它的引用是场模型时期的历史记录，不再描述
+现状。

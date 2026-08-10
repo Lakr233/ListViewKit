@@ -7,7 +7,6 @@
 //
 
 import Foundation
-import SpringInterpolation
 
 #if canImport(UIKit)
     import UIKit
@@ -36,9 +35,11 @@ import SpringInterpolation
 /// model's choice, and it is one of the visible differences between the two.
 ///
 /// What maps where:
-/// - `UIAttachmentBehavior` (damping, frequency) → one `SpringInterpolation`
-///   per row with ζ = damping and ω = 2π · frequency, which is the mapping
-///   UIKit Dynamics itself uses for a soft attachment.
+/// - `UIAttachmentBehavior` (damping, frequency) → the solver the behaviour
+///   runs on. UIKit Dynamics is Box2D underneath, and an attachment with a
+///   damping and a frequency is its soft constraint: ω = 2πf, ζ = damping,
+///   integrated semi-implicitly one step per frame — ``step(_:by:)`` is that
+///   arithmetic, not a stand-in for it.
 /// - `prepare()` adding behaviours for cells entering the buffered viewport →
 ///   a row unseen by `update` attaches on first sight, at its slot, holding no
 ///   displacement — the original anchors at the cell's current centre.
@@ -58,7 +59,7 @@ import SpringInterpolation
 ///   its displacement, which is the same repair without the one-frame pop.
 ///
 /// Nothing here knows about views or time sources beyond the context handed
-/// in. Not `Sendable`: the `SpringInterpolation` it stores does not conform.
+/// in. Not `Sendable`: the board it stores is shared mutable state.
 public struct ListBouncyAnimator: Equatable {
     /// The original's three presets, numbers untouched.
     public enum BounceStyle: Sendable, Hashable {
@@ -86,28 +87,15 @@ public struct ListBouncyAnimator: Equatable {
     /// The attachment's damping ratio. Below 1 a row overshoots its slot and
     /// comes back; the presets all sit below 1 on purpose.
     public var damping: CGFloat {
-        didSet {
-            damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.regular.damping)
-            retuneAttachments()
-        }
+        didSet { damping = Self.validate(damping, in: 0.01 ... 10, default: BounceStyle.regular.damping) }
     }
 
     /// The attachment's oscillation frequency, in hertz.
+    ///
+    /// Both knobs are read on every step, so a change reaches the springs
+    /// already in flight — there is no per-attachment tuning to go stale.
     public var frequency: CGFloat {
-        didSet {
-            frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.regular.frequency)
-            retuneAttachments()
-        }
-    }
-
-    /// Every existing spring picks a knob change up; new attachments read the
-    /// knobs at creation, and the rows already on springs must not keep the
-    /// old tuning.
-    private func retuneAttachments() {
-        for key in board.attachments.keys {
-            board.attachments[key]?.spring.config.angularFrequency = Double(2 * CGFloat.pi * frequency)
-            board.attachments[key]?.spring.config.dampingRatio = Double(damping)
-        }
+        didSet { frequency = Self.validate(frequency, in: 0.1 ... 50, default: BounceStyle.regular.frequency) }
     }
 
     /// The original divides the distance from the touch by this to grade the
@@ -136,7 +124,11 @@ public struct ListBouncyAnimator: Equatable {
     /// observable.
     final class Board {
         struct Attachment {
-            var spring: SpringInterpolation
+            /// How far the row sits from its slot right now, in points.
+            var displacement: CGFloat = 0
+            /// Points per second, carried between steps the way a body's
+            /// velocity persists between physics ticks.
+            var velocity: CGFloat = 0
             /// The slot the spring is attached to, in content space.
             var anchorY: CGFloat
             var seen: TimeInterval
@@ -167,27 +159,9 @@ public struct ListBouncyAnimator: Equatable {
 
     // MARK: - Attachments
 
-    /// One spring, configured the way UIKit Dynamics reads the behaviour's
-    /// two numbers: the frequency is in hertz, so ω = 2πf, and the damping is
-    /// the ratio ζ.
-    ///
-    /// The library's own threshold snaps the value to the target, which for
-    /// an underdamped spring would cut the overshoot off mid-flight. Rest is
-    /// decided here instead, on the velocity as well as the value.
-    private func makeSpring() -> SpringInterpolation {
-        SpringInterpolation(
-            config: .init(
-                angularFrequency: Double(2 * CGFloat.pi * frequency),
-                dampingRatio: Double(damping),
-                threshold: 0,
-                stopWhenHitTarget: false
-            )
-        )
-    }
-
     /// How far the attachment for `key` is currently displacing its row.
     func displacement(forKey key: Int) -> CGFloat {
-        CGFloat(board.attachments[key]?.spring.value ?? 0)
+        board.attachments[key]?.displacement ?? 0
     }
 
     /// The original's `update(behavior:and:in:for:)`, for one attachment.
@@ -196,25 +170,34 @@ public struct ListBouncyAnimator: Equatable {
     /// resistance)` — the resistance grades the pump by distance from the
     /// touch and the min/max caps it at the full delta, both branches picking
     /// the smaller magnitude. The floor afterwards is the original's
-    /// `item.center = floor(item.center)`.
+    /// `item.center = floor(item.center)`. The velocity is untouched, exactly
+    /// as moving a dynamic item's centre does not touch the body's velocity.
     private func pump(_ attachment: inout Board.Attachment, delta: CGFloat, touchY: CGFloat) {
         guard delta != 0 else { return }
         let resistance = abs(touchY - attachment.anchorY) / Self.resistanceDistance
         let bite = delta < 0 ? max(delta, delta * resistance) : min(delta, delta * resistance)
-        attachment.spring.setCurrent(
-            Double(floor(CGFloat(attachment.spring.value) + bite)),
-            attachment.spring.context.currentVel
-        )
+        attachment.displacement = floor(attachment.displacement + bite)
     }
 
-    /// Relaxes one attachment toward its slot and snaps the tail, so a
-    /// settled row reads exactly its placement.
-    private func relax(_ attachment: inout Board.Attachment, deltaTime: TimeInterval) {
-        attachment.spring.setTarget(0)
-        attachment.spring.update(withDeltaTime: deltaTime)
-        if abs(attachment.spring.value) <= Double(Self.restingDisplacement),
-           abs(attachment.spring.context.currentVel) <= Self.restingVelocity {
-            attachment.spring.setCurrent(0, 0)
+    /// One physics step of the behaviour's spring: Box2D's soft constraint,
+    /// which is what `UIDynamicAnimator` — a Box2D wrapper — runs for a
+    /// `UIAttachmentBehavior` with a damping and a frequency. The behaviour's
+    /// frequency is in hertz, so ω = 2πf, and its damping is the ratio ζ;
+    /// ``SoftConstraint`` is the arithmetic itself. Afterwards the tail is
+    /// snapped, so a settled row reads exactly its placement.
+    private func step(_ attachment: inout Board.Attachment, by deltaTime: TimeInterval) {
+        SoftConstraint.step(
+            position: &attachment.displacement,
+            velocity: &attachment.velocity,
+            towards: 0,
+            angularFrequency: 2 * CGFloat.pi * frequency,
+            dampingRatio: damping,
+            deltaTime: deltaTime
+        )
+        if abs(attachment.displacement) <= Self.restingDisplacement,
+           abs(attachment.velocity) <= CGFloat(Self.restingVelocity) {
+            attachment.displacement = 0
+            attachment.velocity = 0
         }
     }
 
@@ -245,8 +228,8 @@ extension ListBouncyAnimator: ListRowAnimator {
     /// Frames are owed while any attachment is still on its way home.
     public var wantsNextFrame: Bool {
         board.attachments.contains {
-            abs($0.value.spring.value) > Double(Self.restingDisplacement)
-                || abs($0.value.spring.context.currentVel) > Self.restingVelocity
+            abs($0.value.displacement) > Self.restingDisplacement
+                || abs($0.value.velocity) > CGFloat(Self.restingVelocity)
         }
     }
 
@@ -263,7 +246,7 @@ extension ListBouncyAnimator: ListRowAnimator {
         for key in board.attachments.keys {
             guard var attachment = board.attachments[key] else { continue }
             pump(&attachment, delta: context.scrollDelta, touchY: context.interactionAnchorY)
-            relax(&attachment, deltaTime: context.deltaTime)
+            step(&attachment, by: context.deltaTime)
             board.attachments[key] = attachment
         }
         // Attachments whose rows have not been offered for a while belong to
@@ -290,12 +273,11 @@ extension ListBouncyAnimator: ListRowAnimator {
     /// screen's springs for a frame, and keeping the displacement is that
     /// repair without the pop.
     func attach(at slotY: CGFloat, key: Int) -> CGFloat {
-        var attachment = board.attachments[key]
-            ?? .init(spring: makeSpring(), anchorY: slotY, seen: board.clock)
+        var attachment = board.attachments[key] ?? .init(anchorY: slotY, seen: board.clock)
         attachment.anchorY = slotY
         attachment.seen = board.clock
         board.attachments[key] = attachment
-        return CGFloat(attachment.spring.value)
+        return attachment.displacement
     }
 
     /// Moves the stored anchors with the content coordinate space.

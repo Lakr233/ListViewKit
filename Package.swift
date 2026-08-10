@@ -14,14 +14,12 @@ let package = Package(
         .library(name: "ListViewKit", targets: ["ListViewKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/SpringInterpolation", from: "1.4.0"),
         .package(url: "https://github.com/Lakr233/MSDisplayLink", from: "2.0.8"),
     ],
     targets: [
         .target(
             name: "ListViewKit",
             dependencies: [
-                "SpringInterpolation",
                 "MSDisplayLink",
             ],
             path: "Sources"

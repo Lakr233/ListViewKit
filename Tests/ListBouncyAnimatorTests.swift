@@ -207,19 +207,24 @@ struct ListBouncyAnimatorTests {
         #expect(animator.board.attachments[1] == nil)
     }
 
-    /// A knob change reaches the springs already in flight, not only the rows
-    /// yet to be seen.
+    /// A knob change reaches the springs already in flight: the knobs are
+    /// read on every step, so nothing per-attachment can hold a stale tuning.
     @Test
-    func knobChangesRetuneExistingAttachments() {
-        var animator = ListBouncyAnimator()
-        _ = animator.attach(at: -100, key: 0)
+    func knobChangesReachSpringsInFlight() {
+        var stiffened = ListBouncyAnimator()
+        _ = stiffened.attach(at: -100, key: 0)
+        stiffened.willUpdate(context(delta: 40, dt: 0))
+        var untouched = ListBouncyAnimator()
+        _ = untouched.attach(at: -100, key: 0)
+        untouched.willUpdate(context(delta: 40, dt: 0))
+        #expect(stiffened.displacement(forKey: 0) == untouched.displacement(forKey: 0))
 
-        animator.frequency = 3
-        animator.damping = 0.9
+        stiffened.frequency = 6
+        stiffened.willUpdate(context(dt: Self.frame))
+        untouched.willUpdate(context(dt: Self.frame))
 
-        let spring = try! #require(animator.board.attachments[0]?.spring)
-        #expect(spring.config.angularFrequency == Double(2 * CGFloat.pi * 3))
-        #expect(spring.config.dampingRatio == 0.9)
+        // A stiffer spring pulls the same displacement home harder.
+        #expect(stiffened.displacement(forKey: 0) < untouched.displacement(forKey: 0))
     }
 
     /// Two configurations are the same animator whatever each is showing.

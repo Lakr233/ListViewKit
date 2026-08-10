@@ -589,7 +589,7 @@ struct ListScrollViewAppKitTests {
 
         // Left alone, the bounce would settle 800 points past the new end with
         // nothing still running to correct it.
-        let retarget = CGFloat(scrollView.scrollingContext.y.context.targetPos)
+        let retarget = CGFloat(scrollView.scrollingContext.y.target)
         #expect(retarget == scrollView.maximumContentOffset.y)
         scrollView.cancelCurrentScrolling()
     }

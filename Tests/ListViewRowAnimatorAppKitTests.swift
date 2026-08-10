@@ -21,8 +21,8 @@ private struct AnimatorItem: Identifiable, Hashable {
 private extension ListView {
     var bouncy: ListBouncyAnimator? { rowAnimator as? ListBouncyAnimator }
     /// Every attachment's displacement, keyed the way the board keys them.
-    var attachmentValues: [Int: Double]? {
-        bouncy.map { $0.board.attachments.mapValues(\.spring.value) }
+    var attachmentValues: [Int: CGFloat]? {
+        bouncy.map { $0.board.attachments.mapValues(\.displacement) }
     }
 }
 
