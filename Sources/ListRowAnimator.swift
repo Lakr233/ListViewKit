@@ -121,10 +121,9 @@ public struct ListAnimatorContext: Sendable {
     /// is also what a programmatic scroll gets, and reads as the list being
     /// pulled from its newest end.
     ///
-    /// Measured on Messages: the content at the pointer moves rigidly with the
-    /// scroll, and everything below it does too — the lag all sits above,
-    /// graded by distance from this point, not from a content edge. A content
-    /// edge cannot be the reference: it regrades every weight as an overscroll
+    /// The content at this point moves rigidly with the scroll; the lag is
+    /// graded by distance from it, not from a content edge. A content edge
+    /// cannot be the reference: it regrades every weight as an overscroll
     /// unwinds, and mid-list it is nowhere near the rows on screen.
     public let interactionAnchorY: CGFloat
 

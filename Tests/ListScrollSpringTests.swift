@@ -585,37 +585,84 @@ struct ListScrollSpringTests {
 
     // MARK: - Shape
 
-    /// Content at and below the grip is in the reader's hand and moves with
-    /// it; only content above trails. Measured, not chosen: through six
-    /// gestures of the Messages trace, both directions, the elements below
-    /// the pointer held their spacing to the pixel.
+    /// The held row is in the reader's hand and moves with it; everything
+    /// else, on both sides, trails behind by distance. An earlier shape kept
+    /// the near side rigid, and the complaint that retired it is exact: with
+    /// nothing opening on the other side of the grip, one direction of every
+    /// drag read as the whole screen shrinking, only recovering on release.
     @Test
-    func rowsAtAndBelowTheGripStayPut() {
+    func theRowAtTheGripStaysPutAndBothSidesTrail() {
         var spring = ListScrollSpring()
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         #expect(spring.stretch > 0)
-        #expect(spring.displacement(forRowCenteredAt: 500) == 0)
         #expect(spring.displacement(forRowCenteredAt: 0) == 0)
+        // Both sides hang behind the same way — same direction, same size.
         #expect(spring.displacement(forRowCenteredAt: -500) > 0)
+        #expect(
+            spring.displacement(forRowCenteredAt: -500)
+                == spring.displacement(forRowCenteredAt: 500)
+        )
+    }
 
-        // The same side stays put when the direction flips — the grip is a
-        // hand, not a wake.
-        spring.reset()
-        spring.advance(scrollDelta: -24, deltaTime: Self.frame, anchorY: 0)
-        #expect(spring.stretch < 0)
-        #expect(spring.displacement(forRowCenteredAt: 500) == 0)
-        #expect(spring.displacement(forRowCenteredAt: -500) < 0)
+    /// The spec, verbatim: rows 1–6, the finger dragging row 4. Sliding down,
+    /// the gaps among 1-2-3 widen while 5-6 bunch toward the hand; sliding up
+    /// mirrors it; rest restores the spacing. The signs are the whole test —
+    /// which side opens is what an implementation gets wrong by symmetry.
+    @Test
+    func gapsOpenBehindTheMotionAndCloseAheadOfIt() {
+        // Six rows, 100pt apart, the grip on the fourth.
+        let centers: [CGFloat] = [0, 100, 200, 300, 400, 500]
+        let grip = centers[3]
+
+        func gaps(after delta: CGFloat) -> [CGFloat] {
+            var spring = ListScrollSpring()
+            for _ in 0 ..< 10 {
+                spring.advance(scrollDelta: delta, deltaTime: Self.frame, anchorY: grip)
+            }
+            let displaced = centers.map { $0 + spring.displacement(forRowCenteredAt: $0) }
+            return zip(displaced, displaced.dropFirst()).map { $1 - $0 - 100 }
+        }
+
+        // Content dragged down (offset falling): 1-2, 2-3, 3-4 open; 4-5, 5-6
+        // close.
+        let down = gaps(after: -10)
+        #expect(down[0] > 0 && down[1] > 0 && down[2] > 0, "gaps above the grip should widen: \(down)")
+        #expect(down[3] < 0 && down[4] < 0, "gaps below the grip should bunch: \(down)")
+        // Furthest from the hand moves most, on both sides.
+        #expect(down[0] >= down[1], "the spread grows with distance: \(down)")
+        #expect(abs(down[4]) >= abs(down[3]))
+
+        // The other way around, the mirror image.
+        let up = gaps(after: 10)
+        #expect(up[0] < 0 && up[1] < 0 && up[2] < 0, "gaps above the grip should bunch: \(up)")
+        #expect(up[3] > 0 && up[4] > 0, "gaps below the grip should widen: \(up)")
+
+        // And rest restores the spacing.
+        var spring = ListScrollSpring()
+        for _ in 0 ..< 10 {
+            spring.advance(scrollDelta: -10, deltaTime: Self.frame, anchorY: grip)
+        }
+        var frames = 0
+        while !spring.isAtRest, frames < 2000 {
+            spring.advance(scrollDelta: 0, deltaTime: Self.frame, anchorY: grip)
+            frames += 1
+        }
+        for center in centers {
+            #expect(spring.displacement(forRowCenteredAt: center) == 0)
+        }
     }
 
     @Test
-    func lagGrowsWithDistanceAboveTheGripUntilItSaturates() {
+    func lagGrowsWithDistanceFromTheGripUntilItSaturates() {
         var spring = ListScrollSpring(resistanceFactor: 500)
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         let full = spring.stretch
 
         #expect(spring.displacement(forRowCenteredAt: 0) == 0)
-        #expect(abs(spring.displacement(forRowCenteredAt: -250) - full / 2) < 1e-9)
-        #expect(abs(spring.displacement(forRowCenteredAt: -500) - full) < 1e-9)
-        #expect(abs(spring.displacement(forRowCenteredAt: -5000) - full) < 1e-9)
+        for side in [CGFloat(-1), 1] {
+            #expect(abs(spring.displacement(forRowCenteredAt: side * 250) - full / 2) < 1e-9)
+            #expect(abs(spring.displacement(forRowCenteredAt: side * 500) - full) < 1e-9)
+            #expect(abs(spring.displacement(forRowCenteredAt: side * 5000) - full) < 1e-9)
+        }
     }
 }
