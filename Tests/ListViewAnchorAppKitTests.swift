@@ -75,7 +75,7 @@ struct ListViewAnchorAppKitTests {
     func measurementStaysAnchoredOnTheViewportWhileAnAnimatorWidensMounting() {
         let context = makeContext()
         let listView = context.listView
-        listView.rowAnimator = ListScrollSpring(maximumStretch: 120)
+        listView.rowAnimator = ListBouncyAnimator()
         listView.setContentOffset(.init(x: 0, y: 250), animated: false)
         listView.layoutSubtreeIfNeeded()
 

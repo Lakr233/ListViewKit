@@ -18,7 +18,7 @@ final class ViewController: NSViewController {
 
         // Off unless a host asks for it, which is the whole point of the
         // extension point — so an example that does not ask shows nothing.
-        listView.rowAnimator = ListScrollSpring.messages
+        listView.rowAnimator = ListBouncyAnimator(style: .regular)
 
         listView.rows {
             ListRow(SimpleRow.self)

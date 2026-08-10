@@ -17,9 +17,13 @@ private struct AnimatorItem: Identifiable, Hashable {
 /// The built-in animator, when that is what is installed.
 ///
 /// The list holds `any ListRowAnimator`, which is the point of the protocol;
-/// the assertions here are about what the spring in particular did.
+/// the assertions here are about what the attachments in particular did.
 private extension ListView {
-    var spring: ListScrollSpring? { rowAnimator as? ListScrollSpring }
+    var bouncy: ListBouncyAnimator? { rowAnimator as? ListBouncyAnimator }
+    /// Every attachment's displacement, keyed the way the board keys them.
+    var attachmentValues: [Int: Double]? {
+        bouncy.map { $0.board.attachments.mapValues(\.spring.value) }
+    }
 }
 
 /// Never settles, which the list has to tolerate: a continuous effect is a
@@ -52,10 +56,9 @@ struct ListViewRowAnimatorAppKitTests {
         }
         listView.apply((0 ..< count).map { AnimatorItem(id: $0) })
         drain(listView)
-        // The spread only exists under the hand, so these tests hold one down
-        // for the duration. Individual tests lift it where the lift is the
-        // point.
-        listView._isTracking = true
+        // Deliberately no hand held down: the original pumps every bounds
+        // change through the same formula, momentum included, so the effect
+        // must not need one.
         return listView
     }
 
@@ -87,7 +90,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func placedFrameTracksTheLayoutAndIgnoresDisplacement() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
 
         for _ in 0 ..< 20 {
             scroll(listView, by: 40)
@@ -106,7 +109,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func rowsAreShownAtTheirPlacementPlusTheDisplacement() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
 
         scroll(listView, by: 200)
         listView.tickRowAnimator(duration: Self.frame)
@@ -118,11 +121,14 @@ struct ListViewRowAnimatorAppKitTests {
 
     // MARK: - Rest
 
-    /// Nothing is left on screen once the spring settles.
+    /// Nothing is left on screen once the springs settle.
     @Test
     func displacementReturnsToZeroAndTheLedgerEmpties() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
+        // The original's `prepare()` runs before the first bounds change, so
+        // the rows are on springs before the travel arrives.
+        listView.layoutSubtreeIfNeeded()
 
         scroll(listView, by: 300)
         listView.tickRowAnimator(duration: Self.frame)
@@ -132,7 +138,7 @@ struct ListViewRowAnimatorAppKitTests {
             listView.tickRowAnimator(duration: Self.frame)
         }
 
-        #expect(listView.spring?.isAtRest == true)
+        #expect(listView.bouncy?.wantsNextFrame == false)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
         #expect(listView.scrollLedger.pending == 0)
         for row in listView.visibleRowViews {
@@ -143,19 +149,19 @@ struct ListViewRowAnimatorAppKitTests {
     // MARK: - What counts as travel
 
     /// Compensation moves the offset precisely so that nothing appears to
-    /// move, so it may not reach the spring.
+    /// move, so it may not reach the attachments.
     @Test
-    func compensationIsNotFedToTheSpring() {
+    func compensationIsNotFedToTheAttachments() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
-        let before = listView.spring?.stretch
+        let before = listView.attachmentValues
         listView.compensateScrollOffset(by: 250)
         listView.tickRowAnimator(duration: Self.frame)
 
-        #expect(listView.spring?.stretch == before)
+        #expect(listView.attachmentValues == before)
         #expect(listView.scrollLedger.pending == 0)
     }
 
@@ -163,7 +169,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func anUnanimatedOffsetJumpIsNotTravel() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
@@ -171,47 +177,50 @@ struct ListViewRowAnimatorAppKitTests {
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
-        #expect(listView.spring?.isAtRest == true)
+        #expect(listView.bouncy?.wantsNextFrame == false)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
     }
 
-    /// Dragging is travel, and it reaches the spring whether or not a layout
-    /// pass happened to run first.
+    /// Dragging is travel, and it reaches the attachments whether or not a
+    /// layout pass happened to run first.
     @Test
     func scrollingIsTravelAndIsCountedExactlyOnce() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
         // No layout between the write and the tick.
         listView.contentOffset.y += 50
         listView.tickRowAnimator(duration: Self.frame)
-        let afterFirst = try! #require(listView.spring?.stretch)
+        let key = try! #require(
+            listView.attachmentValues?.max { abs($0.value) < abs($1.value) }?.key
+        )
+        let afterFirst = try! #require(listView.attachmentValues?[key])
         #expect(afterFirst > 0)
 
         // Laying out afterwards must not deliver the same travel again.
         listView.layoutSubtreeIfNeeded()
-        let stretchBefore = try! #require(listView.spring?.stretch)
+        let valueBefore = try! #require(listView.attachmentValues?[key])
         listView.tickRowAnimator(duration: Self.frame)
-        let afterSecond = try! #require(listView.spring?.stretch)
+        let afterSecond = try! #require(listView.attachmentValues?[key])
         // With nothing new arriving the spring only decays.
-        #expect(afterSecond < stretchBefore)
+        #expect(afterSecond < valueBefore)
     }
 
     // MARK: - Frames
 
     /// A layout pass is not a frame. Several can run for one.
     @Test
-    func repeatedLayoutInOneFrameAdvancesTheSpringOnce() {
+    func repeatedLayoutInOneFrameAdvancesTheSpringsOnce() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: Self.frame)
 
         listView.contentOffset.y += 60
         listView.tickRowAnimator(duration: Self.frame)
-        let afterTick = try! #require(listView.spring?.stretch)
+        let afterTick = try! #require(listView.attachmentValues)
         let ticks = listView.animatorTickCount
 
         for _ in 0 ..< 5 {
@@ -220,14 +229,22 @@ struct ListViewRowAnimatorAppKitTests {
         }
 
         #expect(listView.animatorTickCount == ticks)
-        #expect(listView.spring?.stretch == afterTick)
+        // The passes may attach rows the moved offset mounted — undisplaced,
+        // which is where a new attachment starts — but no spring in flight
+        // may have advanced.
+        for (key, value) in afterTick {
+            #expect(listView.attachmentValues?[key] == value)
+        }
+        for (key, value) in listView.attachmentValues ?? [:] where afterTick[key] == nil {
+            #expect(value == 0)
+        }
     }
 
     /// An idle list must not cost a frame.
     @Test
     func anIdleListNeverTicks() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
         listView.animatorTickCount = 0
 
         for _ in 0 ..< 10 {
@@ -264,7 +281,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func aPooledRowDoesNotCarryDisplacementIntoAListWithNoAnimator() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 40)
@@ -294,7 +311,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func rowsMountedByALayoutPassAreDisplacedByIt() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 40)
@@ -307,12 +324,14 @@ struct ListViewRowAnimatorAppKitTests {
         scroll(listView, by: 250)
         #expect(!Set(listView.visibleRows.keys).subtracting(before).isEmpty)
 
-        let spring = try! #require(listView.spring)
+        let bouncy = try! #require(listView.bouncy)
         for row in listView.visibleRowViews {
             let index = try! #require(listView.visibleRows.first { $0.value.view === row }.flatMap { listView.index(of: $0.key) })
-            // Re-querying at the same clock is idempotent, so this reads the
-            // exact value the pass landed, follower lag included.
-            #expect(row.presentationOffset == spring.followedDisplacement(forRowCenteredAt: row.placedFrame.midY, key: index))
+            // Re-querying is idempotent — the board is only pumped by a
+            // frame — so this reads the exact value the pass landed. A row
+            // this pass attached reads zero, which is where the original
+            // anchors a cell entering the buffered viewport.
+            #expect(row.presentationOffset == bouncy.displacement(forKey: index))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
         }
     }
@@ -327,7 +346,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func aReorderAnimatesPlacementTravelAndNotTheDisplacement() throws {
         let listView = makeListView(count: 8)
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
 
         for _ in 0 ..< 10 {
             scroll(listView, by: 30)
@@ -356,7 +375,8 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func resetLeavesNoResidue() {
         let listView = makeListView()
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
 
         scroll(listView, by: 300)
         listView.tickRowAnimator(duration: Self.frame)
@@ -364,7 +384,7 @@ struct ListViewRowAnimatorAppKitTests {
 
         listView.resetRowAnimator()
 
-        #expect(listView.spring?.isAtRest == true)
+        #expect(listView.bouncy?.board.attachments.isEmpty == true)
         #expect(listView.scrollLedger.pending == 0)
         #expect(listView.rowAnimatorLink == nil)
         #expect(displacements(listView).allSatisfy { $0 == 0 })
@@ -396,7 +416,8 @@ struct ListViewRowAnimatorAppKitTests {
         let window = windowed(listView)
         defer { window.contentView = nil }
 
-        listView.rowAnimator = ListScrollSpring()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
         #expect(listView.rowAnimatorLink == nil)
 
         // Accruing travel is what lights the first frame: at rest with an
@@ -407,7 +428,7 @@ struct ListViewRowAnimatorAppKitTests {
         for _ in 0 ..< 400 {
             listView.tickRowAnimator(duration: Self.frame)
         }
-        #expect(listView.spring?.isAtRest == true)
+        #expect(listView.bouncy?.wantsNextFrame == false)
         #expect(listView.rowAnimatorLink == nil)
     }
 
@@ -464,40 +485,79 @@ struct ListViewRowAnimatorAppKitTests {
 
     // MARK: - Shape on screen
 
-    /// Rows spread apart, and approach each other only within the falloff's
-    /// slope.
+    /// The lag is graded by distance from the touch, in the direction of the
+    /// travel.
     ///
-    /// Not "never into each other": the Messages trace closes gaps below rest
-    /// in every gesture, and forbidding it is what the retired sign gate did —
-    /// at the price of collapsing the whole field to zero the frame a
-    /// direction changed. The bound that replaced the gate is the slope,
-    /// `maximumStretch / resistanceFactor` of the rows' separation, which the
-    /// defaults keep under 2% — invisible, where the gate's pop was measured
-    /// on a device as a 12px gap snapping shut between two frames.
+    /// The original's resistance is `|touch − anchor| / 1000`: a row under
+    /// the hand rides the scroll rigidly, a row 400pt away sheds 40% of every
+    /// frame's travel onto its spring. With no hand observed the touch
+    /// defaults to the viewport's bottom edge, so scrolling down must
+    /// displace the top rows further than the bottom ones — and downward,
+    /// which is what trailing an upward-moving content looks like.
+    ///
+    /// Ordering is deliberately not asserted: rows on independent springs
+    /// bunch together ahead of the motion — the original overlaps cells on
+    /// purpose — and the DEBUG overlap assertion checks placements, not
+    /// displacements.
     @Test
-    func displacedRowsStayInOrderAndOpenGaps() {
+    func theLagIsGradedByDistanceFromTheTouch() {
         let listView = makeListView()
-        let spring = ListScrollSpring()
-        listView.rowAnimator = spring
-        let slope = spring.maximumStretch / spring.resistanceFactor
+        listView.rowAnimator = ListBouncyAnimator()
+
+        for _ in 0 ..< 12 {
+            scroll(listView, by: 30)
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+
+        let rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
+        let top = try! #require(rows.first)
+        let bottom = try! #require(rows.last)
+        #expect(top.presentationOffset > 0)
+        #expect(top.presentationOffset > bottom.presentationOffset)
+    }
+
+    /// Gaps open behind the motion and close ahead of it, and a reversal
+    /// swaps the two.
+    ///
+    /// Dragging the content up, every row above the hand lags downward by
+    /// more the further up it sits — so each gap's upper row closes on its
+    /// lower one, and the spacing bunches toward the hand. Dragging back
+    /// down mirrors it: the upper row of each pair now lags upward by more,
+    /// and the gaps above the hand open. That is the reference's shape —
+    /// spreading behind the motion, bunching ahead of it — produced here by
+    /// nothing but the original's per-row resistance.
+    @Test
+    func gapsOpenBehindTheMotionAndCloseAheadOfIt() {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        // Deep enough that the reversal never reaches the top of the content,
+        // where the clamp would eat the travel. A jump, so nothing is pumped.
+        listView.setContentOffset(CGPoint(x: 0, y: 2000), animated: false)
+        listView.layoutSubtreeIfNeeded()
+
+        var sawBunching = false
+        for _ in 0 ..< 20 {
+            scroll(listView, by: 30)
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+        var rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
+        for (previous, next) in zip(rows, rows.dropFirst())
+            where next.frame.minY < previous.frame.maxY - 1e-6 {
+            sawBunching = true
+        }
+        #expect(sawBunching, "scrolling down should bunch the rows above the hand")
 
         var sawAGap = false
-        for pass in 0 ..< 90 {
-            // Down, then caught and dragged back up: the reversal is where
-            // the retired gate snapped and where closing happens at all.
-            scroll(listView, by: pass < 60 ? 25 : -25)
+        for _ in 0 ..< 30 {
+            scroll(listView, by: -30)
             listView.tickRowAnimator(duration: Self.frame)
-
-            let rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
-            for (previous, next) in zip(rows, rows.dropFirst()) {
-                // Contiguous before displacement, so any daylight is opened,
-                // and any overlap is bounded by the slope.
-                let separation = next.placedFrame.midY - previous.placedFrame.midY
-                #expect(next.frame.minY >= previous.frame.maxY - separation * slope - 1e-6)
-                if next.frame.minY > previous.frame.maxY + 1e-6 { sawAGap = true }
-            }
         }
-        #expect(sawAGap, "scrolling should have opened at least one gap")
+        rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
+        for (previous, next) in zip(rows, rows.dropFirst())
+            where next.frame.minY > previous.frame.maxY + 1e-6 {
+            sawAGap = true
+        }
+        #expect(sawAGap, "the reversal should open gaps above the hand")
     }
 }
 #endif

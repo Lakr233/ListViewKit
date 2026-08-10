@@ -78,8 +78,6 @@ struct ListRowAnimatorPublicAPITests {
         }
         listView.contentOffset.y = 2000
         listView.layoutSubtreeIfNeeded()
-        // The spread only exists under the hand; hold one down for these.
-        listView._isTracking = true
         return listView
     }
 
@@ -245,19 +243,22 @@ struct ListRowAnimatorPublicAPITests {
         window.contentView = listView
         defer { window.contentView = nil }
 
-        listView.rowAnimator = ListScrollSpring.messages
+        listView.rowAnimator = ListBouncyAnimator()
+        // The original's `prepare()` runs before the first bounds change, so
+        // the rows are on springs before the travel arrives.
+        listView.layoutSubtreeIfNeeded()
         listView.contentOffset.y += 200
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: 1.0 / 120.0)
 
-        let spring = try! #require(listView.rowAnimator as? ListScrollSpring)
-        #expect(spring.stretch != 0)
+        let bouncy = try! #require(listView.rowAnimator as? ListBouncyAnimator)
+        #expect(bouncy.board.attachments.values.contains { $0.spring.value != 0 })
         #expect(listView.rowAnimatorLink != nil)
 
         // A compensation drives it too, and must not reset it either.
-        let before = spring.stretch
+        let before = bouncy.board.attachments.mapValues(\.spring.value)
         listView.compensateScrollOffset(by: 40)
-        #expect((listView.rowAnimator as? ListScrollSpring)?.stretch == before)
+        #expect((listView.rowAnimator as? ListBouncyAnimator)?.board.attachments.mapValues(\.spring.value) == before)
     }
 
     // MARK: - Reentrancy
@@ -350,7 +351,7 @@ struct ListRowAnimatorPublicAPITests {
         window.contentView = listView
         defer { window.contentView = nil }
 
-        listView.rowAnimator = ListScrollSpring.messages
+        listView.rowAnimator = ListBouncyAnimator()
         listView.layoutSubtreeIfNeeded()
         // Nothing has moved yet, so nothing is owed a frame and no link exists.
         #expect(listView.rowAnimatorLink == nil)
@@ -390,8 +391,9 @@ struct ListRowAnimatorPublicAPITests {
         window.contentView = listView
         defer { window.contentView = nil }
 
-        listView.rowAnimator = ListScrollSpring.messages
-        // A gesture, then a link left running by the stretch still unwinding.
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
+        // A gesture, then a link left running by the springs still unwinding.
         listView.contentOffset.y += 24
         listView.layoutSubtreeIfNeeded()
         listView.tickRowAnimator(duration: 1.0 / 120.0)
@@ -433,7 +435,7 @@ struct ListRowAnimatorPublicAPITests {
         window.contentView = listView
         defer { window.contentView = nil }
 
-        listView.rowAnimator = ListScrollSpring.messages
+        listView.rowAnimator = ListBouncyAnimator()
         listView.animatorTickCount = 0
 
         for _ in 0 ..< 10 {
@@ -478,17 +480,28 @@ struct ListRowAnimatorPublicAPITests {
 
     // MARK: - Presets
 
+    /// The three styles carry the original's numbers, untouched.
     @Test
-    func presetsAreDistinctAndValid() {
-        let messages = ListScrollSpring.messages
-        let subtle = ListScrollSpring.subtle
+    func presetsAreTheOriginalsNumbers() {
+        #expect(ListBouncyAnimator(style: .subtle) == ListBouncyAnimator(damping: 0.8, frequency: 2))
+        #expect(ListBouncyAnimator(style: .regular) == ListBouncyAnimator(damping: 0.7, frequency: 1.5))
+        #expect(ListBouncyAnimator(style: .prominent) == ListBouncyAnimator(damping: 0.5, frequency: 1))
+        // The no-argument animator is `.regular`, which is also the original's
+        // default.
+        #expect(ListBouncyAnimator() == ListBouncyAnimator(style: .regular))
+        // The overscan is the original's viewport buffer.
+        #expect(ListBouncyAnimator().maximumDisplacement == 200)
+    }
 
-        #expect(messages.maximumStretch == 32)
-        #expect(subtle.maximumStretch == 8)
-        #expect(subtle.maximumStretch < messages.maximumStretch)
-        #expect(subtle.resistanceFactor > messages.resistanceFactor)
-        #expect(subtle.angularFrequency > messages.angularFrequency)
-        #expect(messages.maximumDisplacement == messages.maximumStretch)
+    /// A knob fed nonsense falls back instead of propagating it.
+    @Test
+    func knobsSurviveHostileValues() {
+        #expect(ListBouncyAnimator(damping: .nan, frequency: .infinity) == ListBouncyAnimator(style: .regular))
+        var animator = ListBouncyAnimator()
+        animator.damping = -3
+        animator.frequency = 0
+        #expect(animator.damping > 0)
+        #expect(animator.frequency > 0)
     }
 }
 #endif

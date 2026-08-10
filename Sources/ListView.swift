@@ -57,7 +57,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Displaces rows on top of the layout while the list scrolls.
     ///
     /// ```swift
-    /// list.rowAnimator = ListScrollSpring.messages
+    /// list.rowAnimator = ListBouncyAnimator(style: .regular)
     /// ```
     ///
     /// Nil is the default and costs nothing: no display link, no per-row work,
@@ -385,8 +385,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             // Asserted on the placements, so it keeps checking the layout even
             // while an animator displaces rows away from it. Whether a
             // displacement overlaps rows is the animator's business — some
-            // effects overlap on purpose — and ``ListScrollSpring`` proves it
-            // does not.
+            // effects, ``ListBouncyAnimator`` among them, overlap on purpose.
             var previousMaxY: CGFloat = 0
             for view in visibleRows.values.map(\.view)
                 .sorted(by: { $0.placedFrame.minY < $1.placedFrame.minY })

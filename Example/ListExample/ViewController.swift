@@ -18,7 +18,7 @@ final class ViewController: UIViewController {
         edgesForExtendedLayout = []
         view.backgroundColor = .systemBackground
 
-        listView.rowAnimator = ListScrollSpring.messages
+        listView.rowAnimator = ListBouncyAnimator(style: .regular)
 
         listView.rows {
             ListRow(SimpleRow.self)

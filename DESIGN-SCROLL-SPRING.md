@@ -1461,3 +1461,50 @@ v2 据 Messages 触控板追踪把「指针以下刚性」也搬了过来，真�
 | 协议一旦公开就是永久 API，而 3.0 刚把公开类型 9 个砍到 4 个 | 第 3 步才定型，且要求先有第二份实现顶着；前两步弹簧是 internal |
 | `maximumDisplacement` 框不住非平移效果 | 明确收窄成平移，写进注释当能力边界，不假装通用（§7.6） |
 | ~~效果本身可能已经不存在于当代 Messages.app~~ | **已证实存在**：录屏逐帧可见每行以各自的速度移动，速度剖面在行边界上是分段常数（§2.5.1） |
+
+## 10. 结局：场模型退役，换成 BouncyLayout 的 1:1 移植
+
+§2–§3 的共享标量场连调七版（3.2.1 → 3.4.3：对称化、格里普锚点、软泵、
+二阶跟随、attack 包络），用户的最终裁决仍是「还是不像」。两条独立的研究
+线索给出了一致的解释：
+
+- 这个效果的血统是 Apple 自己的 UIDynamics 配方（WWDC 2013 #217 /
+  objc.io），**每个 cell 一根弹簧**钉在布局槽位上，不存在共享的场；
+  Telegram-iOS 的 ListView 根本没有这个效果（它的弹簧只用于插入过渡）。
+- 场模型为了补「场是一体的」这个先天缺陷，先后叠了 attack、returnDelay、
+  follower 三层滞后——糊的来源恰恰是这三层滞后叠在一根场弹簧上。
+
+于是按用户指示，把 roberthein/BouncyLayout（MIT，即上述配方的最流行封装）
+**逐条对应**移植到 `ListRowAnimator` 上，即 `ListBouncyAnimator`：
+
+| 原版 | 移植 |
+| --- | --- |
+| `UIAttachmentBehavior(damping, frequency)` | 每行一个 `SpringInterpolation`，ζ = damping，ω = 2πf |
+| `prepare()` 给进入缓冲视口的 cell 挂弹簧 | `update` 首次见到某行时在其槽位挂上，位移为零 |
+| cell 离开视口摘弹簧 | 一段时间未被 offer 的 attachment 被剪除 |
+| `shouldInvalidateLayout(forBoundsChange:)` 泵入 | `willUpdate` 的 `scrollDelta`（补偿已剔除） |
+| `resistance = abs(touch − anchor) / 1000`，`min/max` 封顶 | 原样 |
+| `floor(item.center)` | 泵入结果取 floor |
+| `VIEWPORT_BUFFER = 200` | `maximumDisplacement = 200`（挂载外扩） |
+| 三档 `BounceStyle`（0.8/2、0.7/1.5、0.5/1） | 数值原样 |
+| cell 尺寸变化时全部拆掉重挂（会闪一帧） | 槽位移动就地重锚，保留位移——同一修复，没有那一帧闪 |
+
+有意保留的原版语义，哪怕它与场模型的结论相反：
+
+- **泵不看手**。原版对每次 bounds change 一视同仁——拖拽、惯性、回弹——
+  阻力从手最后出现的位置量起（`panGestureRecognizer.location` 在抬手后
+  返回的就是这个），`interactionAnchorY` 的语义恰好一致。场模型「重力只在
+  手下存在」的门控是它自己的发明，测试 `momentumKeepsPumping` 把这条钉死，
+  防止哪次清理把门控又带回来。
+- **不保证行序**。独立弹簧在运动前方聚拢、后方拉开（正是用户描述的
+  123/56 六行规格），原版本来就允许 cell 重叠；DEBUG 重叠断言只查
+  placement，不查位移。§2.3 的非重叠证明随场模型一起退役。
+
+与原版的全部差异就两处，都写在 `ListBouncyAnimator.swift` 的注释里：
+重锚代替拆重挂（上表最后一行），以及静止吸附到精确槽位而不是
+`floor(anchor)`（原版停在向下取整的锚点上，差距亚像素，而列表的回收
+契约要求位移严格归零）。
+
+场模型（`ListScrollSpring`）与其 991 行模型测试一并删除；管线
+（协议、ledger、display link、mount overscan、rebase、placedFrame）
+原封不动——本文档 §3–§7 描述的仍然是现行架构。
