@@ -142,6 +142,7 @@ public struct ListScrollSpring: Equatable {
     final class Flow {
         struct Follower {
             var displacement: CGFloat
+            var velocity: CGFloat
             var seen: TimeInterval
         }
 
@@ -228,16 +229,21 @@ public struct ListScrollSpring: Equatable {
             return
         }
 
-        // The delta goes in whole. An earlier draft also capped it at
-        // `maximumStretch` per frame, on the theory that a fling would
-        // otherwise land as a jump. It would not: the clamp below bounds the
-        // state, and a weight is a fraction of the scalar, so a row's
-        // displacement already cannot move further than twice the budget in
-        // one frame — and only a full-budget reversal inside a single frame
-        // reaches that. Injecting a huge delta and injecting a capped one
-        // both saturate. The cap was defending an invariant that holds
-        // without it.
-        spring.setCurrent(spring.value + Double(scrollDelta), spring.context.currentVel)
+        // The delta feeds in through a gain that dies as the stretch fills.
+        // Injected whole and clamped, the stretch tracked the finger 1:1 —
+        // the trailing row sat still while its gap opened — and then hit the
+        // cap, where the row's velocity jumped from zero to the finger's in
+        // a single frame. That corner is the "two-stage" feel: first pulled
+        // out, then snapping into following. The smoothing belongs in the
+        // velocity: with the gain `1 − (|S|/max)²` the row starts at rest and
+        // *accelerates* into following as the gap fills, and saturation is an
+        // asymptote instead of a wall. A delta that opposes the stretch gets
+        // full gain — pulling back from saturation is the reversal, and it
+        // must bite immediately.
+        let occupancy = min(1, abs(spring.value) / Double(maximumStretch))
+        let opposes = spring.value != 0 && (Double(scrollDelta) < 0) != (spring.value < 0)
+        let gain = opposes ? 1 : 1 - occupancy * occupancy
+        spring.setCurrent(spring.value + Double(scrollDelta) * gain, spring.context.currentVel)
         spring.setTarget(0)
         spring.update(withDeltaTime: deltaTime)
 
@@ -380,7 +386,7 @@ extension ListScrollSpring: ListRowAnimator {
     /// its way home — the field reaches rest first, and the far rows are
     /// still paying their ``returnDelay`` back after it.
     public var wantsNextFrame: Bool {
-        !isAtRest || flow.followers.contains { abs($0.value.displacement) > 0.05 }
+        !isAtRest || flow.followers.contains { abs($0.value.displacement) > 0.05 || abs($0.value.velocity) > 1 }
     }
 
     public mutating func willUpdate(_ context: ListAnimatorContext) {
@@ -419,6 +425,11 @@ extension ListScrollSpring: ListRowAnimator {
     /// A follower for a row it has not seen starts *on* the field, not at
     /// zero: a row scrolling into a live spread is already part of it, and
     /// seeding at zero would let it pop from its placement to its lag.
+    /// Critically damped rather than first-order, and that is the point: a
+    /// first-order follower changes velocity the instant its target does,
+    /// which reads as the row being yanked. Second order carries a velocity
+    /// of its own, so however the field jumps, the row's motion stays C¹ —
+    /// the smoothing is in the derivative, where the eye lives.
     func followedDisplacement(forRowCenteredAt center: CGFloat, key: Int) -> CGFloat {
         let target = displacement(forRowCenteredAt: center)
         guard returnDelay > 1e-4 else {
@@ -426,15 +437,25 @@ extension ListScrollSpring: ListRowAnimator {
             return target
         }
         let lag = returnDelay * Double(min(1, abs(anchorY - center) / effectiveResistance))
-        var follower = flow.followers[key] ?? .init(displacement: target, seen: flow.clock)
-        let elapsed = flow.clock - follower.seen
+        var follower = flow.followers[key] ?? .init(displacement: target, velocity: 0, seen: flow.clock)
+        let elapsed = CGFloat(flow.clock - follower.seen)
         if lag <= 1e-4 {
             follower.displacement = target
+            follower.velocity = 0
         } else if elapsed > 0 {
-            follower.displacement += (target - follower.displacement) * (1 - exp(-elapsed / lag))
+            // Closed form of the critically damped step toward `target`.
+            let omega = CGFloat(2 / lag)
+            let offset = follower.displacement - target
+            let impulse = follower.velocity + omega * offset
+            let decay = exp(-omega * elapsed)
+            follower.displacement = target + (offset + impulse * elapsed) * decay
+            follower.velocity = (follower.velocity - impulse * omega * elapsed) * decay
         }
         // Snap the tail so a settled row reads exactly its placement.
-        if abs(follower.displacement - target) < 0.05 { follower.displacement = target }
+        if abs(follower.displacement - target) < 0.05, abs(follower.velocity) < 1 {
+            follower.displacement = target
+            follower.velocity = 0
+        }
         follower.seen = flow.clock
         flow.followers[key] = follower
         return follower.displacement

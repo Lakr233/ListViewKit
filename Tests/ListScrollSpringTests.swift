@@ -125,8 +125,12 @@ struct ListScrollSpringTests {
     /// varied between gestures was how long it stayed there, not how big it
     /// got.
     ///
-    /// So the speed the effect reads is a slow one. Below ~235pt/s the stretch
-    /// is graded; above it the gesture always looks the same.
+    /// Since the pump's gain dies quadratically as the stretch fills, the
+    /// budget is an asymptote rather than a wall: every speed reads a little
+    /// differently, and nothing ever parks exactly on the cap. The corner
+    /// that a hard cap put in the row's *velocity* — still, still, still,
+    /// then moving at the finger's speed in one frame — was the measured
+    /// "two-stage" complaint, and the asymptote is what removed it.
     @Test
     func slowScrollingIsGradedAndAnythingBriskSaturates() {
         func steadyStretch(scrollingAt velocity: CGFloat, hz: Double) -> CGFloat {
@@ -144,9 +148,13 @@ struct ListScrollSpringTests {
 
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < 12)
         #expect(steadyStretch(scrollingAt: 150, hz: 120) < 17)
-        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 32)
-        // Monotone where it is graded, so slow scrolling still reads as speed.
+        // Measured: 24.8 / 28.1 / 30.0 — climbing the asymptote, never on it.
+        #expect((20.0 ... 31.9).contains(steadyStretch(scrollingAt: 600, hz: 120)))
+        #expect(steadyStretch(scrollingAt: 2400, hz: 120) < 32)
+        // Monotone everywhere now, so every speed still reads as speed.
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 150, hz: 120))
+        #expect(steadyStretch(scrollingAt: 150, hz: 120) < steadyStretch(scrollingAt: 600, hz: 120))
+        #expect(steadyStretch(scrollingAt: 600, hz: 120) < steadyStretch(scrollingAt: 2400, hz: 120))
     }
 
     /// Steady stretch depends on the frame rate, and the paper figure is an
@@ -178,8 +186,8 @@ struct ListScrollSpringTests {
             return spring.stretch / continuous
         }
 
-        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.961) < 0.005)
-        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.922) < 0.005)
+        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.879) < 0.01)
+        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.848) < 0.01)
         #expect(ratioToContinuousLimit(hz: 60) < ratioToContinuousLimit(hz: 120))
     }
 
@@ -359,7 +367,8 @@ struct ListScrollSpringTests {
         }
         let farRow: CGFloat = 0 // 1000pt above the grip: reads the whole stretch
         let saturated = spring.displacement(forRowCenteredAt: farRow)
-        #expect(abs(saturated - spring.maximumStretch) < 1e-9)
+        // The soft pump approaches the budget instead of parking on it.
+        #expect(saturated > spring.maximumStretch * 0.8)
 
         // Caught and dragged the other way at the same speed.
         var previous = saturated
@@ -749,14 +758,14 @@ struct ListScrollSpringTests {
         // The lift. A beat later the near row has paid most of its spread
         // back while the far row still holds most of its own.
         var nearNow = nearHeld, farNow = farHeld
-        for _ in 0 ..< 21 { // ~175ms at 120Hz
+        for _ in 0 ..< 14 { // ~117ms at 120Hz
             advance(delta: 0, holding: false)
             nearNow = spring.followedDisplacement(forRowCenteredAt: near, key: 1)
             farNow = spring.followedDisplacement(forRowCenteredAt: far, key: 2)
         }
-        #expect(nearNow < nearHeld * 0.45, "the near row should be mostly home: \(nearNow) of \(nearHeld)")
-        // Measured: near ~0.33 of held, far ~0.60 — the beat between them.
-        #expect(farNow > farHeld * 0.5, "the far row should still be on its way: \(farNow) of \(farHeld)")
+        // Measured: near ~0.36 of held, far ~0.72 — the beat between them.
+        #expect(nearNow < nearHeld * 0.5, "the near row should be mostly home: \(nearNow) of \(nearHeld)")
+        #expect(farNow > farHeld * 0.6, "the far row should still be on its way: \(farNow) of \(farHeld)")
 
         // And everyone gets home.
         for _ in 0 ..< 400 {
@@ -766,6 +775,76 @@ struct ListScrollSpringTests {
         }
         #expect(nearNow == 0 && farNow == 0)
         #expect(spring.wantsNextFrame == false, "settled followers must let the link die")
+    }
+
+    /// The spec, verbatim: the row does not sit still and then snap into
+    /// following — it accelerates into following. The smoothing lives in the
+    /// velocity.
+    ///
+    /// Under a constant-speed drag the trailing row's per-frame step climbs
+    /// from zero toward the finger's speed. What retired the hard cap is the
+    /// corner it put here: the step ramped up and then dropped to zero in a
+    /// single frame when the stretch hit the wall. The largest change of the
+    /// step between consecutive frames is the size of that corner, and with
+    /// the soft gain it stays under an eighth of the finger's own step.
+    @Test
+    func theRowAcceleratesIntoFollowingInsteadOfSnapping() {
+        var spring = ListScrollSpring(unevenness: 0)
+        let delta: CGFloat = 8
+        var previous = spring.displacement(forRowCenteredAt: 0)
+        var previousStep: CGFloat = 0
+        var worstCorner: CGFloat = 0
+        for frame in 0 ..< 120 {
+            spring.advance(scrollDelta: delta, deltaTime: Self.frame, anchorY: 1000)
+            let displaced = spring.displacement(forRowCenteredAt: 0)
+            let step = displaced - previous
+            if frame > 0 { worstCorner = max(worstCorner, abs(step - previousStep)) }
+            previous = displaced
+            previousStep = step
+        }
+        #expect(spring.stretch > spring.maximumStretch * 0.8, "premise: the drive reaches saturation territory")
+        // The gentle early acceleration itself moves the step by ~1.2/frame;
+        // the hard cap's corner measured ~3-5. The bound sits between them.
+        #expect(worstCorner < delta / 4, "the row's velocity jumped by \(worstCorner) in one frame")
+    }
+
+    /// The spec, verbatim: momentum is continuous in direction. A follower
+    /// whose target is yanked the other way keeps moving its own way for at
+    /// least a frame — it carries velocity, it does not teleport its
+    /// derivative.
+    @Test
+    @MainActor
+    func aFollowerKeepsItsMomentumThroughAYank() {
+        var spring = ListScrollSpring(unevenness: 0)
+        func advance(delta: CGFloat) {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 800,
+                scrollDelta: delta,
+                deltaTime: Self.frame,
+                isUserInteracting: true
+            ))
+        }
+        let row: CGFloat = 350
+        // Build motion: the follower is travelling outward.
+        var displaced: CGFloat = 0
+        for _ in 0 ..< 8 {
+            advance(delta: 8)
+            displaced = spring.followedDisplacement(forRowCenteredAt: row, key: 1)
+        }
+        var before = displaced
+        advance(delta: 8)
+        displaced = spring.followedDisplacement(forRowCenteredAt: row, key: 1)
+        let outwardStep = displaced - before
+        #expect(outwardStep > 0.1, "premise: the follower is moving outward")
+
+        // The yank: a hard catch throws the field the other way.
+        before = displaced
+        advance(delta: -60)
+        displaced = spring.followedDisplacement(forRowCenteredAt: row, key: 1)
+        let firstStep = displaced - before
+        #expect(firstStep > -0.05, "the follower reversed in the same frame as the yank: \(firstStep)")
     }
 
     /// A slow cascade outlives the field, and the link must outlive both.
