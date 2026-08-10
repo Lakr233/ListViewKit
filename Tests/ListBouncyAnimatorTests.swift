@@ -8,16 +8,15 @@ import Foundation
 import Testing
 @testable import ListViewKit
 
-/// The model's physics, pinned to exact numbers.
+/// The port's physics, pinned to the original's numbers.
 ///
 /// Every test here drives the model the way the list does — `willUpdate` once
 /// per frame, `attach` once per mounted row — and asserts the exact values
-/// the formulas produce: BouncyLayout's `/1000` resistance and full-delta
-/// cap, the spread pointed away from the hand rather than along the scroll,
-/// and springs that anchor where a cell was when it was first seen. Where
-/// the model deliberately keeps an original behaviour that the retired model
-/// rejected — pumping through momentum — the test says so, so a future gate
-/// cannot sneak back in as a cleanup.
+/// BouncyLayout's formulas produce: the `/1000` resistance, the min/max cap,
+/// the floor, and springs that anchor where a cell was when it was first
+/// seen. Where the port deliberately keeps an original behaviour that the
+/// retired model rejected — pumping through momentum — the test says so, so
+/// a future gate cannot sneak back in as a cleanup.
 @MainActor
 @Suite(.serialized)
 struct ListBouncyAnimatorTests {
@@ -52,83 +51,32 @@ struct ListBouncyAnimatorTests {
         #expect(animator.displacement(forKey: 0) == 0)
     }
 
-    /// The spread grades linearly with distance and caps at the full delta —
-    /// `min(|delta|, |delta| · resistance)` — so a row 1000pt out takes the
-    /// frame's whole travel and no row takes more. Rows above the hand move
-    /// up, rows below move down.
+    /// The bite grades linearly with distance and caps at the full delta —
+    /// `min(delta, delta · resistance)` — so a row 1000pt out absorbs every
+    /// point of the frame's travel and no row absorbs more.
     @Test
-    func theSpreadGradesWithDistanceAndCapsAtTheFullDelta() {
+    func theBiteGradesWithDistanceAndCapsAtTheFullDelta() {
         var animator = ListBouncyAnimator()
-        _ = animator.attach(at: 150, key: 0) // 250 above: resistance 0.25
-        _ = animator.attach(at: -100, key: 1) // 500 above: resistance 0.5
-        _ = animator.attach(at: -600, key: 2) // 1000 above: resistance 1
-        _ = animator.attach(at: -1600, key: 3) // 2000 above: capped at the delta
-        _ = animator.attach(at: 650, key: 4) // 250 below: resistance 0.25
+        _ = animator.attach(at: 150, key: 0) // 250 out: resistance 0.25
+        _ = animator.attach(at: -100, key: 1) // 500 out: resistance 0.5
+        _ = animator.attach(at: -600, key: 2) // 1000 out: resistance 1
+        _ = animator.attach(at: -1600, key: 3) // 2000 out: capped at the delta
         animator.willUpdate(context(delta: 40, dt: 0, touchY: 400))
 
-        #expect(animator.displacement(forKey: 0) == -10)
-        #expect(animator.displacement(forKey: 1) == -20)
-        #expect(animator.displacement(forKey: 2) == -40)
-        #expect(animator.displacement(forKey: 3) == -40)
-        #expect(animator.displacement(forKey: 4) == 10)
+        #expect(animator.displacement(forKey: 0) == 10)
+        #expect(animator.displacement(forKey: 1) == 20)
+        #expect(animator.displacement(forKey: 2) == 40)
+        #expect(animator.displacement(forKey: 3) == 40)
     }
 
-    /// Either direction of travel spreads the same way: the hand is the
-    /// centre the rows move away from, not the scroll's own direction.
+    /// Both branches of the original's `delta < 0 ? max : min` pick the
+    /// smaller magnitude, so the two directions mirror.
     @Test
-    func bothTravelDirectionsSpreadAlike() {
+    func theTwoDirectionsMirror() {
         var animator = ListBouncyAnimator()
-        _ = animator.attach(at: -100, key: 0) // 500 above
+        _ = animator.attach(at: -100, key: 0) // 500 out
         animator.willUpdate(context(delta: -40, dt: 0, touchY: 400))
         #expect(animator.displacement(forKey: 0) == -20)
-    }
-
-    /// The displacement is monotone along the row order — around the hand,
-    /// rows 1…5 read 1 < 2 < 3 and 5 > 4 > 3 — so every gap opens past its
-    /// placement and no pair of rows can trade places while travel arrives.
-    @Test
-    func theSpreadIsMonotoneAlongTheRowOrder() {
-        let anchors: [CGFloat] = [200, 300, 400, 500, 600]
-        for delta in [CGFloat(40), -40] {
-            var animator = ListBouncyAnimator()
-            for (key, anchor) in anchors.enumerated() {
-                _ = animator.attach(at: anchor, key: key)
-            }
-            animator.willUpdate(context(delta: delta, dt: 0, touchY: 400))
-
-            let d = anchors.indices.map { animator.displacement(forKey: $0) }
-            #expect(d[0] < d[1])
-            #expect(d[1] < d[2])
-            #expect(d[2] < d[3])
-            #expect(d[3] < d[4])
-            #expect(d[2] == 0, "the row under the hand rides rigidly")
-        }
-    }
-
-    /// And it stays monotone through a whole flick relaxing home — pump,
-    /// spring, and the pooling that repairs what velocity coupling would
-    /// drift across — so no frame of the ride shows a gap below its
-    /// placement, rebound included.
-    @Test
-    func theChainHoldsThroughAFlickComingHome() {
-        let anchors: [CGFloat] = [100, 250, 400, 550, 700]
-        var animator = ListBouncyAnimator(style: .prominent)
-        for (key, anchor) in anchors.enumerated() {
-            _ = animator.attach(at: anchor, key: key)
-        }
-
-        let deltas: [CGFloat] = [60, 60, 40, -30, 20] + Array(repeating: 0, count: 600)
-        for delta in deltas {
-            animator.willUpdate(context(delta: delta, dt: Self.frame, touchY: 400))
-            for (key, anchor) in anchors.enumerated() {
-                _ = animator.attach(at: anchor, key: key)
-            }
-            let d = anchors.indices.map { animator.displacement(forKey: $0) }
-            for i in 0 ..< d.count - 1 {
-                #expect(d[i] <= d[i + 1] + 1e-9, "a gap closed below its placement")
-            }
-        }
-        #expect(!animator.wantsNextFrame, "the flick should have settled")
     }
 
     /// The pump keeps sub-pixel precision — the one deliberate departure from
@@ -139,14 +87,14 @@ struct ListBouncyAnimatorTests {
     @Test
     func thePumpKeepsSubpixelPrecision() {
         var animator = ListBouncyAnimator()
-        _ = animator.attach(at: -100, key: 0) // 500 above
+        _ = animator.attach(at: -100, key: 0) // 500 out
         animator.willUpdate(context(delta: 41, dt: 0, touchY: 400))
-        #expect(animator.displacement(forKey: 0) == -20.5)
+        #expect(animator.displacement(forKey: 0) == 20.5)
 
-        var below = ListBouncyAnimator()
-        _ = below.attach(at: 900, key: 0) // 500 below
-        below.willUpdate(context(delta: -41, dt: 0, touchY: 400))
-        #expect(below.displacement(forKey: 0) == 20.5)
+        var downward = ListBouncyAnimator()
+        _ = downward.attach(at: -100, key: 0)
+        downward.willUpdate(context(delta: -41, dt: 0, touchY: 400))
+        #expect(downward.displacement(forKey: 0) == -20.5)
     }
 
     /// Momentum pumps too. The original feeds every bounds change through
@@ -158,7 +106,7 @@ struct ListBouncyAnimatorTests {
         var animator = ListBouncyAnimator()
         _ = animator.attach(at: -100, key: 0)
         animator.willUpdate(context(delta: 40, dt: 0, touchY: 400, interacting: false))
-        #expect(animator.displacement(forKey: 0) == -20)
+        #expect(animator.displacement(forKey: 0) == 20)
     }
 
     /// A frame can hand over travel with no time attached — the layout pass
@@ -169,13 +117,13 @@ struct ListBouncyAnimatorTests {
         var animator = ListBouncyAnimator()
         _ = animator.attach(at: -600, key: 0)
         animator.willUpdate(context(delta: 40, dt: 0))
-        #expect(animator.displacement(forKey: 0) == -40)
+        #expect(animator.displacement(forKey: 0) == 40)
 
         // And the tick that follows relaxes without pumping.
         animator.willUpdate(context(delta: 0, dt: Self.frame))
         let relaxed = animator.displacement(forKey: 0)
-        #expect(relaxed > -40)
-        #expect(relaxed < 0)
+        #expect(relaxed < 40)
+        #expect(relaxed > 0)
     }
 
     // MARK: - The spring
@@ -189,35 +137,28 @@ struct ListBouncyAnimatorTests {
         animator.willUpdate(context(delta: 40, dt: 0))
         #expect(animator.wantsNextFrame)
 
-        // Spread upward, so the overshoot swings past the slot downward.
-        var highest: CGFloat = -.greatestFiniteMagnitude
+        var lowest: CGFloat = .greatestFiniteMagnitude
         for _ in 0 ..< 600 {
             animator.willUpdate(context(dt: Self.frame))
             _ = animator.attach(at: -600, key: 0)
-            highest = max(highest, animator.displacement(forKey: 0))
+            lowest = min(lowest, animator.displacement(forKey: 0))
         }
-        #expect(highest > 1, "damping 0.5 should visibly overshoot the slot")
+        #expect(lowest < -1, "damping 0.5 should visibly overshoot the slot")
         #expect(animator.displacement(forKey: 0) == 0)
         #expect(!animator.wantsNextFrame)
     }
 
-    /// A row first seen mid-spread attaches on the chain: undisplaced where
-    /// zero keeps the neighbours' order, and carrying its neighbour's
-    /// displacement where zero would bunch against it.
+    /// A row first seen mid-spread attaches at its slot and shows no
+    /// displacement: the original anchors a behaviour at the cell's current
+    /// centre, wherever the springs around it happen to be.
     @Test
-    func aNewRowAttachesOnTheChain() {
+    func aNewRowAttachesUndisplaced() {
         var animator = ListBouncyAnimator()
         _ = animator.attach(at: -100, key: 0)
-        animator.willUpdate(context(delta: 40, dt: 0, touchY: 400))
-        let displaced = animator.displacement(forKey: 0)
-        #expect(displaced == -20)
+        animator.willUpdate(context(delta: 40, dt: 0))
+        #expect(animator.displacement(forKey: 0) != 0)
 
-        // Below the displaced row, zero sits inside the order — the
-        // original's anchoring at the cell's current centre.
-        #expect(animator.attach(at: 200, key: 1) == 0)
-        // Above it, zero would sit below a row already carried past this
-        // slot's rest order, so the newcomer enters holding the chain.
-        #expect(animator.attach(at: -300, key: 2) == displaced)
+        #expect(animator.attach(at: -300, key: 1) == 0)
     }
 
     // MARK: - Bookkeeping
@@ -285,7 +226,7 @@ struct ListBouncyAnimatorTests {
         untouched.willUpdate(context(dt: Self.frame))
 
         // A stiffer spring pulls the same displacement home harder.
-        #expect(abs(stiffened.displacement(forKey: 0)) < abs(untouched.displacement(forKey: 0)))
+        #expect(stiffened.displacement(forKey: 0) < untouched.displacement(forKey: 0))
     }
 
     /// Two configurations are the same animator whatever each is showing.

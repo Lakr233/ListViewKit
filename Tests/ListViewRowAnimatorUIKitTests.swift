@@ -113,14 +113,7 @@ struct ListViewRowAnimatorUIKitTests {
         listView.rowAnimator = ListBouncyAnimator()
         displace(listView)
 
-        // The spread pushes rows away from the hand, so a displaced row sits
-        // above its slot here; pick one whose drawn centre is still inside
-        // the viewport, or the hit test would be asked about a point the
-        // list does not even show.
-        let row = try #require(listView.visibleRowViews.first {
-            $0.presentationOffset < -1
-                && $0.placedFrame.midY + $0.presentationOffset > listView.contentOffset.y + 1
-        })
+        let row = try #require(listView.visibleRowViews.first { $0.presentationOffset > 1 })
         let drawnCentre = CGPoint(
             x: row.placedFrame.midX,
             y: row.placedFrame.midY + row.presentationOffset
