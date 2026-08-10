@@ -2,7 +2,7 @@
 //  ListBouncyAnimator.swift
 //  ListViewKit
 //
-//  A 1:1 port of BouncyLayout by Robert-Hein Hooijmans, MIT licensed.
+//  Derived from BouncyLayout by Robert-Hein Hooijmans, MIT licensed.
 //  https://github.com/roberthein/BouncyLayout
 //
 
@@ -16,16 +16,37 @@ import Foundation
     #error("ListViewKit requires UIKit or AppKit")
 #endif
 
-/// The elastic lag rows show while the list scrolls — BouncyLayout's physics,
-/// carried over verbatim onto ``ListRowAnimator``.
+/// The elastic stretch rows show while the list scrolls — BouncyLayout's
+/// springs on ``ListRowAnimator``, with one deliberate change of direction.
 ///
 /// One spring **per row**, attached to the slot the list placed it at, exactly
 /// as the original attaches a `UIAttachmentBehavior` to every visible cell.
-/// A frame of scrolling displaces each row by the scroll delta scaled by its
-/// distance from the touch — `|touch − anchor| / 1000`, the original's
-/// resistance, capped at the full delta — and the spring then pulls the row
-/// back to its slot. Rows near the hand move rigidly with the scroll; far
-/// ones trail and catch up.
+/// A frame of scrolling pushes each row **away from the hand** by the travel
+/// scaled by its distance — `|touch − anchor| / 1000`, the original's
+/// resistance, capped at the full frame's travel — and the spring then pulls
+/// the row back to its slot. The row under the hand rides the scroll rigidly;
+/// the spacing above it and below it opens while the list moves and closes as
+/// the springs come home.
+///
+/// The direction is the departure from the original, which displaces every
+/// row in the scroll's own direction: rows trail the motion, the gaps on one
+/// side of the hand compress, and a hard flick can push neighbours past each
+/// other. Spreading away from the hand instead makes the displacement
+/// **monotone along the row order** — around the hand rows 1…5 read
+/// 1 < 2 < 3 and 5 > 4 > 3 — so a gap stretches past its placement but never
+/// closes below it, and rows keep their order.
+///
+/// The pump alone only tends towards that; two seams would still break it,
+/// and both get explicit repair. A row first seen mid-spread enters **on the
+/// chain**: where zero displacement sits inside its neighbours' order it
+/// attaches undisplaced, as the original anchors every cell, but where the
+/// spread has already carried its neighbour past that, it enters holding the
+/// neighbour's displacement instead of bunching against it. And after every
+/// step, adjacent attachments the dynamics would cross are **pooled** —
+/// equal displacement, shared velocity, bodies come to rest against each
+/// other — so the order holds exactly every frame. An underdamped rebound
+/// still swings the spread past the slots, but it swings pooled rows
+/// together: what it cannot do is close a gap below its placement.
 ///
 /// The pump is deliberately **not** gated on the hand. The original feeds
 /// every bounds change through the same formula — a drag, momentum, a
@@ -166,13 +187,20 @@ public struct ListBouncyAnimator: Equatable {
         board.attachments[key]?.displacement ?? 0
     }
 
-    /// The original's `update(behavior:and:in:for:)`, for one attachment.
+    /// The original's `update(behavior:and:in:for:)` grading, pointed away
+    /// from the hand.
     ///
-    /// `delta < 0 ? max(delta, delta · resistance) : min(delta, delta ·
-    /// resistance)` — the resistance grades the pump by distance from the
-    /// touch and the min/max caps it at the full delta, both branches picking
-    /// the smaller magnitude. The velocity is untouched, exactly as moving a
-    /// dynamic item's centre does not touch the body's velocity.
+    /// The magnitude is the original's: the resistance grades the pump by
+    /// distance from the touch and the `min` caps it at the full frame's
+    /// travel. The direction is not — the original signs the bite with the
+    /// delta, trailing every row behind the scroll, which compresses the gaps
+    /// on one side of the hand and lets a hard flick push neighbours past
+    /// each other. Here either direction of travel pushes a row away from the
+    /// hand: above it up, below it down. The grading is monotone in the
+    /// anchor, so the displacement is monotone along the row order and the
+    /// spacing only ever opens while travel arrives. The velocity is
+    /// untouched, exactly as moving a dynamic item's centre does not touch
+    /// the body's velocity.
     ///
     /// The one line of the original deliberately not carried over is
     /// `item.center = floor(item.center)`. That floor pixel-aligns cell
@@ -182,9 +210,10 @@ public struct ListBouncyAnimator: Equatable {
     /// pumped fractions that the floor swallowed whole, then popped.
     private func pump(_ attachment: inout Board.Attachment, delta: CGFloat, touchY: CGFloat) {
         guard delta != 0 else { return }
-        let resistance = abs(touchY - attachment.anchorY) / Self.resistanceDistance
-        let bite = delta < 0 ? max(delta, delta * resistance) : min(delta, delta * resistance)
-        attachment.displacement += bite
+        let distance = attachment.anchorY - touchY
+        let resistance = abs(distance) / Self.resistanceDistance
+        let magnitude = min(abs(delta), abs(delta) * resistance)
+        attachment.displacement += distance < 0 ? -magnitude : magnitude
     }
 
     /// One physics step of the behaviour's spring: Box2D's soft constraint,
@@ -206,6 +235,61 @@ public struct ListBouncyAnimator: Equatable {
            abs(attachment.velocity) <= CGFloat(Self.restingVelocity) {
             attachment.displacement = 0
             attachment.velocity = 0
+        }
+    }
+
+    /// Holds the chain: displacement monotone along the anchor order.
+    ///
+    /// The springs are independent, and independence is exactly what lets a
+    /// pair drift across each other — the velocity a row built up spreading
+    /// couples back into its position a hair differently than its
+    /// neighbour's. Adjacent attachments the dynamics would cross are pooled
+    /// to their mean displacement and mean velocity — sub-pixel kept, no
+    /// quantising — which is the least the frame can move anyone while
+    /// restoring the order, and is what two bodies meeting inelastically do.
+    /// A frame with the chain intact passes through untouched.
+    private func holdChain() {
+        guard board.attachments.count > 1 else { return }
+        let keys = board.attachments.keys.sorted { lhs, rhs in
+            let a = board.attachments[lhs]!.anchorY
+            let b = board.attachments[rhs]!.anchorY
+            return a == b ? lhs < rhs : a < b
+        }
+
+        struct Block {
+            var displacement: CGFloat
+            var velocity: CGFloat
+            var count: Int
+        }
+        var blocks: [Block] = []
+        blocks.reserveCapacity(keys.count)
+        for key in keys {
+            let attachment = board.attachments[key]!
+            var block = Block(
+                displacement: attachment.displacement,
+                velocity: attachment.velocity,
+                count: 1
+            )
+            while let previous = blocks.last, previous.displacement > block.displacement {
+                let merged = CGFloat(previous.count + block.count)
+                block.displacement = (previous.displacement * CGFloat(previous.count)
+                    + block.displacement * CGFloat(block.count)) / merged
+                block.velocity = (previous.velocity * CGFloat(previous.count)
+                    + block.velocity * CGFloat(block.count)) / merged
+                block.count += previous.count
+                blocks.removeLast()
+            }
+            blocks.append(block)
+        }
+        guard blocks.count < keys.count else { return }
+
+        var index = 0
+        for block in blocks {
+            for _ in 0 ..< block.count {
+                board.attachments[keys[index]]?.displacement = block.displacement
+                board.attachments[keys[index]]?.velocity = block.velocity
+                index += 1
+            }
         }
     }
 
@@ -257,6 +341,7 @@ extension ListBouncyAnimator: ListRowAnimator {
             step(&attachment, by: context.deltaTime)
             board.attachments[key] = attachment
         }
+        holdChain()
         // Attachments whose rows have not been offered for a while belong to
         // rows that are no longer mounted; nothing on screen shows them.
         if board.clock - board.lastPrune > 1 {
@@ -270,22 +355,53 @@ extension ListBouncyAnimator: ListRowAnimator {
         row.setPresentationOffset(attach(at: frame.midY, key: index))
     }
 
-    /// Looks an attachment up, making one the first time a row is seen.
+    /// Looks an attachment up, making one on the chain the first time a row
+    /// is seen.
     ///
-    /// A new attachment anchors at the slot the list just placed the row at
-    /// and holds no displacement — the original attaches at the cell's
-    /// current centre, and a cell entering the buffered viewport is at its
-    /// layout position. A row whose slot has moved since is re-anchored in
-    /// place with its displacement kept: the original handles a resize by
-    /// tearing every behaviour down and re-adding it, which zeroes the whole
-    /// screen's springs for a frame, and keeping the displacement is that
-    /// repair without the pop.
+    /// A new attachment anchors at the slot the list just placed the row at.
+    /// It holds no displacement where none is owed — the original attaches
+    /// at the cell's current centre, and a cell entering the buffered
+    /// viewport is at its layout position — but a row mounting at the edge
+    /// the spread has pushed rows towards would then sit bunched against a
+    /// displaced neighbour, breaking the order the pump keeps everywhere
+    /// else. So zero is clamped into the neighbours' chain: a row whose
+    /// nearest neighbour above is displaced down enters carrying that
+    /// displacement and its velocity, mirrored for the other edge, and rides
+    /// the same spring home from there. A row whose slot has moved since is
+    /// re-anchored in place with its displacement kept: the original handles
+    /// a resize by tearing every behaviour down and re-adding it, which
+    /// zeroes the whole screen's springs for a frame, and keeping the
+    /// displacement is that repair without the pop.
     func attach(at slotY: CGFloat, key: Int) -> CGFloat {
-        var attachment = board.attachments[key] ?? .init(anchorY: slotY, seen: board.clock)
+        var attachment = board.attachments[key] ?? makeChainedAttachment(at: slotY)
         attachment.anchorY = slotY
         attachment.seen = board.clock
         board.attachments[key] = attachment
         return attachment.displacement
+    }
+
+    /// A fresh attachment, displaced only as far as keeping the chain
+    /// monotone requires.
+    private func makeChainedAttachment(at slotY: CGFloat) -> Board.Attachment {
+        var attachment = Board.Attachment(anchorY: slotY, seen: board.clock)
+        var above: Board.Attachment?
+        var below: Board.Attachment?
+        for other in board.attachments.values {
+            if other.anchorY <= slotY {
+                if above == nil || other.anchorY > above!.anchorY { above = other }
+            } else {
+                if below == nil || other.anchorY < below!.anchorY { below = other }
+            }
+        }
+        if let above, above.displacement > attachment.displacement {
+            attachment.displacement = above.displacement
+            attachment.velocity = above.velocity
+        }
+        if let below, below.displacement < attachment.displacement {
+            attachment.displacement = below.displacement
+            attachment.velocity = below.velocity
+        }
+        return attachment
     }
 
     /// Moves the stored anchors with the content coordinate space.

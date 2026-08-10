@@ -197,7 +197,7 @@ struct ListViewRowAnimatorAppKitTests {
             listView.attachmentValues?.max { abs($0.value) < abs($1.value) }?.key
         )
         let afterFirst = try! #require(listView.attachmentValues?[key])
-        #expect(afterFirst > 0)
+        #expect(afterFirst != 0)
 
         // Laying out afterwards must not deliver the same travel again.
         listView.layoutSubtreeIfNeeded()
@@ -205,7 +205,7 @@ struct ListViewRowAnimatorAppKitTests {
         listView.tickRowAnimator(duration: Self.frame)
         let afterSecond = try! #require(listView.attachmentValues?[key])
         // With nothing new arriving the spring only decays.
-        #expect(afterSecond < valueBefore)
+        #expect(abs(afterSecond) < abs(valueBefore))
     }
 
     private func makeWheelEvent(
@@ -321,15 +321,23 @@ struct ListViewRowAnimatorAppKitTests {
         }
 
         #expect(listView.animatorTickCount == ticks)
-        // The passes may attach rows the moved offset mounted — undisplaced,
-        // which is where a new attachment starts — but no spring in flight
-        // may have advanced.
+        // The passes may attach rows the moved offset mounted — on the
+        // chain, wherever the neighbours' order admits them — but no spring
+        // in flight may have advanced.
         for (key, value) in afterTick {
             #expect(listView.attachmentValues?[key] == value)
         }
+        // A chained newcomer holds a value the springs around it were
+        // already showing, and holds it across passes: attaching is not a
+        // step of time.
+        let bounds = (afterTick.values.min() ?? 0) ... (afterTick.values.max() ?? 0)
         for (key, value) in listView.attachmentValues ?? [:] where afterTick[key] == nil {
-            #expect(value == 0)
+            #expect(bounds.contains(value) || value == 0)
         }
+        let afterPasses = listView.attachmentValues
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+        #expect(listView.attachmentValues == afterPasses)
     }
 
     /// An idle list must not cost a frame.
@@ -421,8 +429,9 @@ struct ListViewRowAnimatorAppKitTests {
             let index = try! #require(listView.visibleRows.first { $0.value.view === row }.flatMap { listView.index(of: $0.key) })
             // Re-querying is idempotent — the board is only pumped by a
             // frame — so this reads the exact value the pass landed. A row
-            // this pass attached reads zero, which is where the original
-            // anchors a cell entering the buffered viewport.
+            // this pass attached reads wherever the chain admitted it:
+            // zero where zero keeps the order, its neighbour's displacement
+            // where zero would bunch against it.
             #expect(row.presentationOffset == bouncy.displacement(forKey: index))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
         }
@@ -577,22 +586,18 @@ struct ListViewRowAnimatorAppKitTests {
 
     // MARK: - Shape on screen
 
-    /// The lag is graded by distance from the touch, in the direction of the
-    /// travel.
+    /// The spread is graded by distance from the touch, away from it.
     ///
-    /// The original's resistance is `|touch − anchor| / 1000`: a row under
-    /// the hand rides the scroll rigidly, a row 400pt away sheds 40% of every
-    /// frame's travel onto its spring. With no hand observed the touch
-    /// defaults to the viewport's bottom edge, so scrolling down must
-    /// displace the top rows further than the bottom ones — and downward,
-    /// which is what trailing an upward-moving content looks like.
-    ///
-    /// Ordering is deliberately not asserted: rows on independent springs
-    /// bunch together ahead of the motion — the original overlaps cells on
-    /// purpose — and the DEBUG overlap assertion checks placements, not
-    /// displacements.
+    /// The resistance is BouncyLayout's `|touch − anchor| / 1000`: a row
+    /// under the hand rides the scroll rigidly, a row 400pt away sheds 40%
+    /// of every frame's travel onto its spring. The direction is this
+    /// model's own: travel pushes a row away from the hand, not along the
+    /// scroll. With no hand observed the touch defaults to the viewport's
+    /// bottom edge, so scrolling down must displace the top rows further
+    /// than the bottom ones — and upward, which is what spreading away from
+    /// the bottom edge looks like.
     @Test
-    func theLagIsGradedByDistanceFromTheTouch() {
+    func theSpreadIsGradedByDistanceFromTheTouch() {
         let listView = makeListView()
         listView.rowAnimator = ListBouncyAnimator()
 
@@ -604,52 +609,43 @@ struct ListViewRowAnimatorAppKitTests {
         let rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
         let top = try! #require(rows.first)
         let bottom = try! #require(rows.last)
-        #expect(top.presentationOffset > 0)
-        #expect(top.presentationOffset > bottom.presentationOffset)
+        #expect(top.presentationOffset < 0)
+        #expect(top.presentationOffset < bottom.presentationOffset)
     }
 
-    /// Gaps open behind the motion and close ahead of it, and a reversal
-    /// swaps the two.
+    /// Gaps open away from the hand in either direction of travel, and rows
+    /// never bunch past their placement.
     ///
-    /// Dragging the content up, every row above the hand lags downward by
-    /// more the further up it sits — so each gap's upper row closes on its
-    /// lower one, and the spacing bunches toward the hand. Dragging back
-    /// down mirrors it: the upper row of each pair now lags upward by more,
-    /// and the gaps above the hand open. That is the reference's shape —
-    /// spreading behind the motion, bunching ahead of it — produced here by
-    /// nothing but the original's per-row resistance.
+    /// Scrolling either way, every row moves away from the hand by more the
+    /// further out it sits, so each pair of neighbours separates: the row
+    /// order 1 < 2 < 3 … is kept, and the spacing between rows only ever
+    /// opens while the list moves — the chain the model holds every frame,
+    /// rows mounted mid-spread included.
     @Test
-    func gapsOpenBehindTheMotionAndCloseAheadOfIt() {
+    func gapsOpenAwayFromTheHandAndRowsNeverBunch() {
         let listView = makeListView()
         listView.rowAnimator = ListBouncyAnimator()
-        // Deep enough that the reversal never reaches the top of the content,
-        // where the clamp would eat the travel. A jump, so nothing is pumped.
+        // Deep enough that the travel never reaches the top of the content,
+        // where the clamp would eat it. A jump, so nothing is pumped.
         listView.setContentOffset(CGPoint(x: 0, y: 2000), animated: false)
         listView.layoutSubtreeIfNeeded()
 
-        var sawBunching = false
-        for _ in 0 ..< 20 {
-            scroll(listView, by: 30)
-            listView.tickRowAnimator(duration: Self.frame)
+        func assertShape(_ direction: CGFloat, _ label: Comment) {
+            var sawAGap = false
+            for _ in 0 ..< 20 {
+                scroll(listView, by: 30 * direction)
+                listView.tickRowAnimator(duration: Self.frame)
+                let rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
+                for (previous, next) in zip(rows, rows.dropFirst()) {
+                    if next.frame.minY > previous.frame.maxY + 1e-6 { sawAGap = true }
+                    #expect(next.frame.minY >= previous.frame.maxY - 1e-6, "rows bunched: \(label)")
+                }
+            }
+            #expect(sawAGap, label)
         }
-        var rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
-        for (previous, next) in zip(rows, rows.dropFirst())
-            where next.frame.minY < previous.frame.maxY - 1e-6 {
-            sawBunching = true
-        }
-        #expect(sawBunching, "scrolling down should bunch the rows above the hand")
 
-        var sawAGap = false
-        for _ in 0 ..< 30 {
-            scroll(listView, by: -30)
-            listView.tickRowAnimator(duration: Self.frame)
-        }
-        rows = listView.visibleRowViews.sorted { $0.placedFrame.minY < $1.placedFrame.minY }
-        for (previous, next) in zip(rows, rows.dropFirst())
-            where next.frame.minY > previous.frame.maxY + 1e-6 {
-            sawAGap = true
-        }
-        #expect(sawAGap, "the reversal should open gaps above the hand")
+        assertShape(1, "scrolling down should open gaps above the hand")
+        assertShape(-1, "scrolling up should keep opening them")
     }
 }
 #endif
