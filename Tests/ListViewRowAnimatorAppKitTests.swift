@@ -309,7 +309,10 @@ struct ListViewRowAnimatorAppKitTests {
 
         let spring = try! #require(listView.spring)
         for row in listView.visibleRowViews {
-            #expect(row.presentationOffset == spring.displacement(forRowCenteredAt: row.placedFrame.midY))
+            let index = try! #require(listView.visibleRows.first { $0.value.view === row }.flatMap { listView.index(of: $0.key) })
+            // Re-querying at the same clock is idempotent, so this reads the
+            // exact value the pass landed, follower lag included.
+            #expect(row.presentationOffset == spring.followedDisplacement(forRowCenteredAt: row.placedFrame.midY, key: index))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
         }
     }

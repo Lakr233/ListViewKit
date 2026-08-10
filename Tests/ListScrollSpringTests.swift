@@ -94,7 +94,7 @@ struct ListScrollSpringTests {
     func aFastZeroCrossingIsNotMistakenForRest() {
         for deltaTime in [Self.frame, 1e-5] {
             var spring = ListScrollSpring(dampingRatio: 0.2)
-            spring.advance(scrollDelta: 24, deltaTime: deltaTime, anchorY: 0)
+            spring.advance(scrollDelta: spring.maximumStretch, deltaTime: deltaTime, anchorY: 0)
 
             var crossings = 0
             var peakAfterFirstCrossing: CGFloat = 0
@@ -144,7 +144,7 @@ struct ListScrollSpringTests {
 
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < 12)
         #expect(steadyStretch(scrollingAt: 150, hz: 120) < 17)
-        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 24)
+        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 32)
         // Monotone where it is graded, so slow scrolling still reads as speed.
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 150, hz: 120))
     }
@@ -563,12 +563,14 @@ struct ListScrollSpringTests {
         spring.angularFrequency = 100_000
         spring.dampingRatio = .infinity
         spring.unevenness = -3
+        spring.returnDelay = .nan
 
-        #expect(spring.maximumStretch == 24)
+        #expect(spring.maximumStretch == 32)
         #expect(spring.resistanceFactor == 1)
         #expect(spring.angularFrequency == 500)
         #expect(spring.dampingRatio == 0.75)
         #expect(spring.unevenness == 0)
+        #expect(spring.returnDelay == 0.12)
     }
 
     /// A zero budget is the off switch, and it has to be free of residue.
@@ -604,7 +606,7 @@ struct ListScrollSpringTests {
         let below = spring.displacement(forRowCenteredAt: 500)
         #expect(above > 0 && below > 0)
         #expect(max(above, below) <= spring.stretch + 1e-9)
-        #expect(min(above, below) >= spring.stretch * (1 - spring.unevenness) * (500 / spring.effectiveResistance) - 1e-9)
+        #expect(min(above, below) >= spring.stretch * (1 - spring.unevenness) * min(1, 500 / spring.effectiveResistance) - 1e-9)
     }
 
     /// The spec, verbatim: rows 1–6, the finger dragging row 4. Sliding down,
@@ -642,8 +644,8 @@ struct ListScrollSpringTests {
 
         // On the plain ramp, the furthest from the hand moves most.
         let down = gaps(after: -10, unevenness: 0)
-        #expect(down[0] >= down[1], "the spread grows with distance: \(down)")
-        #expect(abs(down[4]) >= abs(down[3]))
+        #expect(down[0] >= down[1] - 1e-6, "the spread grows with distance: \(down)")
+        #expect(abs(down[4]) >= abs(down[3]) - 1e-6)
 
         // And rest restores the spacing.
         var spring = ListScrollSpring()
@@ -707,6 +709,119 @@ struct ListScrollSpringTests {
         // Catching it again resumes from wherever the payback had reached.
         advance(delta: 8, holding: true)
         #expect(spring.stretch > 0)
+    }
+
+    /// The spec, verbatim again: after sliding and letting go, the messages
+    /// ahead of the finger come back a beat later than the ones under it.
+    ///
+    /// The field is one scalar and springs home as one; the delay lives in
+    /// per-row followers whose time constant grows with distance from the
+    /// grip. So mid-payback the far row must be holding visibly more of its
+    /// spread than the near row — and with ``ListScrollSpring/returnDelay``
+    /// zeroed, the cascade is off and every row shows the field as it is.
+    @Test
+    @MainActor
+    func theReturnRollsOutwardFromTheHand() {
+        var spring = ListScrollSpring(unevenness: 0)
+        func advance(delta: CGFloat, holding: Bool) {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 800,
+                scrollDelta: delta,
+                deltaTime: Self.frame,
+                isUserInteracting: holding
+            ))
+        }
+        let near: CGFloat = 650   // 150pt from the hand
+        let far: CGFloat = 350    // 450pt: the full falloff away
+
+        // A firm drag, long enough for every follower to reach its target.
+        for _ in 0 ..< 120 {
+            _ = advance(delta: 8, holding: true)
+            _ = spring.followedDisplacement(forRowCenteredAt: near, key: 1)
+            _ = spring.followedDisplacement(forRowCenteredAt: far, key: 2)
+        }
+        let nearHeld = spring.followedDisplacement(forRowCenteredAt: near, key: 1)
+        let farHeld = spring.followedDisplacement(forRowCenteredAt: far, key: 2)
+        #expect(farHeld > nearHeld, "the far row should carry more spread")
+
+        // The lift. A beat later the near row has paid most of its spread
+        // back while the far row still holds most of its own.
+        var nearNow = nearHeld, farNow = farHeld
+        for _ in 0 ..< 21 { // ~175ms at 120Hz
+            advance(delta: 0, holding: false)
+            nearNow = spring.followedDisplacement(forRowCenteredAt: near, key: 1)
+            farNow = spring.followedDisplacement(forRowCenteredAt: far, key: 2)
+        }
+        #expect(nearNow < nearHeld * 0.45, "the near row should be mostly home: \(nearNow) of \(nearHeld)")
+        // Measured: near ~0.33 of held, far ~0.60 — the beat between them.
+        #expect(farNow > farHeld * 0.5, "the far row should still be on its way: \(farNow) of \(farHeld)")
+
+        // And everyone gets home.
+        for _ in 0 ..< 400 {
+            advance(delta: 0, holding: false)
+            nearNow = spring.followedDisplacement(forRowCenteredAt: near, key: 1)
+            farNow = spring.followedDisplacement(forRowCenteredAt: far, key: 2)
+        }
+        #expect(nearNow == 0 && farNow == 0)
+        #expect(spring.wantsNextFrame == false, "settled followers must let the link die")
+    }
+
+    /// A slow cascade outlives the field, and the link must outlive both.
+    ///
+    /// At the default delay the followers are sub-pixel by the time the field
+    /// rests, so nothing shows if the link dies with it. At the knob's far
+    /// end they are not: half a second of lag leaves points of visible spread
+    /// still travelling when the field settles, and a link keyed to the field
+    /// alone freezes them mid-air.
+    @Test
+    @MainActor
+    func aSlowCascadeKeepsFramesComingAfterTheFieldRests() {
+        var spring = ListScrollSpring(unevenness: 0, returnDelay: 0.5)
+        func advance(delta: CGFloat, holding: Bool) {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 800,
+                scrollDelta: delta,
+                deltaTime: Self.frame,
+                isUserInteracting: holding
+            ))
+        }
+        for _ in 0 ..< 60 {
+            advance(delta: 8, holding: true)
+            _ = spring.followedDisplacement(forRowCenteredAt: 350, key: 2)
+        }
+        var frames = 0
+        while !spring.isAtRest, frames < 2000 {
+            advance(delta: 0, holding: false)
+            _ = spring.followedDisplacement(forRowCenteredAt: 350, key: 2)
+            frames += 1
+        }
+        let far = spring.followedDisplacement(forRowCenteredAt: 350, key: 2)
+        #expect(abs(far) > 0.05, "premise: the slow follower outlives the field, held \(far)")
+        #expect(spring.wantsNextFrame, "the far row is still travelling; frames are owed")
+    }
+
+    /// A row scrolling into a live spread is already part of it.
+    @Test
+    @MainActor
+    func aRowTheFlowHasNeverSeenStartsOnTheFieldNotAtZero() {
+        var spring = ListScrollSpring(unevenness: 0)
+        for _ in 0 ..< 30 {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 800,
+                scrollDelta: 8,
+                deltaTime: Self.frame,
+                isUserInteracting: true
+            ))
+        }
+        let fresh = spring.followedDisplacement(forRowCenteredAt: 350, key: 99)
+        #expect(fresh == spring.displacement(forRowCenteredAt: 350), "a fresh follower must seed on the field")
+        #expect(fresh != 0)
     }
 
     /// The unevenness is real, bounded, and off when asked to be off.

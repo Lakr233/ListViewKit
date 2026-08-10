@@ -54,7 +54,7 @@ public struct ListScrollSpring: Equatable {
     /// This bounds the displacement of every row, so it is also what the list
     /// has to overscan its mounting rectangle by.
     public var maximumStretch: CGFloat {
-        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24) }
+        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 32) }
     }
 
     /// How unevenly the rows trail, as a fraction of their own lag.
@@ -74,19 +74,33 @@ public struct ListScrollSpring: Equatable {
         didSet { unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2) }
     }
 
+    /// How long a row at the far end of the falloff trails the field, in
+    /// seconds. Zero shows every row the field as it is.
+    ///
+    /// The field itself moves as one quantity, so without this the whole
+    /// spread springs home in lockstep the moment the hand lifts. With it,
+    /// each row follows the field through a lag that grows with its distance
+    /// from the grip: the rows under the hand return first and the wave rolls
+    /// outward — the "messages ahead of the finger come back a beat later"
+    /// that the reference shows.
+    public var returnDelay: TimeInterval {
+        didSet { returnDelay = Self.validate(returnDelay, in: 0 ... 0.5, default: 0.12) }
+    }
+
     /// The distance from the anchor, in points, at which a row trails by the
     /// full ``maximumStretch``.
     ///
     /// Larger values spread the falloff over more rows, which reads as a
     /// stiffer sheet; smaller values concentrate it near the grip. The default
-    /// grades across a whole viewport, so every visible gap takes a share of
-    /// the spread rather than the nearest one taking all of it.
+    /// concentrates the spread over the four or five rows around the hand,
+    /// which is where the eye is; the first cut graded across a whole
+    /// viewport and read as nothing happening at all.
     ///
     /// Displacement grades over `max(resistanceFactor, maximumStretch)`, so no
     /// configuration can make the falloff steeper than 1:1 — which is the
     /// slope at which adjacent rows could meet.
     public var resistanceFactor: CGFloat {
-        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800) }
+        didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 450) }
     }
 
     /// How quickly the rows catch the scroll back up, in radians per second.
@@ -116,20 +130,54 @@ public struct ListScrollSpring: Equatable {
     private static var restingVelocity: Double { 0.5 }
 
     private var spring: SpringInterpolation
-    private var anchorY: CGFloat = 0
+    var anchorY: CGFloat = 0
+
+    /// The per-row followers behind ``returnDelay``.
+    ///
+    /// A reference on purpose: the list stores the animator as a value and
+    /// mutates it in place, and every copy it takes along the way has to see
+    /// the same followers or a row would restart its lag on each frame.
+    /// Follower state is display state, not model state — it never feeds back
+    /// into the field — so sharing it across copies cannot fork the physics.
+    final class Flow {
+        struct Follower {
+            var displacement: CGFloat
+            var seen: TimeInterval
+        }
+
+        var followers: [Int: Follower] = [:]
+        var clock: TimeInterval = 0
+        var lastPrune: TimeInterval = 0
+    }
+
+    let flow = Flow()
+
+    /// Equality is over the knobs. The spring's transient and the followers
+    /// are display state — two configurations are the same animator whatever
+    /// each happens to be showing this frame.
+    public static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.maximumStretch == rhs.maximumStretch
+            && lhs.resistanceFactor == rhs.resistanceFactor
+            && lhs.angularFrequency == rhs.angularFrequency
+            && lhs.dampingRatio == rhs.dampingRatio
+            && lhs.unevenness == rhs.unevenness
+            && lhs.returnDelay == rhs.returnDelay
+    }
 
     public init(
-        maximumStretch: CGFloat = 24,
-        resistanceFactor: CGFloat = 800,
+        maximumStretch: CGFloat = 32,
+        resistanceFactor: CGFloat = 450,
         angularFrequency: Double = 14,
         dampingRatio: Double = 0.75,
-        unevenness: CGFloat = 0.2
+        unevenness: CGFloat = 0.2,
+        returnDelay: TimeInterval = 0.12
     ) {
-        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24)
-        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800)
+        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 32)
+        self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 450)
         self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 14)
         self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
         self.unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2)
+        self.returnDelay = Self.validate(returnDelay, in: 0 ... 0.5, default: 0.12)
         // The library's own threshold snaps the value to the target, which at
         // a fast zero crossing would be a dead stop. Rest is decided here
         // instead, on the velocity as well as the value.
@@ -215,6 +263,7 @@ public struct ListScrollSpring: Equatable {
         spring.setCurrent(0, 0)
         spring.setTarget(0)
         anchorY = 0
+        flow.followers.removeAll()
     }
 
     // MARK: - Displacement
@@ -317,6 +366,7 @@ public struct ListScrollSpring: Equatable {
         guard value.isFinite else { return fallback }
         return min(max(value, range.lowerBound), range.upperBound)
     }
+
 }
 
 /// Stated in an extension rather than on the type: conforming to a
@@ -325,7 +375,13 @@ public struct ListScrollSpring: Equatable {
 /// one.
 extension ListScrollSpring: ListRowAnimator {
     public var maximumDisplacement: CGFloat { maximumStretch }
-    public var wantsNextFrame: Bool { !isAtRest }
+
+    /// Frames are owed while the field is live *or* any follower is still on
+    /// its way home — the field reaches rest first, and the far rows are
+    /// still paying their ``returnDelay`` back after it.
+    public var wantsNextFrame: Bool {
+        !isAtRest || flow.followers.contains { abs($0.value.displacement) > 0.05 }
+    }
 
     public mutating func willUpdate(_ context: ListAnimatorContext) {
         // The gravity exists only under the hand. The moment it lifts, the
@@ -338,10 +394,49 @@ extension ListScrollSpring: ListRowAnimator {
             deltaTime: context.deltaTime,
             anchorY: context.interactionAnchorY
         )
+        flow.clock += context.deltaTime
+        // Followers whose rows have not been offered for a while belong to
+        // rows that are no longer mounted; nothing on screen shows them.
+        if flow.clock - flow.lastPrune > 1 {
+            flow.lastPrune = flow.clock
+            flow.followers = flow.followers.filter { flow.clock - $0.value.seen < 1 }
+        }
     }
 
     @MainActor
-    public func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
-        row.setPresentationOffset(displacement(forRowCenteredAt: frame.midY))
+    public func update(row: ListRowView, at index: Int, frame: CGRect, in _: ListAnimatorContext) {
+        row.setPresentationOffset(followedDisplacement(forRowCenteredAt: frame.midY, key: index))
+    }
+
+    /// The field, seen through this row's lag.
+    ///
+    /// ``displacement(forRowCenteredAt:)`` is the field as it is *now*; a row
+    /// shows it through a first-order follower whose time constant grows with
+    /// distance from the grip, up to ``returnDelay`` at the far end. The rows
+    /// under the hand track the field as it moves; the far ones arrive late —
+    /// on the way out and, what the eye actually catches, on the way home.
+    ///
+    /// A follower for a row it has not seen starts *on* the field, not at
+    /// zero: a row scrolling into a live spread is already part of it, and
+    /// seeding at zero would let it pop from its placement to its lag.
+    func followedDisplacement(forRowCenteredAt center: CGFloat, key: Int) -> CGFloat {
+        let target = displacement(forRowCenteredAt: center)
+        guard returnDelay > 1e-4 else {
+            flow.followers[key] = nil
+            return target
+        }
+        let lag = returnDelay * Double(min(1, abs(anchorY - center) / effectiveResistance))
+        var follower = flow.followers[key] ?? .init(displacement: target, seen: flow.clock)
+        let elapsed = flow.clock - follower.seen
+        if lag <= 1e-4 {
+            follower.displacement = target
+        } else if elapsed > 0 {
+            follower.displacement += (target - follower.displacement) * (1 - exp(-elapsed / lag))
+        }
+        // Snap the tail so a settled row reads exactly its placement.
+        if abs(follower.displacement - target) < 0.05 { follower.displacement = target }
+        follower.seen = flow.clock
+        flow.followers[key] = follower
+        return follower.displacement
     }
 }
