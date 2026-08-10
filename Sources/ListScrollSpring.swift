@@ -74,6 +74,19 @@ public struct ListScrollSpring: Equatable {
         didSet { unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2) }
     }
 
+    /// How long the effect takes to reach full strength after the hand
+    /// arrives, in seconds. Zero engages it whole on the first frame.
+    ///
+    /// The moment a finger lands on a moving list, the pump would otherwise
+    /// bite at full gain and the trailing rows would shed the scroll's
+    /// velocity in a single frame — the effect *starting* was itself a jolt.
+    /// This is the attack of an envelope: the rows keep their vector and the
+    /// spring's share fades in over this long. Lifting fades it back out at
+    /// the same rate, so a quick re-catch does not restart from a cliff.
+    public var attack: TimeInterval {
+        didSet { attack = Self.validate(attack, in: 0 ... 0.5, default: 0.12) }
+    }
+
     /// How long a row at the far end of the falloff trails the field, in
     /// seconds. Zero shows every row the field as it is.
     ///
@@ -131,6 +144,9 @@ public struct ListScrollSpring: Equatable {
 
     private var spring: SpringInterpolation
     var anchorY: CGFloat = 0
+    /// The envelope behind ``attack``: 0 with no hand on the content, rising
+    /// toward 1 while one is, first-order both ways.
+    var engagement: Double = 0
 
     /// The per-row followers behind ``returnDelay``.
     ///
@@ -163,6 +179,7 @@ public struct ListScrollSpring: Equatable {
             && lhs.dampingRatio == rhs.dampingRatio
             && lhs.unevenness == rhs.unevenness
             && lhs.returnDelay == rhs.returnDelay
+            && lhs.attack == rhs.attack
     }
 
     public init(
@@ -171,7 +188,8 @@ public struct ListScrollSpring: Equatable {
         angularFrequency: Double = 14,
         dampingRatio: Double = 0.75,
         unevenness: CGFloat = 0.2,
-        returnDelay: TimeInterval = 0.12
+        returnDelay: TimeInterval = 0.12,
+        attack: TimeInterval = 0.12
     ) {
         self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 32)
         self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 450)
@@ -179,6 +197,7 @@ public struct ListScrollSpring: Equatable {
         self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
         self.unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2)
         self.returnDelay = Self.validate(returnDelay, in: 0 ... 0.5, default: 0.12)
+        self.attack = Self.validate(attack, in: 0 ... 0.5, default: 0.12)
         // The library's own threshold snaps the value to the target, which at
         // a fast zero crossing would be a dead stop. Rest is decided here
         // instead, on the velocity as well as the value.
@@ -269,6 +288,7 @@ public struct ListScrollSpring: Equatable {
         spring.setCurrent(0, 0)
         spring.setTarget(0)
         anchorY = 0
+        engagement = 0
         flow.followers.removeAll()
     }
 
@@ -395,8 +415,15 @@ extension ListScrollSpring: ListRowAnimator {
         // scroll the rows rigidly while the spring pays back what it holds.
         // Feeding the deceleration too was tried and read as the whole screen
         // staying smeared for as long as the flick coasted.
+        if attack > 1e-4 {
+            let step = 1 - exp(-context.deltaTime / attack)
+            let towards: Double = context.isUserInteracting ? 1 : 0
+            engagement += (towards - engagement) * step
+        } else {
+            engagement = context.isUserInteracting ? 1 : 0
+        }
         advance(
-            scrollDelta: context.isUserInteracting ? context.scrollDelta : 0,
+            scrollDelta: context.isUserInteracting ? context.scrollDelta * CGFloat(engagement) : 0,
             deltaTime: context.deltaTime,
             anchorY: context.interactionAnchorY
         )

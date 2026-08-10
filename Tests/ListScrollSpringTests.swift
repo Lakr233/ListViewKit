@@ -808,6 +808,55 @@ struct ListScrollSpringTests {
         #expect(worstCorner < delta / 4, "the row's velocity jumped by \(worstCorner) in one frame")
     }
 
+    /// The spec, verbatim: when the hand arrives the rows keep their vector,
+    /// and the spring's share is added slowly.
+    ///
+    /// Without the envelope the pump bites whole on the first frame: a row
+    /// coasting at the scroll's speed sheds nearly all of it at once, which
+    /// is the effect *starting* being a jolt. With it, the first frame's bite
+    /// is the first step of a fade — under a tenth of the travel — and the
+    /// bite grows monotonically to full over the attack.
+    @Test
+    @MainActor
+    func theEffectFadesInInsteadOfEngaging() {
+        var spring = ListScrollSpring(unevenness: 0)
+        func advance(delta: CGFloat, holding: Bool = true) {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 800,
+                scrollDelta: delta,
+                deltaTime: Self.frame,
+                isUserInteracting: holding
+            ))
+        }
+        let delta: CGFloat = 8
+        advance(delta: delta)
+        // The first frame keeps the vector: almost none of the travel is
+        // taken. (1 − e^(−dt/attack) ≈ 0.067 at the defaults.)
+        #expect(spring.stretch < delta * 0.1, "the first frame bit \(spring.stretch) of \(delta)")
+
+        // The bite per frame rises through the fade before equilibrium pulls
+        // it back down — the point is that the FIRST frame is nowhere near
+        // the biggest, which is what front-loaded engagement was.
+        let firstBite = spring.stretch
+        var previous = spring.stretch
+        var peakBite = firstBite
+        for _ in 0 ..< 20 {
+            advance(delta: delta)
+            peakBite = max(peakBite, spring.stretch - previous)
+            previous = spring.stretch
+        }
+        #expect(peakBite > firstBite * 3, "the fade should crescendo: first \(firstBite), peak \(peakBite)")
+        #expect(spring.stretch > 5, "the effect does arrive")
+
+        // Lifting fades it out rather than snapping it off: a re-catch soon
+        // after starts partway up, not from zero and not from full.
+        for _ in 0 ..< 6 { advance(delta: 0, holding: false) }
+        let partway = spring.engagement
+        #expect(partway > 0.2 && partway < 0.9, "the envelope should be mid-fade, was \(partway)")
+    }
+
     /// The spec, verbatim: momentum is continuous in direction. A follower
     /// whose target is yanked the other way keeps moving its own way for at
     /// least a frame — it carries velocity, it does not teleport its
