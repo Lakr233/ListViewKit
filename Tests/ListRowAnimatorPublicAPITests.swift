@@ -78,6 +78,8 @@ struct ListRowAnimatorPublicAPITests {
         }
         listView.contentOffset.y = 2000
         listView.layoutSubtreeIfNeeded()
+        // The spread only exists under the hand; hold one down for these.
+        listView._isTracking = true
         return listView
     }
 
@@ -481,7 +483,7 @@ struct ListRowAnimatorPublicAPITests {
         let messages = ListScrollSpring.messages
         let subtle = ListScrollSpring.subtle
 
-        #expect(messages.maximumStretch == 15)
+        #expect(messages.maximumStretch == 24)
         #expect(subtle.maximumStretch == 8)
         #expect(subtle.maximumStretch < messages.maximumStretch)
         #expect(subtle.resistanceFactor > messages.resistanceFactor)

@@ -52,6 +52,10 @@ struct ListViewRowAnimatorAppKitTests {
         }
         listView.apply((0 ..< count).map { AnimatorItem(id: $0) })
         drain(listView)
+        // The spread only exists under the hand, so these tests hold one down
+        // for the duration. Individual tests lift it where the lift is the
+        // point.
+        listView._isTracking = true
         return listView
     }
 

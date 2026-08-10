@@ -477,7 +477,8 @@ import SpringInterpolation
         private var _contentSize: CGSize = .zero
 
         /// Whether the user is currently interacting with scroll (trackpad/mouse).
-        private var _isTracking: Bool = false
+        /// Internal (not private) so integration tests can simulate a grip.
+        var _isTracking: Bool = false
         var isTracking: Bool {
             _isTracking || _momentumAnimation != nil || _isVerticalScrollerTracking
         }
@@ -1413,6 +1414,21 @@ public extension ListScrollView {
             isTracking || isDragging || isDecelerating
         #elseif canImport(AppKit)
             isTracking
+        #endif
+    }
+
+    /// Whether a finger or a pointer is on the content right now.
+    ///
+    /// Stricter than ``isScrollOffsetOwnedByUser``, which keeps reporting
+    /// through momentum: this is the direct-manipulation window only — a
+    /// touch dragging, or a trackpad gesture before the lift, or the scroller
+    /// knob held. Momentum and rebounds are the offset still owned but the
+    /// hand already gone.
+    var isReaderHoldingScroll: Bool {
+        #if canImport(UIKit)
+            isTracking || isDragging
+        #elseif canImport(AppKit)
+            _isTracking || _isVerticalScrollerTracking
         #endif
     }
 

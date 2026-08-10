@@ -54,7 +54,24 @@ public struct ListScrollSpring: Equatable {
     /// This bounds the displacement of every row, so it is also what the list
     /// has to overscan its mounting rectangle by.
     public var maximumStretch: CGFloat {
-        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 15) }
+        didSet { maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24) }
+    }
+
+    /// How unevenly the rows trail, as a fraction of their own lag.
+    ///
+    /// Zero is a perfectly even ramp — every row at the same distance lags
+    /// the same — and it reads mechanical, like the screen shearing as one
+    /// sheet. Messages does not look like that: bubbles trail with visible
+    /// individuality. This dips each row's lag by up to this fraction along a
+    /// slow spatial wave, so neighbours stop moving in lockstep.
+    ///
+    /// A wave rather than randomness on purpose: it is deterministic in the
+    /// row's distance from the grip, so a row's reading is stable from frame
+    /// to frame — noise re-rolled per frame would shimmer — and it is smooth,
+    /// so its gradient joins the falloff's in the ordering bound instead of
+    /// breaking it.
+    public var unevenness: CGFloat {
+        didSet { unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2) }
     }
 
     /// The distance from the anchor, in points, at which a row trails by the
@@ -72,10 +89,13 @@ public struct ListScrollSpring: Equatable {
         didSet { resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800) }
     }
 
-    /// How quickly the stretch returns to zero, in radians per second.
+    /// How quickly the rows catch the scroll back up, in radians per second.
+    ///
+    /// Lower is more languid: the lag takes longer to build and longer to pay
+    /// back, and the speed at which the stretch saturates falls with it.
     public var angularFrequency: Double {
         didSet {
-            angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 20)
+            angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 14)
             spring.config.angularFrequency = angularFrequency
         }
     }
@@ -99,15 +119,17 @@ public struct ListScrollSpring: Equatable {
     private var anchorY: CGFloat = 0
 
     public init(
-        maximumStretch: CGFloat = 15,
+        maximumStretch: CGFloat = 24,
         resistanceFactor: CGFloat = 800,
-        angularFrequency: Double = 20,
-        dampingRatio: Double = 0.75
+        angularFrequency: Double = 14,
+        dampingRatio: Double = 0.75,
+        unevenness: CGFloat = 0.2
     ) {
-        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 15)
+        self.maximumStretch = Self.validate(maximumStretch, in: 0 ... 200, default: 24)
         self.resistanceFactor = Self.validate(resistanceFactor, in: 1 ... 10000, default: 800)
-        self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 20)
+        self.angularFrequency = Self.validate(angularFrequency, in: 1 ... 500, default: 14)
         self.dampingRatio = Self.validate(dampingRatio, in: 0.1 ... 5, default: 0.75)
+        self.unevenness = Self.validate(unevenness, in: 0 ... 0.5, default: 0.2)
         // The library's own threshold snaps the value to the target, which at
         // a fast zero crossing would be a dead stop. Rest is decided here
         // instead, on the velocity as well as the value.
@@ -197,10 +219,38 @@ public struct ListScrollSpring: Equatable {
 
     // MARK: - Displacement
 
+    /// The two periods of the unevenness wave, in units of the falloff
+    /// distance, and the largest gradient their sum can have. Incommensurate,
+    /// so the pattern never visibly repeats across a screen.
+    private static var wavePeriods: (CGFloat, CGFloat) { (0.9, 0.55) }
+    /// `max |n′(u)|` for `n(u) = (sin(2πu/p₁) + sin(2πu/p₂ + 2)) / 2`:
+    /// `π (1/p₁ + 1/p₂)` ≈ 9.21.
+    private static var waveGradient: CGFloat { .pi * (1 / wavePeriods.0 + 1 / wavePeriods.1) }
+
+    /// The distance the falloff actually grades over.
+    ///
+    /// ``resistanceFactor``, floored so that the displaced-position map keeps
+    /// slope under 0.95 for *any* configuration: the falloff contributes
+    /// `maximumStretch / R` and the unevenness wave `maximumStretch / R`
+    /// times half its gradient, so the floor scales with both knobs. At the
+    /// defaults the floor is ~48pt against an 800pt setting — it exists for
+    /// hostile configurations, not for tuning.
+    var effectiveResistance: CGFloat {
+        max(resistanceFactor, maximumStretch * (1 + unevenness * Self.waveGradient / 2) / 0.95)
+    }
+
+    /// The steepest the falloff can be anywhere, in points of displacement
+    /// per point of separation. Adjacent rows approach each other by at most
+    /// this fraction of their separation, which is what the ordering tests
+    /// assert against.
+    var steepestFalloffSlope: CGFloat {
+        maximumStretch * (1 + unevenness * Self.waveGradient / 2) / effectiveResistance
+    }
+
     /// How far to displace a row whose centre sits at `center`.
     ///
-    /// Zero at the anchor, growing linearly with distance on *both* sides of
-    /// it, saturating at ``resistanceFactor``. Both sides trail in the same
+    /// Zero at the anchor, growing with distance on *both* sides of it,
+    /// saturating at ``effectiveResistance``. Both sides trail in the same
     /// direction — behind the motion — so the field flows around the grip:
     /// dragging the content down opens the gaps above the held row while the
     /// rows below bunch toward it, and the reverse direction mirrors it. An
@@ -208,14 +258,26 @@ public struct ListScrollSpring: Equatable {
     /// effect: with nothing opening on the other side of the grip, one
     /// direction of every drag read as the whole screen shrinking.
     ///
-    /// The map from placed position to displaced position has slope within
-    /// `1 ± maximumStretch / resistanceFactor`, so rows that were laid out
-    /// edge to edge keep their order whatever their heights are.
+    /// On top of the ramp, ``unevenness`` dips each row's lag along a slow
+    /// two-tone wave in the same distance, so neighbours trail with visible
+    /// individuality instead of shearing as one sheet. The wave only ever
+    /// *dips* — the ramp is the ceiling — so ``maximumStretch`` stays the
+    /// bound the mounting overscan relies on.
+    ///
+    /// The map from placed position to displaced position keeps slope within
+    /// `1 ± steepestFalloffSlope`, capped at `1 ± 0.95`, so rows that were
+    /// laid out edge to edge keep their order whatever their heights are.
     public func displacement(forRowCenteredAt center: CGFloat) -> CGFloat {
         let stretch = stretch
         guard stretch != 0 else { return 0 }
-        let weight = min(1, abs(anchorY - center) / max(resistanceFactor, maximumStretch))
-        return stretch * weight
+        let distance = anchorY - center
+        let weight = min(1, abs(distance) / effectiveResistance)
+        guard weight > 0 else { return 0 }
+        guard unevenness > 0 else { return stretch * weight }
+        let u = distance / effectiveResistance
+        let wave = (sin(u * 2 * .pi / Self.wavePeriods.0)
+            + sin(u * 2 * .pi / Self.wavePeriods.1 + 2)) / 2
+        return stretch * weight * (1 - unevenness * (0.5 + 0.5 * wave))
     }
 
     // MARK: - Presets
@@ -223,11 +285,15 @@ public struct ListScrollSpring: Equatable {
     /// The iMessage feel, fitted to recordings of Messages rather than derived.
     ///
     /// The relaxation comes from two gaps tracked frame by frame and fitted to
-    /// a second-order response — ω ≈ 19–21, ζ ≈ 0.6–0.75, peak spread 12–16pt.
-    /// The shape comes from a per-element trace of the same footage: rigid at
-    /// and below the pointer, graded above it over the height of the viewport,
-    /// with gaps closing as well as opening. See §2.5 and §9 of the design
-    /// document for the measurements.
+    /// a second-order response — ω ≈ 19–21, ζ ≈ 0.6–0.75 — then slowed on
+    /// request to ω = 14, so the rows visibly take their time catching the
+    /// scroll back up. The shape comes from
+    /// a per-element trace of the same footage — graded by distance from the
+    /// pointer, gaps closing as well as opening — plus hands-on tuning: the
+    /// stretch sits above the traced 12–16pt peak because on glass the fitted
+    /// value read as timid, and the unevenness exists because a perfectly even
+    /// ramp reads as the screen shearing, which Messages never looks like.
+    /// See §2.5 and §8.4 of the design document.
     public static var messages: Self { .init() }
 
     /// The same idea at half the volume, for lists where the effect should be
@@ -262,8 +328,13 @@ extension ListScrollSpring: ListRowAnimator {
     public var wantsNextFrame: Bool { !isAtRest }
 
     public mutating func willUpdate(_ context: ListAnimatorContext) {
+        // The gravity exists only under the hand. The moment it lifts, the
+        // spread stops being fed and smooths home — momentum and rebounds
+        // scroll the rows rigidly while the spring pays back what it holds.
+        // Feeding the deceleration too was tried and read as the whole screen
+        // staying smeared for as long as the flick coasted.
         advance(
-            scrollDelta: context.scrollDelta,
+            scrollDelta: context.isUserInteracting ? context.scrollDelta : 0,
             deltaTime: context.deltaTime,
             anchorY: context.interactionAnchorY
         )

@@ -184,7 +184,7 @@ extension ListView {
             interactionAnchorY: viewport.minY + (rowAnimatorGripViewportY ?? bounds.height),
             scrollDelta: scrollDelta,
             deltaTime: deltaTime,
-            isUserInteracting: isScrollOffsetOwnedByUser
+            isUserInteracting: isReaderHoldingScroll
         )
     }
 

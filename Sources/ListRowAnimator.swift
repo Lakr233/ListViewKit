@@ -140,7 +140,11 @@ public struct ListAnimatorContext: Sendable {
     /// motion that was never drawn.
     public let deltaTime: TimeInterval
 
-    /// Whether a finger or a trackpad currently owns the offset.
+    /// Whether a finger or a pointer is on the content right now.
+    ///
+    /// Only the direct-manipulation window: a touch dragging, a trackpad
+    /// gesture before the lift, the scroller knob held. Momentum and rebounds
+    /// report false — the offset is still moving, but the hand is gone.
     public let isUserInteracting: Bool
 }
 

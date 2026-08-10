@@ -120,12 +120,12 @@ struct ListScrollSpringTests {
     /// This pinned the opposite claim while the frequency was paper-derived:
     /// that ordinary scrolling stays inside the budget and only a fling
     /// saturates. Measuring Messages retired it. At the fitted ω the stretch
-    /// reaches the budget from roughly 190pt/s up, and the recordings agree —
+    /// reaches the budget from roughly 235pt/s up, and the recordings agree —
     /// through every flick the far field's spread held its ceiling, and what
     /// varied between gestures was how long it stayed there, not how big it
     /// got.
     ///
-    /// So the speed the effect reads is a slow one. Below ~190pt/s the stretch
+    /// So the speed the effect reads is a slow one. Below ~235pt/s the stretch
     /// is graded; above it the gesture always looks the same.
     @Test
     func slowScrollingIsGradedAndAnythingBriskSaturates() {
@@ -142,9 +142,9 @@ struct ListScrollSpringTests {
             return spring.stretch
         }
 
-        #expect(steadyStretch(scrollingAt: 100, hz: 120) < 8)
-        #expect(steadyStretch(scrollingAt: 150, hz: 120) < 15)
-        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 15)
+        #expect(steadyStretch(scrollingAt: 100, hz: 120) < 12)
+        #expect(steadyStretch(scrollingAt: 150, hz: 120) < 17)
+        #expect(steadyStretch(scrollingAt: 600, hz: 120) == 24)
         // Monotone where it is graded, so slow scrolling still reads as speed.
         #expect(steadyStretch(scrollingAt: 100, hz: 120) < steadyStretch(scrollingAt: 150, hz: 120))
     }
@@ -178,24 +178,20 @@ struct ListScrollSpringTests {
             return spring.stretch / continuous
         }
 
-        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.944) < 0.005)
-        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.889) < 0.005)
+        #expect(abs(ratioToContinuousLimit(hz: 120) - 0.961) < 0.005)
+        #expect(abs(ratioToContinuousLimit(hz: 60) - 0.922) < 0.005)
         #expect(ratioToContinuousLimit(hz: 60) < ratioToContinuousLimit(hz: 120))
     }
 
-    /// The relaxation the defaults are fitted to.
+    /// The relaxation the defaults are tuned to.
     ///
-    /// Two gaps were tracked frame by frame through a screen recording of
-    /// Messages — one per gesture, in different parts of the conversation —
-    /// and each was least-squares fitted to a second-order response. They
-    /// landed at ω = 19.0/ζ = 0.74 and ω = 21.0/ζ = 0.60, which is where the
-    /// defaults come from.
-    ///
-    /// Pinned on how long the opening takes to halve rather than on the whole
-    /// curve: the two traces agree on that to within 4ms (64 and 68), and
-    /// disagree on the tail by a factor the model could not sit inside anyway
-    /// (they reach a tenth at 136ms and 100ms). A 60 Hz window capture is
-    /// worth the half-life and not much past it.
+    /// The Messages fits (two gestures, least-squares against a second-order
+    /// response) landed at ω ≈ 19–21 with half-lives of 64–68ms; the default
+    /// is deliberately slower — ω = 14, asked for by feel: the rows should
+    /// take their time catching the scroll back up. Everything scales by the
+    /// ratio, so the pins are the fitted curve stretched by 20/14: half-life
+    /// ~117ms, a tenth by ~200ms, and the same barely-there undershoot that
+    /// keeps ζ at 0.75.
     @Test
     func theDefaultsRelaxLikeTheRecordingTheyWereFittedTo() {
         let hz = 60.0
@@ -218,10 +214,8 @@ struct ListScrollSpringTests {
             return Double(frame) / hz * 1000
         }
 
-        // Measured: 64ms and 68ms.
-        #expect((50.0 ... 85.0).contains(milliseconds(toReach: 0.5)), "half-life \(milliseconds(toReach: 0.5))ms")
-        // Measured: 100ms and 136ms — the traces themselves span that.
-        #expect((85.0 ... 160.0).contains(milliseconds(toReach: 0.1)), "tenth at \(milliseconds(toReach: 0.1))ms")
+        #expect((100.0 ... 135.0).contains(milliseconds(toReach: 0.5)), "half-life \(milliseconds(toReach: 0.5))ms")
+        #expect((170.0 ... 240.0).contains(milliseconds(toReach: 0.1)), "tenth at \(milliseconds(toReach: 0.1))ms")
         // Monotone down to the tenth: the recording shows no bounce on the way.
         let toTenth = curve.prefix(while: { $0 / peak > 0.1 })
         #expect(zip(toTenth, toTenth.dropFirst()).allSatisfy { $0 > $1 })
@@ -284,7 +278,7 @@ struct ListScrollSpringTests {
     func rowsApproachEachOtherByAtMostTheFalloffSlope() {
         var noise = Noise(seed: 11)
         var spring = ListScrollSpring()
-        let slope = spring.maximumStretch / spring.resistanceFactor
+        let slope = spring.steepestFalloffSlope
         for _ in 0 ..< 4000 {
             spring.advance(
                 scrollDelta: noise.next(in: -300 ... 300),
@@ -320,7 +314,7 @@ struct ListScrollSpringTests {
 
         var noise = Noise(seed: 13)
         var spring = ListScrollSpring()
-        let slope = spring.maximumStretch / spring.resistanceFactor
+        let slope = spring.steepestFalloffSlope
         for _ in 0 ..< 2000 {
             spring.advance(
                 scrollDelta: noise.next(in: -300 ... 300),
@@ -356,7 +350,9 @@ struct ListScrollSpringTests {
     /// finger feeds in, and everything the rows do stays continuous in it.
     @Test
     func aReversalRidesThroughZeroInsteadOfSnapping() {
-        var spring = ListScrollSpring()
+        // The wave is a spatial shape and this is a temporal claim: pinning
+        // the saturated value needs the plain ramp.
+        var spring = ListScrollSpring(unevenness: 0)
         // A firm scroll, saturated.
         for _ in 0 ..< 30 {
             spring.advance(scrollDelta: 8, deltaTime: Self.frame, anchorY: 1000)
@@ -516,10 +512,14 @@ struct ListScrollSpringTests {
                 angularFrequency: .nan,
                 dampingRatio: .nan
             ),
+            ListScrollSpring(unevenness: .nan),
+            ListScrollSpring(unevenness: -1),
+            ListScrollSpring(unevenness: 100),
             // Legal one at a time and hostile together: a budget bigger than
             // the falloff distance would let rows swap outright if the slope
             // were not bounded at use.
             ListScrollSpring(maximumStretch: 200, resistanceFactor: 1),
+            ListScrollSpring(maximumStretch: 200, resistanceFactor: 1, unevenness: 0.5),
         ]
 
         var noise = Noise(seed: 23)
@@ -562,11 +562,13 @@ struct ListScrollSpringTests {
         spring.resistanceFactor = -5
         spring.angularFrequency = 100_000
         spring.dampingRatio = .infinity
+        spring.unevenness = -3
 
-        #expect(spring.maximumStretch == 15)
+        #expect(spring.maximumStretch == 24)
         #expect(spring.resistanceFactor == 1)
         #expect(spring.angularFrequency == 500)
         #expect(spring.dampingRatio == 0.75)
+        #expect(spring.unevenness == 0)
     }
 
     /// A zero budget is the off switch, and it has to be free of residue.
@@ -596,12 +598,13 @@ struct ListScrollSpringTests {
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         #expect(spring.stretch > 0)
         #expect(spring.displacement(forRowCenteredAt: 0) == 0)
-        // Both sides hang behind the same way — same direction, same size.
-        #expect(spring.displacement(forRowCenteredAt: -500) > 0)
-        #expect(
-            spring.displacement(forRowCenteredAt: -500)
-                == spring.displacement(forRowCenteredAt: 500)
-        )
+        // Both sides hang behind the same way. Not asserted equal: the
+        // unevenness wave is deliberately asymmetric about the grip.
+        let above = spring.displacement(forRowCenteredAt: -500)
+        let below = spring.displacement(forRowCenteredAt: 500)
+        #expect(above > 0 && below > 0)
+        #expect(max(above, below) <= spring.stretch + 1e-9)
+        #expect(min(above, below) >= spring.stretch * (1 - spring.unevenness) * (500 / spring.effectiveResistance) - 1e-9)
     }
 
     /// The spec, verbatim: rows 1–6, the finger dragging row 4. Sliding down,
@@ -614,8 +617,8 @@ struct ListScrollSpringTests {
         let centers: [CGFloat] = [0, 100, 200, 300, 400, 500]
         let grip = centers[3]
 
-        func gaps(after delta: CGFloat) -> [CGFloat] {
-            var spring = ListScrollSpring()
+        func gaps(after delta: CGFloat, unevenness: CGFloat) -> [CGFloat] {
+            var spring = ListScrollSpring(unevenness: unevenness)
             for _ in 0 ..< 10 {
                 spring.advance(scrollDelta: delta, deltaTime: Self.frame, anchorY: grip)
             }
@@ -624,18 +627,23 @@ struct ListScrollSpringTests {
         }
 
         // Content dragged down (offset falling): 1-2, 2-3, 3-4 open; 4-5, 5-6
-        // close.
-        let down = gaps(after: -10)
-        #expect(down[0] > 0 && down[1] > 0 && down[2] > 0, "gaps above the grip should widen: \(down)")
-        #expect(down[3] < 0 && down[4] < 0, "gaps below the grip should bunch: \(down)")
-        // Furthest from the hand moves most, on both sides.
+        // close — with the unevenness wave on and off alike: the wave may
+        // redistribute the spread, never flip its direction.
+        for unevenness in [CGFloat(0), 0.2, 0.5] {
+            let down = gaps(after: -10, unevenness: unevenness)
+            #expect(down[0] > 0 && down[1] > 0 && down[2] > 0, "gaps above the grip should widen: \(down)")
+            #expect(down[3] < 0 && down[4] < 0, "gaps below the grip should bunch: \(down)")
+
+            // The other way around, the mirror image.
+            let up = gaps(after: 10, unevenness: unevenness)
+            #expect(up[0] < 0 && up[1] < 0 && up[2] < 0, "gaps above the grip should bunch: \(up)")
+            #expect(up[3] > 0 && up[4] > 0, "gaps below the grip should widen: \(up)")
+        }
+
+        // On the plain ramp, the furthest from the hand moves most.
+        let down = gaps(after: -10, unevenness: 0)
         #expect(down[0] >= down[1], "the spread grows with distance: \(down)")
         #expect(abs(down[4]) >= abs(down[3]))
-
-        // The other way around, the mirror image.
-        let up = gaps(after: 10)
-        #expect(up[0] < 0 && up[1] < 0 && up[2] < 0, "gaps above the grip should bunch: \(up)")
-        #expect(up[3] > 0 && up[4] > 0, "gaps below the grip should widen: \(up)")
 
         // And rest restores the spacing.
         var spring = ListScrollSpring()
@@ -652,9 +660,81 @@ struct ListScrollSpringTests {
         }
     }
 
+    /// The gravity exists only under the hand.
+    ///
+    /// While the finger drags, travel feeds the spread; the moment it lifts,
+    /// the spread smooths home even though momentum keeps delivering travel.
+    /// Feeding the deceleration too was the first behaviour, and it read as
+    /// the screen staying smeared for as long as the flick coasted.
+    @Test
+    @MainActor
+    func liftingTheFingerSmoothsHomeThroughMomentum() {
+        var spring = ListScrollSpring()
+        func advance(delta: CGFloat, holding: Bool) {
+            spring.willUpdate(.init(
+                viewportRect: CGRect(x: 0, y: 0, width: 320, height: 900),
+                contentRect: CGRect(x: 0, y: 0, width: 320, height: 5000),
+                interactionAnchorY: 700,
+                scrollDelta: delta,
+                deltaTime: Self.frame,
+                isUserInteracting: holding
+            ))
+        }
+
+        for _ in 0 ..< 20 { advance(delta: 8, holding: true) }
+        let held = spring.stretch
+        #expect(held > 0, "a drag should build the spread")
+
+        // The lift: momentum still delivers travel, and the spread pays
+        // itself back — it may cross zero on the way (ζ = 0.75 undershoots by
+        // a few percent) but it never exceeds what the hand left behind, and
+        // it reaches rest while the travel is still flowing.
+        //
+        // The payback is an animation, not a snap: one frame after the lift
+        // nearly all of the spread is still there. Zeroing it on release is
+        // the pop this whole design exists to avoid.
+        advance(delta: 8, holding: false)
+        #expect(spring.stretch > held * 0.8, "the release snapped: \(held) -> \(spring.stretch) in one frame")
+        var frames = 0
+        while !spring.isAtRest, frames < 2000 {
+            advance(delta: 8, holding: false)
+            #expect(abs(spring.stretch) <= held + 1e-9, "the spread grew after the lift")
+            frames += 1
+        }
+        #expect(spring.isAtRest)
+        #expect(spring.stretch == 0)
+
+        // Catching it again resumes from wherever the payback had reached.
+        advance(delta: 8, holding: true)
+        #expect(spring.stretch > 0)
+    }
+
+    /// The unevenness is real, bounded, and off when asked to be off.
+    @Test
+    func theWaveMakesNeighboursTrailUnevenly() {
+        var wavy = ListScrollSpring()
+        var even = ListScrollSpring(unevenness: 0)
+        wavy.advance(scrollDelta: 100, deltaTime: Self.frame, anchorY: 0)
+        even.advance(scrollDelta: 100, deltaTime: Self.frame, anchorY: 0)
+
+        // Sampled beyond the falloff, where the ramp is flat: any variation
+        // left is the wave's.
+        let far = stride(from: -1000, through: -3000, by: -250).map { CGFloat($0) }
+        let wavyReads = far.map { wavy.displacement(forRowCenteredAt: $0) }
+        let evenReads = far.map { even.displacement(forRowCenteredAt: $0) }
+
+        #expect(Set(evenReads).count == 1, "with the wave off the far field is one rigid sheet")
+        #expect(Set(wavyReads).count > 3, "the far field should trail unevenly: \(wavyReads)")
+        // The wave dips and never exceeds: the ramp is the ceiling.
+        for (w, e) in zip(wavyReads, evenReads) {
+            #expect(w <= e + 1e-9)
+            #expect(w >= e * (1 - wavy.unevenness) - 1e-9)
+        }
+    }
+
     @Test
     func lagGrowsWithDistanceFromTheGripUntilItSaturates() {
-        var spring = ListScrollSpring(resistanceFactor: 500)
+        var spring = ListScrollSpring(resistanceFactor: 500, unevenness: 0)
         spring.advance(scrollDelta: 24, deltaTime: Self.frame, anchorY: 0)
         let full = spring.stretch
 
