@@ -136,15 +136,28 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// somewhere inside a row, and leaving that row uncompensated slides
     /// everything below it under the reader — the row reflows upwards off the
     /// screen, which is exactly what the offset should absorb.
-    private func anchorIndex(in rect: CGRect) -> Int {
+    private struct Anchor {
+        /// Height changes in rows before this index go into the offset.
+        var index: Int
+        /// The row the anchor stepped over when nothing else intersects the
+        /// rect below it: a row straddling the viewport top with only empty
+        /// space under its end. Its shrink is absorbed like anything above
+        /// the anchor, holding the tail the reader is on in place — but its
+        /// growth happens below the fold, on screen, and is handled apart.
+        var bottomStraddler: Int?
+    }
+
+    private func anchor(in rect: CGRect) -> Anchor {
         let indices = indices(intersecting: rect)
-        guard let first = indices.first else { return indices.lowerBound }
+        guard let first = indices.first else { return .init(index: indices.lowerBound) }
         let top = engine.offset(at: first)
-        guard top < rect.minY else { return first }
+        guard top < rect.minY else { return .init(index: first) }
         // A row that also runs past the bottom edge is the entire viewport:
         // nothing else is on screen to hold still, so its own top is the
         // anchor and its reflow shows below the fold.
-        return top + engine.height(at: first) >= rect.maxY ? first : first + 1
+        guard top + engine.height(at: first) < rect.maxY else { return .init(index: first) }
+        let next = first + 1
+        return .init(index: next, bottomStraddler: next < indices.upperBound ? nil : first)
     }
 
     /// Measures every pending row in the rect, repeating while the resulting
@@ -162,9 +175,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         while true {
             let indices = indices(intersecting: rect)
             guard engine.pendingCount(in: indices) > 0 else { return offsetDelta }
-            let anchor = anchorIndex(in: viewport)
+            let anchor = anchor(in: viewport)
             for index in indices where engine.isPending(at: index) {
-                offsetDelta += measure(at: index, anchorIndex: anchor)
+                offsetDelta += measure(at: index, anchor: anchor)
             }
         }
     }
@@ -176,11 +189,11 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         anchoredAt viewport: CGRect,
         deadline: CFTimeInterval
     ) -> CGFloat {
-        let anchor = anchorIndex(in: viewport)
+        let anchor = anchor(in: viewport)
         var offsetDelta: CGFloat = 0
         var now = CACurrentMediaTime()
-        while now < deadline, let next = engine.nextPending(near: anchor) {
-            offsetDelta += measure(at: next, anchorIndex: anchor)
+        while now < deadline, let next = engine.nextPending(near: anchor.index) {
+            offsetDelta += measure(at: next, anchor: anchor)
             let finished = CACurrentMediaTime()
             if finished - now > Self.slowRowThreshold {
                 Self.log.warning(
@@ -198,7 +211,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
     /// Measures one row and reports how much of its height change happened
     /// above the anchor.
-    private func measure(at index: Int, anchorIndex: Int) -> CGFloat {
+    private func measure(at index: Int, anchor: Anchor) -> CGFloat {
         let previousHeight = engine.height(at: index)
 
         guard index < listView.items.count,
@@ -215,6 +228,14 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         measured[listView.items[index].id] = engine.height(at: index)
         // A row at or below the anchor is on screen, so its growth is
         // something the reader should see rather than something to cancel out.
-        return index < anchorIndex ? engine.height(at: index) - previousHeight : 0
+        guard index < anchor.index else { return 0 }
+        let delta = engine.height(at: index) - previousHeight
+        // The bottom straddler's growth is on screen too: it extends below
+        // the fold into the empty space after it. Cancelling it out would
+        // pin the list to its own end, swallowing the travel a reader
+        // following a streaming row is meant to watch. Only its shrink is
+        // absorbed, holding the tail where the reader left it.
+        if index == anchor.bottomStraddler, delta > 0 { return 0 }
+        return delta
     }
 }

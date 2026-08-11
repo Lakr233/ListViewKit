@@ -230,6 +230,40 @@ struct ListViewAnchorAppKitTests {
         #expect(listView.contentOffset.y == listView.minimumContentOffset.y)
     }
 
+    /// A streaming row grows at the end of a bottom-pinned list, with a
+    /// bottom inset holding the viewport open past it. The growth happens
+    /// below the fold — the reader is meant to watch it arrive, and the
+    /// host's follow animation is meant to carry the offset there. Folding
+    /// it into the offset instead pins the list to its own end and the
+    /// follow never gets to move.
+    @Test
+    func aGrowingBottomStraddlerShowsItsGrowthBelowTheFold() {
+        let context = makeContext(count: 5)
+        let listView = context.listView
+        listView.bottomInset = 120
+        context.probe.heights[4] = 900
+        listView.invalidateLayout()
+        drain(listView)
+        listView.setContentOffset(listView.maximumContentOffset, animated: false)
+        listView.layoutSubtreeIfNeeded()
+
+        // Row 4 spans 400..<1300 and alone intersects the 1020..<1420
+        // viewport: its top is above the fold, its end sits an inset short
+        // of the bottom edge.
+        let offsetBefore = listView.contentOffset.y
+        #expect(offsetBefore == 1020)
+        #expect(listView.rectForRow(at: 3).maxY <= offsetBefore)
+
+        context.probe.heights[4] = 1000
+        listView.invalidateLayout()
+        drain(listView)
+
+        // The offset stays; the new maximum is the follow animation's to
+        // chase.
+        #expect(listView.contentOffset.y == offsetBefore)
+        #expect(listView.maximumContentOffset.y == offsetBefore + 100)
+    }
+
     /// REPRO 4: a bottom-pinned list that shrinks stays pinned to the bottom
     /// instead of drifting away from it.
     @Test
