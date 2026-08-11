@@ -171,7 +171,9 @@
 
             guard scrollingDisplayLink == nil else { return }
             scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
-            scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 80, maximum: 120, preferred: 120)
+            // Minimum 60, not 80: a 60 Hz display cannot satisfy an 80 floor,
+            // and the range should always contain a rate the hardware has.
+            scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 60, maximum: 120, preferred: 120)
             scrollingTik = CACurrentMediaTime()
             scrollingDisplayLink?.add(to: .main, forMode: .common)
         }
