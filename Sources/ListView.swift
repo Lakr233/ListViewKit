@@ -201,12 +201,21 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         let difference = ListDifference(from: items, to: newItems, indexByID: indexByID)
         guard !difference.isEmpty else { return }
 
-        for identifier in difference.removed {
-            guard let recycled = recycleRow(with: identifier) else { continue }
-            if animated {
-                animateDisposal(of: recycled)
+        // Every snapshot is taken before any row is recycled. On AppKit taking
+        // one draws the row, and drawing runs whatever layout the window owes —
+        // this list's included. That pass has to find the list as it was: once
+        // a removed row is recycled but the old items are still in place, the
+        // pass mounts the item again on the very view just pooled, the loop
+        // below takes that view out of the hierarchy, and the list keeps a
+        // detached row parked in the slot for good.
+        if animated {
+            for identifier in difference.removed {
+                guard let view = visibleRows[identifier]?.view else { continue }
+                animateDisposal(of: view)
             }
-            recycled.removeFromSuperview()
+        }
+        for identifier in difference.removed {
+            recycleRow(with: identifier)?.removeFromSuperview()
         }
 
         let previousCount = items.count
