@@ -5,7 +5,7 @@
 //  The only suite that runs on both platforms: overlapping reorders are the
 //  one place where UIKit and AppKit reach the same behaviour by different
 //  means, and both are worth holding still. Run the UIKit half with
-//  `xcodebuild test -scheme ListViewKitTests -destination 'platform=iOS Simulator,…'`.
+//  `xcodebuild test -scheme ListViewKit-Package -destination 'platform=iOS Simulator,…'`.
 //
 
 #if canImport(UIKit)
@@ -22,7 +22,13 @@ private struct ReorderItem: Identifiable, Hashable {
     let id: Int
 }
 
-@Suite(.serialized)
+@Suite(
+    .serialized,
+    .disabled(
+        if: ProcessInfo.processInfo.isMacCatalystApp,
+        "A hostless Mac Catalyst test bundle has no NSApplication, so it cannot create a UIWindow"
+    )
+)
 @MainActor
 struct ListViewReorderAnimationTests {
     private static let rowHeight: CGFloat = 100

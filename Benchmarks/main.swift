@@ -1,4 +1,4 @@
-#if canImport(AppKit)
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Foundation
 import ListViewKit
@@ -175,5 +175,12 @@ private func blackHole(_ value: some Any) {
     withExtendedLifetime(value) {}
 }
 #else
-#error("ListViewKitBenchmarks currently requires AppKit")
+// Xcode builds every package product for the test destination, so this
+// target has to compile on UIKit platforms even though it only runs on macOS.
+@main
+enum Benchmarks {
+    static func main() {
+        print("ListViewKitBenchmarks requires AppKit; run it on macOS.")
+    }
+}
 #endif
