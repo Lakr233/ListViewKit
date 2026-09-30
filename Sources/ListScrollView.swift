@@ -8,7 +8,12 @@
 
     open class ListScrollView: UIScrollView {
         var scrollingDisplayLink: CADisplayLink?
-        var scrollingContext = SoftSpring2D(angularFrequency: 10, dampingRatio: 1, threshold: 0.05)
+        static let defaultScrollingAngularFrequency: Double = 10
+        var scrollingContext = SoftSpring2D(
+            angularFrequency: defaultScrollingAngularFrequency,
+            dampingRatio: 1,
+            threshold: 0.05
+        )
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
@@ -67,7 +72,12 @@
                     // back in by itself. That is a clamp, not a scroll, and
                     // inside a caller's block it would animate as one.
                     withoutListAnimation { super.contentSize = newValue }
-                    applyContentOffset(currentOffset)
+                    // Only when it moved: `setContentOffset(_:animated:)` stops
+                    // a fling even when handed the offset it already has, and
+                    // streaming content grows under one on every update.
+                    if contentOffset != currentOffset {
+                        applyContentOffset(currentOffset)
+                    }
                 }
                 reconcileOffsetWithContentSize()
             }
@@ -120,7 +130,11 @@
                 // edge so it lands there instead of short of it.
                 let clamped = nearestScrollLocationInBounds(offset: target)
                 if clamped != target {
-                    scroll(to: clamped)
+                    // Still the same scroll, so still at the pace it was given.
+                    scroll(
+                        to: clamped,
+                        angularFrequency: isReboundingFromOverscroll ? nil : scrollingContext.y.angularFrequency
+                    )
                 }
                 return
             }
@@ -161,11 +175,13 @@
                 .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
                 vel: .init(x: velocity.x, y: velocity.y)
             )
-            if let angularFrequency {
-                assert(angularFrequency > 0)
-                scrollingContext.x.angularFrequency = angularFrequency
-                scrollingContext.y.angularFrequency = angularFrequency
-            }
+            // Per call: a frequency one scroll asked for is not the next one's.
+            // One the spring cannot run on — zero, negative, NaN, infinite —
+            // would never arrive, so it falls back to the default as well.
+            let frequency = angularFrequency.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+                ?? Self.defaultScrollingAngularFrequency
+            scrollingContext.x.angularFrequency = frequency
+            scrollingContext.y.angularFrequency = frequency
             scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
             scrollingTarget = target
 
@@ -453,7 +469,12 @@
         }
 
         var scrollingDisplayLink: DisplayLink?
-        var scrollingContext = SoftSpring2D(angularFrequency: 16, dampingRatio: 1, threshold: 0.05)
+        static let defaultScrollingAngularFrequency: Double = 16
+        var scrollingContext = SoftSpring2D(
+            angularFrequency: defaultScrollingAngularFrequency,
+            dampingRatio: 1,
+            threshold: 0.05
+        )
         var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
@@ -678,6 +699,13 @@
         /// pass that refreshes the scroller.
         func layoutContent() {}
 
+        override open func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            // A gesture's remaining events stay with the window it began in,
+            // so a view that left it never hears the gesture end.
+            _isTracking = false
+        }
+
         override open func didAddSubview(_ subview: NSView) {
             super.didAddSubview(subview)
             guard subview !== scrollerOverlay, scrollerOverlay.superview === self else { return }
@@ -826,7 +854,11 @@
                 // edge so it lands there instead of short of it.
                 let clamped = nearestScrollLocationInBounds(offset: target)
                 if clamped != target {
-                    scroll(to: clamped)
+                    // Still the same scroll, so still at the pace it was given.
+                    scroll(
+                        to: clamped,
+                        angularFrequency: isReboundingFromOverscroll ? nil : scrollingContext.y.angularFrequency
+                    )
                 }
                 return
             }
@@ -1121,11 +1153,13 @@
                 .init(x: ceil(contentOffset.x), y: ceil(contentOffset.y)),
                 vel: .init(x: velocity.x, y: velocity.y)
             )
-            if let angularFrequency {
-                assert(angularFrequency > 0)
-                scrollingContext.x.angularFrequency = angularFrequency
-                scrollingContext.y.angularFrequency = angularFrequency
-            }
+            // Per call: a frequency one scroll asked for is not the next one's.
+            // One the spring cannot run on — zero, negative, NaN, infinite —
+            // would never arrive, so it falls back to the default as well.
+            let frequency = angularFrequency.flatMap { $0.isFinite && $0 > 0 ? $0 : nil }
+                ?? Self.defaultScrollingAngularFrequency
+            scrollingContext.x.angularFrequency = frequency
+            scrollingContext.y.angularFrequency = frequency
             scrollingContext.setTarget(.init(x: ceil(target.x), y: ceil(target.y)))
             scrollingTarget = target
 
@@ -1260,15 +1294,36 @@
             }
             let delta = min(1 / 30, context.duration)
             scrollingContext.update(withDeltaTime: delta)
-            let loc = CGPoint(
-                x: scrollingContext.x.value,
-                y: scrollingContext.y.value
-            )
+            let loc = springFrameWithinBounds()
             if _scrollAnimationIsExcludedFromTravel {
                 applyContentOffsetWithoutTravel(loc)
             } else {
                 applyContentOffset(loc)
             }
+        }
+
+        /// The spring's position, kept from going any further outside the
+        /// bounds than the offset already is.
+        ///
+        /// A scroll retargeted onto a nearer edge keeps its velocity, and with
+        /// velocity to spare it runs past the target into blank space. Not a
+        /// plain clamp, as on UIKit: the wheel's clamp and an animated
+        /// content-size correction start outside the bounds on purpose, and
+        /// have to travel back from there.
+        private func springFrameWithinBounds() -> CGPoint {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+            let current = contentOffset
+            return .init(
+                x: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.x.value, CGFloat.minimum(min.x, current.x)),
+                    CGFloat.maximum(max.x, current.x)
+                ),
+                y: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.y.value, CGFloat.minimum(min.y, current.y)),
+                    CGFloat.maximum(max.y, current.y)
+                )
+            )
         }
 
         open func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {

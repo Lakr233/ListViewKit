@@ -640,5 +640,144 @@ struct ListScrollViewAppKitTests {
             momentumPhase: .ended
         ))
     }
+
+    // MARK: - Programmatic scroll
+
+    private static let frame: TimeInterval = 1.0 / 120.0
+
+    private func tick(_ scrollView: ListScrollView) {
+        scrollView.handleScrollingAnimation(.init(
+            duration: Self.frame,
+            timestamp: 0,
+            targetTimestamp: Self.frame
+        ))
+    }
+
+    /// Frames a programmatic scroll takes to land, or `nil` if it never does.
+    private func framesToSettle(_ scrollView: ListScrollView, limit: Int = 2_000) -> Int? {
+        for frame in 0 ..< limit {
+            guard scrollView.scrollingDisplayLink != nil else { return frame }
+            tick(scrollView)
+        }
+        return nil
+    }
+
+    /// A frequency one scroll asked for belongs to that scroll. The next one
+    /// that names none runs at the default again.
+    @Test
+    func aCustomFrequencyDoesNotOutliveItsScroll() {
+        func makeScrollView() -> ListScrollView {
+            let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+            scrollView.contentSize = CGSize(width: 200, height: 2_000)
+            return scrollView
+        }
+
+        let fresh = makeScrollView()
+        fresh.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+        let defaultFrames = framesToSettle(fresh)
+
+        let reused = makeScrollView()
+        reused.scroll(to: CGPoint(x: 0, y: 1_600), angularFrequency: 200, preserveVelocity: false)
+        #expect(framesToSettle(reused) != nil)
+        reused.setContentOffset(.zero, animated: false)
+        reused.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+
+        #expect(defaultFrames != nil)
+        #expect(framesToSettle(reused) == defaultFrames)
+    }
+
+    /// A frequency the spring cannot run on must not leave the display link
+    /// running forever, nor write a non-finite offset.
+    @Test(arguments: [0, -1, Double.nan, Double.infinity])
+    func anUnusableFrequencyStillLands(_ angularFrequency: Double) {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+
+        scrollView.scroll(
+            to: CGPoint(x: 0, y: 800),
+            angularFrequency: angularFrequency,
+            preserveVelocity: false
+        )
+
+        #expect(framesToSettle(scrollView) != nil)
+        #expect(scrollView.contentOffset == CGPoint(x: 0, y: 800))
+        scrollView.cancelCurrentScrolling()
+    }
+
+    /// A scroll retargeted onto a nearer edge keeps its velocity, and one
+    /// with velocity to spare runs past the target. Past an edge that is
+    /// blank space, so the frames stop at it the way UIKit's do.
+    @Test
+    func aRetargetedScrollDoesNotOvershootTheContentEdge() {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 1_800), preserveVelocity: false)
+        for _ in 0 ..< 8 {
+            tick(scrollView)
+        }
+        #expect(scrollView.scrollingContext.y.velocity > 3_000)
+
+        // The content shrinks to end just ahead of the scroll.
+        scrollView.contentSize = CGSize(
+            width: 200,
+            height: scrollView.contentOffset.y + 50 + scrollView.bounds.height
+        )
+        let edge = scrollView.maximumContentOffset.y
+        #expect(scrollView.scrollingContext.y.target == edge)
+
+        var furthest = scrollView.contentOffset.y
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            tick(scrollView)
+            furthest = max(furthest, scrollView.contentOffset.y)
+        }
+        #expect(furthest <= edge)
+        #expect(scrollView.contentOffset.y == edge)
+    }
+
+    /// The wheel's clamp starts outside the bounds on purpose. Keeping the
+    /// frames inside the bounds must not snap it there.
+    @Test
+    func theWheelClampStillTravelsBackFromOutsideTheBounds() throws {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 5))
+        let overrun = scrollView.contentOffset.y
+        #expect(overrun < 0)
+
+        tick(scrollView)
+
+        #expect(scrollView.contentOffset.y < 0)
+        #expect(scrollView.contentOffset.y > overrun)
+        #expect(framesToSettle(scrollView) != nil)
+        #expect(scrollView.contentOffset.y == 0)
+    }
+
+    /// A gesture whose view leaves the window never gets its end event. The
+    /// list must not go on believing it is held.
+    @Test
+    func leavingTheWindowMidGestureReleasesTheScroll() throws {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        window.contentView?.addSubview(scrollView)
+
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 1, phase: .began))
+        #expect(scrollView.isScrollOffsetOwnedByUser)
+
+        scrollView.removeFromSuperview()
+
+        #expect(!scrollView.isScrollOffsetOwnedByUser)
+        #expect(!scrollView.isReaderHoldingScroll)
+        window.contentView?.addSubview(scrollView)
+        scrollView.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+        tick(scrollView)
+        #expect(scrollView.scrollingDisplayLink != nil)
+        scrollView.cancelCurrentScrolling()
+    }
 }
 #endif
