@@ -26,23 +26,52 @@ final class RowAnimatorDisplayLink {
     private let link = DisplayLink()
     private let proxy: Proxy
 
-    init(onTick: @escaping (DisplayLinkCallbackContext) -> Void) {
+    /// `onTick` is handed the time since the previous frame, not the frame
+    /// the display nominally runs at.
+    init(onTick: @escaping (TimeInterval) -> Void) {
         proxy = Proxy(onTick: onTick)
         link.delegatingObject(proxy)
     }
 
+    /// Delivers a frame as if the link had fired, so a test can choose the
+    /// timestamps.
+    func deliver(_ context: DisplayLinkCallbackContext) {
+        proxy.synchronization(context: context)
+    }
+
     @MainActor
     fileprivate final class Proxy {
-        let onTick: (DisplayLinkCallbackContext) -> Void
-        init(onTick: @escaping (DisplayLinkCallbackContext) -> Void) {
+        let onTick: (TimeInterval) -> Void
+        private var lastTimestamp: TimeInterval?
+
+        init(onTick: @escaping (TimeInterval) -> Void) {
             self.onTick = onTick
+        }
+
+        /// How much time this frame covers.
+        ///
+        /// `duration` is the display's nominal period, not the time that
+        /// passed: on UIKit it is quoted at the fastest rate the display
+        /// has, so a link the system runs slower, or a frame the main
+        /// thread missed, would advance the spring by less than elapsed
+        /// and slow it down in wall time. The gap between timestamps is
+        /// what actually passed. The nominal period stands in only for the
+        /// first frame, which has nothing to measure from, and for a
+        /// timestamp that did not move forward.
+        func elapsed(at context: DisplayLinkCallbackContext) -> TimeInterval {
+            defer { lastTimestamp = context.timestamp }
+            if let lastTimestamp {
+                let gap = context.timestamp - lastTimestamp
+                if gap.isFinite, gap > 0 { return gap }
+            }
+            return context.duration.isFinite ? max(0, context.duration) : 0
         }
     }
 }
 
 extension RowAnimatorDisplayLink.Proxy: @MainActor DisplayLinkDelegate {
     func synchronization(context: DisplayLinkCallbackContext) {
-        onTick(context)
+        onTick(elapsed(at: context))
     }
 }
 
@@ -135,10 +164,11 @@ extension ListView {
 
     /// Whether the system has asked for less movement.
     var prefersReducedMotion: Bool {
+        if let reducedMotionOverride { return reducedMotionOverride }
         #if canImport(UIKit)
-            UIAccessibility.isReduceMotionEnabled
+            return UIAccessibility.isReduceMotionEnabled
         #elseif canImport(AppKit)
-            NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
+            return NSWorkspace.shared.accessibilityDisplayShouldReduceMotion
         #endif
     }
 
@@ -240,7 +270,14 @@ extension ListView {
     /// beats layout to the offset still sees this frame's motion rather than
     /// last frame's.
     func tickRowAnimator(duration: TimeInterval) {
-        guard rowAnimator != nil, !isDrivingRowAnimator, !prefersReducedMotion else { return }
+        guard rowAnimator != nil, !isDrivingRowAnimator else { return }
+        guard !prefersReducedMotion else {
+            // Switched on mid-flight. Returning alone would leave the rows
+            // displaced and this link ticking forever, since only a tick
+            // that gets past here ever decides to stop it.
+            resetRowAnimator()
+            return
+        }
         advanceRowAnimator(duration: duration)
         applyRowDisplacements()
         updateRowAnimatorLink()
@@ -276,8 +313,8 @@ extension ListView {
             return
         }
         guard rowAnimatorLink == nil else { return }
-        rowAnimatorLink = RowAnimatorDisplayLink { [weak self] context in
-            self?.tickRowAnimator(duration: context.duration)
+        rowAnimatorLink = RowAnimatorDisplayLink { [weak self] elapsed in
+            self?.tickRowAnimator(duration: elapsed)
         }
     }
 
@@ -289,8 +326,9 @@ extension ListView {
     func resetRowAnimator() {
         rowAnimatorLink = nil
         do {
+            let wasRunning = isDrivingRowAnimator
             isDrivingRowAnimator = true
-            defer { isDrivingRowAnimator = false }
+            defer { isDrivingRowAnimator = wasRunning }
             rowAnimator?.reset()
         }
         scrollLedger.reset(offsetY: contentOffset.y)

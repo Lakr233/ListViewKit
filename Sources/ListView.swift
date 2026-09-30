@@ -104,6 +104,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// How many frames the animator has been advanced for, so a test can show
     /// an idle list never ticks and a scrolling one ticks once per frame.
     var animatorTickCount: Int = 0
+    /// Stands in for the system's reduce-motion setting when set, so a test
+    /// can switch it mid-animation.
+    var reducedMotionOverride: Bool?
     /// Where the reader last held the content, measured from the viewport's
     /// top edge, or `nil` before any interaction has been seen.
     ///
