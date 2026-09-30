@@ -83,6 +83,15 @@ public protocol ListRowAnimator {
     var maximumDisplacement: CGFloat { get }
 }
 
+/// An animator whose copies share their per-row state by reference.
+///
+/// The list calls this once, on the copy it has just installed, so that copy
+/// stops sharing with every other — the caller's, and any other list's the
+/// same value was installed on.
+protocol ListRowAnimatorOwnedState {
+    mutating func takeOwnedState()
+}
+
 public extension ListRowAnimator {
     mutating func willUpdate(_: ListAnimatorContext) {}
     func update(row _: ListRowView, at _: Int, frame _: CGRect, in _: ListAnimatorContext) {}

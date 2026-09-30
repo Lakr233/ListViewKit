@@ -119,8 +119,12 @@ public struct ListBouncyAnimator: Equatable {
     /// mutates it in place, and every copy it takes along the way has to see
     /// the same attachments or a row would restart its spring on each frame.
     /// Attachment state is display state, not configuration — it never feeds
-    /// back into the knobs — so sharing it across copies cannot fork anything
-    /// observable.
+    /// back into the knobs.
+    ///
+    /// Sharing stops at the list, though. One value installed on two lists
+    /// would otherwise pump and step each list's springs with the other's
+    /// scrolling, so a list takes a board of its own when the animator is
+    /// installed; see ``ListRowAnimatorOwnedState``.
     final class Board {
         struct Attachment {
             /// How far the row sits from its slot right now, in points.
@@ -138,7 +142,7 @@ public struct ListBouncyAnimator: Equatable {
         var lastPrune: TimeInterval = 0
     }
 
-    let board = Board()
+    private(set) var board = Board()
 
     /// Equality is over the knobs. The attachments are display state — two
     /// configurations are the same animator whatever each happens to be
@@ -265,9 +269,13 @@ extension ListBouncyAnimator: ListRowAnimator {
         }
     }
 
+    /// Keyed by the row's mount rather than `index`. The original's
+    /// behaviours hang off the cell's attributes; an index is only a slot,
+    /// and an apply that inserts, removes or moves items mid-bounce would
+    /// hand every shifted row its neighbour's spring.
     @MainActor
-    public func update(row: ListRowView, at index: Int, frame: CGRect, in _: ListAnimatorContext) {
-        row.setPresentationOffset(attach(at: frame.midY, key: index))
+    public func update(row: ListRowView, at _: Int, frame: CGRect, in _: ListAnimatorContext) {
+        row.setPresentationOffset(attach(at: frame.midY, key: row.mountID))
     }
 
     /// Looks an attachment up, making one the first time a row is seen.
@@ -301,5 +309,11 @@ extension ListBouncyAnimator: ListRowAnimator {
 
     public mutating func reset() {
         board.attachments.removeAll()
+    }
+}
+
+extension ListBouncyAnimator: ListRowAnimatorOwnedState {
+    mutating func takeOwnedState() {
+        board = Board()
     }
 }

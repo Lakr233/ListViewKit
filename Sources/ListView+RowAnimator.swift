@@ -184,6 +184,14 @@ extension ListView {
             // the whole point for a class, which the protocol also allows.
             previous.reset()
         }
+        if var installed = rowAnimator as? any ListRowAnimator & ListRowAnimatorOwnedState {
+            installed.takeOwnedState()
+            // A write-back of the animator just installed, not a new one.
+            let wasRunning = isDrivingRowAnimator
+            isDrivingRowAnimator = true
+            defer { isDrivingRowAnimator = wasRunning }
+            rowAnimator = installed
+        }
         rowAnimatorLink = nil
         scrollLedger.reset(offsetY: contentOffset.y)
         for row in visibleRows.values.map(\.view) {

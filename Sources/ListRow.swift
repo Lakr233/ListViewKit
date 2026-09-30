@@ -117,18 +117,20 @@ public struct ListRowRegistration<Item: Identifiable & Hashable & SendableMetaty
     var configure: @MainActor (ListRowView, Item, ListRowContext) -> Void
 }
 
+/// Every component is a list of registrations — a single row is a list of
+/// one — so the blocks of `if`, `if`/`else` and `for` compose with plain rows.
 @resultBuilder
 public enum ListRowsBuilder<Item: Identifiable & Hashable & SendableMetatype> {
     public static func buildExpression<RowView: ListRowView>(
         _ row: ListRow<Item, RowView>
-    ) -> ListRowRegistration<Item> {
-        row.registration
+    ) -> [ListRowRegistration<Item>] {
+        [row.registration]
     }
 
     public static func buildBlock(
-        _ registrations: ListRowRegistration<Item>...
+        _ registrations: [ListRowRegistration<Item>]...
     ) -> [ListRowRegistration<Item>] {
-        registrations
+        registrations.flatMap(\.self)
     }
 
     public static func buildArray(

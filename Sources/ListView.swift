@@ -583,6 +583,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // its contents out against a size about to change, and parenting it
         // there would show it in the wrong place for a frame.
         setRowFrame(rectForRow(at: index), on: view, animated: false)
+        view.beginMount()
         rowsPendingSettle.append(view)
         view.prepareForReuse()
         registrations[registrationIndex].configure(

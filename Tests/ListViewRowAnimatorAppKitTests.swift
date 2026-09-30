@@ -418,12 +418,11 @@ struct ListViewRowAnimatorAppKitTests {
 
         let bouncy = try! #require(listView.bouncy)
         for row in listView.visibleRowViews {
-            let index = try! #require(listView.visibleRows.first { $0.value.view === row }.flatMap { listView.index(of: $0.key) })
             // Re-querying is idempotent — the board is only pumped by a
             // frame — so this reads the exact value the pass landed. A row
             // this pass attached reads zero, which is where the original
             // anchors a cell entering the buffered viewport.
-            #expect(row.presentationOffset == bouncy.displacement(forKey: index))
+            #expect(row.presentationOffset == bouncy.displacement(forKey: row.mountID))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
         }
     }
@@ -697,6 +696,69 @@ struct ListViewRowAnimatorAppKitTests {
             sawAGap = true
         }
         #expect(sawAGap, "the reversal should open gaps above the hand")
+    }
+
+    /// An apply that shifts indices mid-bounce leaves every row on its own
+    /// spring.
+    ///
+    /// Springs keyed by index would hand each row the one its neighbour was
+    /// riding, and every row on screen would jump by the difference.
+    @Test
+    func anInsertionMidBounceKeepsEachRowOnItsOwnSpring() {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.setContentOffset(CGPoint(x: 0, y: 1000), animated: false)
+        listView.layoutSubtreeIfNeeded()
+        for _ in 0 ..< 8 {
+            scroll(listView, by: 40)
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+
+        let before = Dictionary(uniqueKeysWithValues: listView.visibleRows.map {
+            ($0.key, $0.value.view.presentationOffset)
+        })
+        #expect(Set(before.values).count > 1)
+
+        listView.apply([AnimatorItem(id: -1)] + listView.content)
+
+        for (identifier, entry) in listView.visibleRows {
+            guard let offset = before[identifier] else { continue }
+            #expect(entry.view.presentationOffset == offset, "row \(identifier)")
+        }
+    }
+
+    /// One animator value installed on two lists drives two independent sets
+    /// of springs.
+    ///
+    /// The value is configuration; the springs belong to whichever list is
+    /// showing them. Shared springs would let one list's scrolling pump and
+    /// step the other's rows, and clearing one list's animator would reset
+    /// the other's.
+    @Test
+    func oneAnimatorValueOnTwoListsKeepsTheirSpringsApart() {
+        let shared = ListBouncyAnimator()
+        let first = makeListView()
+        let second = makeListView()
+        first.rowAnimator = shared
+        second.rowAnimator = shared
+
+        for _ in 0 ..< 8 {
+            scroll(second, by: 40)
+            second.tickRowAnimator(duration: Self.frame)
+        }
+        let secondBefore = second.attachmentValues
+        #expect(secondBefore?.values.contains { $0 != 0 } == true)
+
+        // Scrolling the first list is none of the second's business.
+        for _ in 0 ..< 4 {
+            scroll(first, by: 40)
+            first.tickRowAnimator(duration: Self.frame)
+        }
+        #expect(second.attachmentValues == secondBefore)
+
+        // Nor is taking the first list's animator away.
+        first.rowAnimator = nil
+        #expect(second.attachmentValues == secondBefore)
     }
 }
 #endif
