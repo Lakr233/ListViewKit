@@ -104,18 +104,58 @@ final class ViewController: NSViewController {
         """
         let text = ([String](repeating: paragraph, count: 8)).joined(separator: "\n\n")
         Task { @MainActor in
+            var follower = TailFollower(listView)
             for character in text {
                 try? await Task.sleep(for: .milliseconds(5))
                 item.text.append(character)
-                // Asked before the update grows the row: afterwards the list
-                // is no longer at the bottom, whether or not it was.
-                let shouldFollow = listView.isScrolledToBottom(tolerance: 4)
+                follower.observe(listView)
                 listView.update(item)
-                // A reader who has scrolled away — or who just did, or who is
+                // A reader who has scrolled away — or who is scrolling, or
                 // resizing the window — is left where they are.
-                if gatesAutoScroll, !shouldFollow || listView.isUserInteractingWithScroll { continue }
+                if gatesAutoScroll, !follower.isFollowing || listView.isUserInteractingWithScroll { continue }
                 listView.scrollToBottom(animated: false)
+                follower.didFollow(listView)
             }
         }
+    }
+}
+
+/// Decides whether a stream keeps the list pinned to its tail.
+///
+/// "Within a few points of the bottom" cannot tell the reader scrolling away
+/// from the row growing past the edge while a token was not followed — during
+/// a gesture, say — and it drops the tail for good the first time that
+/// happens. The viewport's bottom edge in content coordinates tells them
+/// apart: growth below it and a bottom-pinned resize leave it where it is,
+/// and only scrolling moves it.
+@MainActor
+struct TailFollower {
+    private var followedEdge: CGFloat?
+
+    init(_ listView: ListView<ViewModel>) {
+        if listView.isScrolledToBottom(tolerance: 4) {
+            followedEdge = Self.bottomEdge(of: listView)
+        }
+    }
+
+    var isFollowing: Bool { followedEdge != nil }
+
+    /// Call before the update that grows the row.
+    mutating func observe(_ listView: ListView<ViewModel>) {
+        let edge = Self.bottomEdge(of: listView)
+        if let followedEdge, edge < followedEdge - 4 {
+            self.followedEdge = nil
+        } else if followedEdge == nil, listView.isScrolledToBottom(tolerance: 4) {
+            followedEdge = edge
+        }
+    }
+
+    /// Call after scrolling to the bottom.
+    mutating func didFollow(_ listView: ListView<ViewModel>) {
+        followedEdge = Self.bottomEdge(of: listView)
+    }
+
+    private static func bottomEdge(of listView: ListView<ViewModel>) -> CGFloat {
+        listView.contentOffset.y + listView.frame.height
     }
 }

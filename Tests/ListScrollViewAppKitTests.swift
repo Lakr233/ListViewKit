@@ -779,5 +779,31 @@ struct ListScrollViewAppKitTests {
         #expect(scrollView.scrollingDisplayLink != nil)
         scrollView.cancelCurrentScrolling()
     }
+
+    /// An overscroll the finger was holding when the view left its window is
+    /// not left stranded outside the content.
+    @Test
+    func leavingTheWindowMidOverscrollReturnsTheOffset() throws {
+        let window = NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        window.contentView?.addSubview(scrollView)
+
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 1, phase: .began))
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 80, phase: .changed))
+        try #require(scrollView.contentOffset.y < 0)
+
+        scrollView.removeFromSuperview()
+
+        if scrollView.scrollingDisplayLink != nil {
+            #expect(framesToSettle(scrollView) != nil)
+        }
+        #expect(scrollView.contentOffset.y == 0)
+    }
 }
 #endif

@@ -142,10 +142,11 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// the typical row keeps the scroller proportion steady as measurement
     /// catches up.
     ///
-    /// Set it before applying content. A row takes its estimate when it
-    /// enters the layout and keeps it until measured, so changing this later
-    /// reaches only rows that enter the layout afterwards. It never discards
-    /// a measurement: an estimate cannot make a measured height wrong.
+    /// Set it before applying content. A row takes its estimate when the
+    /// layout picks it up and keeps it until measured, so changing this later
+    /// reaches rows added afterwards and, on any apply that is not a plain
+    /// append, every row still unmeasured. It never discards a measurement:
+    /// an estimate cannot make a measured height wrong.
     public var estimatedRowHeight: CGFloat = 44
 
     public var topInset: CGFloat = 0 {
@@ -317,6 +318,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
     private func reloadRowViews() {
         for entry in visibleRows.values {
+            forgetRowAnimation(of: entry.view)
             entry.view.removeFromSuperview()
         }
         visibleRows.removeAll()
@@ -658,9 +660,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
         // Whatever the animator was showing belonged to the item leaving, so
-        // it does not travel to the next one on the same view. The scalar
-        // model makes this free: there is no per-row state to tear down.
+        // it does not travel to the next one on the same view, and neither
+        // does the spring it was showing it with.
         clearRowDisplacement(on: entry.view)
+        forgetRowAnimation(of: entry.view)
         reusePools[entry.registration].append(entry.view)
         rowsPendingRemoval.append(entry.view)
         return entry.view

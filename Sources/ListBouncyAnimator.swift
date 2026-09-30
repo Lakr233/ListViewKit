@@ -316,4 +316,8 @@ extension ListBouncyAnimator: ListRowAnimatorOwnedState {
     mutating func takeOwnedState() {
         board = Board()
     }
+
+    func forgetRow(mountID: Int) {
+        board.attachments[mountID] = nil
+    }
 }

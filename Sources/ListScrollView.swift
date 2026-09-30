@@ -702,8 +702,14 @@
         override open func viewDidMoveToWindow() {
             super.viewDidMoveToWindow()
             // A gesture's remaining events stay with the window it began in,
-            // so a view that left it never hears the gesture end.
+            // so a view that left it never hears the gesture end — nor the
+            // end of the native momentum it was ignoring.
+            let wasTracking = _isTracking
             _isTracking = false
+            _ignoresMomentumEvents = false
+            // Nothing else is left to bring back an overscroll the finger was
+            // holding when it lost the view.
+            if wasTracking { reconcileOffsetWithContentSize() }
         }
 
         override open func didAddSubview(_ subview: NSView) {

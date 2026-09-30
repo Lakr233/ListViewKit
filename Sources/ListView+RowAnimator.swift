@@ -270,6 +270,12 @@ extension ListView {
         withoutListAnimation { setRowPresentationOffset(0, on: row) }
     }
 
+    /// Lets the animator drop the state it keeps for a mount that has ended.
+    func forgetRowAnimation(of row: ListRowView) {
+        guard let animator = rowAnimator as? ListRowAnimatorOwnedState else { return }
+        animator.forgetRow(mountID: row.mountID)
+    }
+
     // MARK: - Frames
 
     /// Advances the animator by one frame and lands the result.

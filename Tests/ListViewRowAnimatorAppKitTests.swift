@@ -727,6 +727,31 @@ struct ListViewRowAnimatorAppKitTests {
         }
     }
 
+    /// Springs belong to mounts, and a list sitting still does not hoard the
+    /// ones whose mounts have ended.
+    ///
+    /// Pruning by time needs a clock, and only a running animation advances
+    /// it — but every layout pass offers its rows, so a list at rest that
+    /// keeps remounting them would otherwise grow the table without bound.
+    @Test
+    func remountingAtRestDoesNotAccumulateSprings() throws {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        drain(listView)
+
+        for _ in 0 ..< 20 {
+            listView.reloadData()
+            drain(listView)
+        }
+        for index in 0 ..< 20 {
+            listView.apply(listView.content.filter { $0.id != index })
+            drain(listView)
+        }
+
+        let animator = try #require(listView.rowAnimator as? ListBouncyAnimator)
+        #expect(animator.board.attachments.count <= listView.visibleRows.count)
+    }
+
     /// One animator value installed on two lists drives two independent sets
     /// of springs.
     ///
