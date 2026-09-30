@@ -33,7 +33,10 @@ Run an optimized build from the repository root:
 swift run -c release ListViewKitBenchmarks
 ```
 
-`LVK_ITEMS` and `LVK_BENCH` narrow a run while iterating on one path:
+`LVK_ITEMS` and `LVK_BENCH` narrow a run while iterating on one path.
+`LVK_BENCH` takes a comma-separated list of `query`, `offset`, `layout`,
+`update`, `append`, `reapply` and `reflow`, in the order of the columns above;
+an unknown key stops the run and lists the known ones.
 
 ```bash
 LVK_ITEMS=10000 LVK_BENCH=append,reflow swift run -c release ListViewKitBenchmarks

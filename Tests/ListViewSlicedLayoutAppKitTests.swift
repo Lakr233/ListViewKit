@@ -313,5 +313,63 @@ struct ListViewSlicedLayoutAppKitTests {
                 == heightBefore + context.adapter.baseHeight(for: 9_000)
         )
     }
+
+    /// The estimate only stands in for rows nobody has measured, so changing
+    /// it cannot make a measurement wrong. It used to discard every one,
+    /// re-measuring the viewport even when the value was assigned unchanged.
+    @Test
+    func changingTheEstimateKeepsMeasurements() {
+        let context = makeMeasuredListView()
+        let listView = context.listView
+        context.adapter.measurementCounts.removeAll()
+
+        listView.estimatedRowHeight = 44
+        listView.estimatedRowHeight = 90
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+
+        #expect(context.adapter.measurementCounts.isEmpty)
+        #expect(!listView.rowLayout.hasPendingRows)
+    }
+
+    /// Shrinking the last row pulls the offset back onto the new end, which
+    /// brings rows above the old viewport into view. Those have to be measured
+    /// before they are mounted, not placed at a stale height.
+    @Test
+    func rowsExposedByTheEndClampAreMeasuredBeforeTheyAreShown() {
+        let probe = ReflowProbe()
+        var rowHeight: CGFloat = 50
+        let listView = ListView<ReflowItem>(frame: CGRect(x: 0, y: 0, width: 400, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { item, _ in
+                    probe.measurementCounts[item.id, default: 0] += 1
+                    return item.revision == 1 ? 300 : rowHeight
+                }
+                .configure { _, _, _ in }
+        }
+        var items = (0 ..< 100).map { ReflowItem(id: $0) }
+        items[99].revision = 1
+        listView.apply(items)
+        for _ in 0 ..< 5 {
+            listView.setContentOffset(listView.maximumContentOffset, animated: false)
+            listView.needsLayout = true
+            listView.layoutSubtreeIfNeeded()
+        }
+        // Everything above the bottom row now has a stale height.
+        rowHeight = 60
+        for item in items.dropLast() {
+            listView.invalidateLayout(forRowWith: item.id)
+        }
+        probe.measurementCounts.removeAll()
+
+        items[99].revision = 0
+        listView.update(items[99])
+
+        #expect(listView.visibleRowViews.count > 2)
+        for index in listView.indicesForVisibleRows where index < 99 {
+            #expect(probe.measurementCounts[index] != nil, "row \(index) shown unmeasured")
+        }
+    }
 }
 #endif

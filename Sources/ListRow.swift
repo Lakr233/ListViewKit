@@ -26,6 +26,9 @@ public struct ListRowContext: Sendable {
     public let index: Int
     /// Width the row will be laid out at. Height calculations must use this
     /// rather than reading the list's bounds, which may already have moved on.
+    ///
+    /// A mounted row is resized, not reconfigured, when the width changes, so
+    /// layout inside a row belongs to its own `bounds`, not to this value.
     public let width: CGFloat
     public let purpose: ListRowPurpose
 }

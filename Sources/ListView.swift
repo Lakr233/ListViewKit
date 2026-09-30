@@ -141,9 +141,12 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// the content height together while the list scrolls. A value close to
     /// the typical row keeps the scroller proportion steady as measurement
     /// catches up.
-    public var estimatedRowHeight: CGFloat = 44 {
-        didSet { invalidateLayout() }
-    }
+    ///
+    /// Set it before applying content. A row takes its estimate when it
+    /// enters the layout and keeps it until measured, so changing this later
+    /// reaches only rows that enter the layout afterwards. It never discards
+    /// a measurement: an estimate cannot make a measured height wrong.
+    public var estimatedRowHeight: CGFloat = 44
 
     public var topInset: CGFloat = 0 {
         didSet { requestLayout() }
@@ -386,6 +389,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         refreshMountOverscan()
         measureViewport()
         contentSize = supposedContentSize
+        // Content that shrank pulls the offset back onto its new end, which
+        // brings rows into view the measurement above never saw. Each round
+        // measures every one of them, so this ends.
+        while rowLayout.hasPendingRows(intersecting: mountRect) {
+            measureViewport()
+            contentSize = supposedContentSize
+        }
 
         if contentOffset.y >= minimumContentOffset.y, contentOffset.y <= maximumContentOffset.y {
             recycleRowsOutsideViewport()

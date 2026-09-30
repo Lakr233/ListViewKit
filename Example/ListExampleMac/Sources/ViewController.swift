@@ -63,7 +63,7 @@ final class ViewController: NSViewController {
             "若故事没说完",
         ].randomElement()!
         var items = listView.content
-        let index = (0 ..< max(items.count, 1)).randomElement() ?? 0
+        let index = Int.random(in: 0 ... items.count)
         items.insert(ViewModel(text: content), at: index)
         listView.apply(items, animated: true)
         listView.scrollToRow(at: index, at: .nearest)
@@ -76,8 +76,8 @@ final class ViewController: NSViewController {
     /// Whether the streaming scroll asks the list before following the tail.
     ///
     /// Off is what an ungated host does, and is here to be compared against:
-    /// scroll the wheel while a response streams and the two fight for the
-    /// offset, a notch at a time.
+    /// it follows the tail on every token, so scroll the wheel while a
+    /// response streams and the two fight for the offset, a notch at a time.
     private var gatesAutoScroll = true
 
     @objc func toggleAutoScrollGate(_ sender: NSToolbarItem) {
@@ -107,10 +107,13 @@ final class ViewController: NSViewController {
             for character in text {
                 try? await Task.sleep(for: .milliseconds(5))
                 item.text.append(character)
+                // Asked before the update grows the row: afterwards the list
+                // is no longer at the bottom, whether or not it was.
+                let shouldFollow = listView.isScrolledToBottom(tolerance: 4)
                 listView.update(item)
                 // A reader who has scrolled away — or who just did, or who is
                 // resizing the window — is left where they are.
-                if gatesAutoScroll, listView.isUserInteractingWithScroll { continue }
+                if gatesAutoScroll, !shouldFollow || listView.isUserInteractingWithScroll { continue }
                 listView.scrollToBottom(animated: false)
             }
         }
