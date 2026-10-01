@@ -690,7 +690,11 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         return entry.view
     }
 
+    /// Runs twice in every layout pass, which on most frames of a scroll has
+    /// recycled nothing. The early return keeps those frames from building a
+    /// set of every mounted row only to find nothing to look up in it.
     private func removeUnusedRowsFromSuperview() {
+        guard !rowsPendingRemoval.isEmpty else { return }
         let pending = rowsPendingRemoval
         rowsPendingRemoval.removeAll(keepingCapacity: true)
         let reused = Set(visibleRows.values.map { ObjectIdentifier($0.view) })
