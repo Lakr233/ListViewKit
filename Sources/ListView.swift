@@ -219,8 +219,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// Replaces the content, animating the difference if asked.
     ///
     /// Only what actually changed is touched: rows that kept their value keep
-    /// their measured height, and appending to the end never revisits the rows
-    /// already there.
+    /// their measured height, wherever they moved to, and appending to the end
+    /// never revisits the rows already there. A registration whose height
+    /// reads the index says so with ``ListRow/heightDependsOnIndex()``, and its
+    /// rows are measured again whenever they move.
     public func apply(_ newItems: [Item], animated: Bool = false) {
         let difference = ListDifference(from: items, to: newItems, indexByID: indexByID)
         guard !difference.isEmpty else { return }
@@ -246,6 +248,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // this change: they travel in from there instead of appearing.
         let previousGeometry = animated ? rowLayout.geometry : nil
         let previousIndexByID = indexByID
+        let previousItems = items
         let previouslyMounted = Set(visibleRows.keys)
 
         let previousCount = items.count
@@ -257,13 +260,25 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         } else {
             rowLayout.reload()
         }
-        rowLayout.invalidateHeights(for: difference.removed + difference.remeasured)
+        rowLayout.invalidateHeights(for: difference.removed + difference.changed)
+        rowLayout.invalidateHeights(for: movedRowsMeasuredByIndex(difference.moved))
         // Settle the viewport before anything animates: rows placed at their
         // estimate would animate to the wrong height and snap once the real
         // one arrives.
         measureViewport()
 
-        for identifier in difference.remeasured {
+        for identifier in difference.changed {
+            reconfigureRow(with: identifier)
+        }
+        // A row that only moved was configured with the index it had before.
+        // Only the mounted ones show that index, so only they are filled in
+        // again; the rest pick up the new one when they are next mounted.
+        for identifier in Array(visibleRows.keys) {
+            guard let previousIndex = previousIndexByID[identifier],
+                  let index = indexByID[identifier],
+                  previousIndex != index,
+                  previousItems[previousIndex] == items[index]
+            else { continue }
             reconfigureRow(with: identifier)
         }
         prepareVisibleRows()
@@ -299,6 +314,22 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
                 // later animation if applies overlap, moving its rows early.
                 self.requestLayout()
             }
+        }
+    }
+
+    /// The moved items whose registration measures them by their index, and
+    /// so whose height went stale with the move.
+    ///
+    /// Matching an item to its registration runs the caller's predicates, so
+    /// a list where no registration asked for this skips the walk entirely:
+    /// a moved row there keeps its height whatever it is.
+    private func movedRowsMeasuredByIndex(_ moved: [Item.ID]) -> [Item.ID] {
+        guard registrations.contains(where: \.heightDependsOnIndex) else { return [] }
+        return moved.filter { identifier in
+            guard let index = indexByID[identifier],
+                  let registrationIndex = registrationIndex(for: items[index])
+            else { return false }
+            return registrations[registrationIndex].heightDependsOnIndex
         }
     }
 

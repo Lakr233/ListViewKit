@@ -25,6 +25,9 @@ final class ViewController: NSViewController {
                 .height { item, context in
                     SimpleRow.height(for: Self.text(for: item, index: context.index), width: context.width)
                 }
+                // The text leads with the index, so a row that moves can wrap
+                // differently and has to be measured again.
+                .heightDependsOnIndex()
                 .configure { row, item, context in
                     row.configure(with: Self.text(for: item, index: context.index))
                     row.layer?.backgroundColor = context.index.isMultiple(of: 2)

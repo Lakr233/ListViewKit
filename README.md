@@ -87,7 +87,10 @@ per call however little changed. For a chat client adding one message, use
 leave every other row untouched.
 
 Items need unique, stable identifiers. Changing an item's hashable value is
-what marks its row for refilling and re-measuring.
+what marks its row for refilling and re-measuring. An item that only moves
+keeps its measured height, so loading a page of history above twenty thousand
+rows measures the new page and nothing else. A mounted row that moves is still
+configured again, because `context.index` has changed.
 
 ### Animations
 
@@ -143,6 +146,19 @@ final class TextRow: ListRowView {
 
 It is called before every configuration, including the first, so it must be
 idempotent.
+
+A height derived from `context.index` — a numbered row, say — has to be
+declared, or the row keeps the height it was measured at when it moves:
+
+```swift
+ListRow(NumberedRow.self)
+    .height { item, context in
+        NumberedRow.height(for: "\(context.index). \(item.text)", width: context.width)
+    }
+    .heightDependsOnIndex()
+```
+
+The same goes for a self-sizing row whose constraints depend on the index.
 
 ### Auto Layout
 

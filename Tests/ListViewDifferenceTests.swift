@@ -32,10 +32,39 @@ struct ListViewDifferenceTests {
 
         #expect(result.removed == [2])
         #expect(result.added == [5])
-        // A move and a value change are the same event: both need the row
-        // filled in and measured again.
-        #expect(result.remeasured == [4, 3])
+        // Only a new value needs measuring again. A row that only moved still
+        // has the height it was measured at.
+        #expect(result.changed == [3])
+        #expect(result.moved == [4])
         #expect(result.indexByID == [1: 0, 4: 1, 3: 2, 5: 3])
+    }
+
+    /// An item that both moved and changed value is a change: its height has
+    /// to be measured again whatever its registration says about the index.
+    @Test
+    func aMoveWithANewValueIsAChange() {
+        let result = difference([1, 2, 3], [
+            DiffItem(id: 3, revision: 1),
+            DiffItem(id: 1),
+            DiffItem(id: 2),
+        ])
+
+        #expect(result.changed == [3])
+        #expect(result.moved == [1, 2])
+    }
+
+    /// Prepending a page of history moves every row already there, and none
+    /// of them changed.
+    @Test
+    func aPrependOnlyMovesTheRowsAlreadyThere() {
+        let result = difference(Array(0 ..< 100), (100 ..< 105).map { DiffItem(id: $0) }
+            + (0 ..< 100).map { DiffItem(id: $0) })
+
+        #expect(result.added == Array(100 ..< 105))
+        #expect(result.changed.isEmpty)
+        #expect(result.moved == Array(0 ..< 100))
+        #expect(!result.isEmpty)
+        #expect(!result.isTailAppend(previousCount: 100))
     }
 
     @Test
@@ -62,6 +91,9 @@ struct ListViewDifferenceTests {
 
         let appendedAndRemoved = difference([1, 2], [DiffItem(id: 1), DiffItem(id: 3)])
         #expect(!appendedAndRemoved.isTailAppend(previousCount: 2))
+
+        let appendedAndMoved = difference([1, 2], [2, 1, 3].map { DiffItem(id: $0) })
+        #expect(!appendedAndMoved.isTailAppend(previousCount: 2))
 
         let unchanged = difference([1, 2], [1, 2].map { DiffItem(id: $0) })
         #expect(!unchanged.isTailAppend(previousCount: 2))

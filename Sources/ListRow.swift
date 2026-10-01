@@ -85,6 +85,20 @@ public struct ListRow<Item: Identifiable & Hashable & SendableMetatype, RowView:
         map { $0.estimatedHeight = height }
     }
 
+    /// Declares that this row's height reads `context.index`, so a row that
+    /// only moved has to be measured again.
+    ///
+    /// Without it, an item that keeps its value keeps its measured height
+    /// wherever it moves to. That is what lets a page of history go in above
+    /// twenty thousand rows without measuring them all again. A mounted row
+    /// that moves is still configured again, with its new index, either way;
+    /// this is only about the height. Self-sizing rows follow the same rule:
+    /// declare it when something the configuration derives from the index
+    /// changes the row's constraints.
+    public func heightDependsOnIndex() -> Self {
+        map { $0.heightDependsOnIndex = true }
+    }
+
     public func configure(
         _ configure: @escaping @MainActor (RowView, Item, ListRowContext) -> Void
     ) -> Self {
@@ -117,6 +131,7 @@ public struct ListRowRegistration<Item: Identifiable & Hashable & SendableMetaty
     var makeRow: @MainActor () -> ListRowView
     var height: (@MainActor (Item, ListRowContext) -> CGFloat)?
     var estimatedHeight: CGFloat?
+    var heightDependsOnIndex = false
     var configure: @MainActor (ListRowView, Item, ListRowContext) -> Void
 }
 
