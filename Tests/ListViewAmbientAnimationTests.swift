@@ -37,17 +37,21 @@ private final class HeightBox {
 }
 
 /// A row that positions a subview from the item it was given, so a reused one
-/// has its contents in the wrong place until its first layout.
+/// has its contents in the wrong place until its first layout, and one that
+/// fills its bounds, so a resized one does too.
 @MainActor
 private final class AmbientRow: ListRowView {
     let marker = PlatformView(frame: .zero)
+    let fill = PlatformView(frame: .zero)
     var markerOffset: CGFloat = 0
 
     override init(frame: CGRect) {
         super.init(frame: frame)
         #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             marker.wantsLayer = true
+            fill.wantsLayer = true
         #endif
+        addSubview(fill)
         addSubview(marker)
     }
 
@@ -55,13 +59,24 @@ private final class AmbientRow: ListRowView {
         override func layoutSubviews() {
             super.layoutSubviews()
             marker.frame = CGRect(x: markerOffset, y: 0, width: 10, height: 10)
+            fill.frame = bounds
         }
     #elseif canImport(AppKit)
         override func layout() {
             super.layout()
             marker.frame = CGRect(x: markerOffset, y: 0, width: 10, height: 10)
+            fill.frame = bounds
         }
     #endif
+
+    /// Set from the item, so a reused row changes it.
+    func setMarkerOpacity(_ opacity: CGFloat) {
+        #if canImport(UIKit)
+            marker.alpha = opacity
+        #else
+            marker.alphaValue = opacity
+        #endif
+    }
 }
 
 @Suite(.serialized)
@@ -84,6 +99,7 @@ struct ListViewAmbientAnimationTests {
                 .height { item, _ in heights.values[item.id] ?? Self.rowHeight }
                 .configure { row, item, _ in
                     row.markerOffset = CGFloat(item.id % 7) * 10
+                    row.setMarkerOpacity(item.id.isMultiple(of: 2) ? 1 : 0.5)
                 }
         }
         listView.apply((0 ..< count).map { AmbientItem(id: $0) })
@@ -225,14 +241,21 @@ struct ListViewAmbientAnimationTests {
         let slid = try #require(listView.rowView(for: 0))
         #expect(!animationKeys(of: slid).isEmpty)
 
-        // Recycle it without waiting for the slide, then bring the view back
-        // under a different item.
+        // Removing the item mid-slide pools the view with its slide still on
+        // it; scrolling then brings the view back under a different item.
+        // Scrolling alone no longer gets it there, since a sliding row stays
+        // mounted until its slide ends.
+        listView.apply(reordered.filter { $0.id != 0 })
         listView.contentOffset.y = 2000
         requestLayout(listView)
-        listView.contentOffset.y = 2400
-        requestLayout(listView)
 
-        for view in listView.visibleRowViews {
+        // The rows the reorder is still sliding are held where they were, and
+        // their slides are theirs to finish. Only the rows now in view count.
+        let shown = listView.indicesForVisibleRows.compactMap { index in
+            listView.rowView(for: listView.content[index].id)
+        }
+        #expect(shown.contains { $0 === slid })
+        for view in shown {
             #expect(animationKeys(of: view).isEmpty)
         }
     }
@@ -259,6 +282,72 @@ struct ListViewAmbientAnimationTests {
 
         let entering = try #require(listView.rowView(for: 10) as? AmbientRow)
         #expect(animationKeys(of: entering.marker).isEmpty)
+    }
+
+    // MARK: - The keyboard case
+
+    /// The keyboard shrinks the list inside its own animation, and the pass
+    /// only sees the final, shorter viewport. The rows below it are still on
+    /// screen until the animation has carried the list's edge past them.
+    @Test
+    func aRowTheKeyboardIsStillCoveringStaysMounted() throws {
+        let listView = makeListView(count: 40, size: CGSize(width: 200, height: 600))
+        let bottom = try #require(listView.rowView(for: 5))
+
+        inAnAmbientAnimation {
+            listView.frame = CGRect(x: 0, y: 0, width: 200, height: 300)
+            requestLayout(listView)
+        }
+        // Still shown, and still showing the same item: a held row is not in
+        // the pool for another item to take.
+        #expect(listView.rowView(for: 5) === bottom)
+        #expect(bottom.superview === listView)
+
+        listView.contentOffset.y = 100
+        requestLayout(listView)
+        #expect(listView.rowView(for: 5) === bottom)
+
+        RunLoop.main.run(until: Date().addingTimeInterval(0.4))
+        requestLayout(listView)
+        #expect(listView.rowView(for: 5) == nil)
+        #expect(listView.heldRows.isEmpty)
+    }
+
+    /// A row resized inside a host's animation snaps to its new frame, so its
+    /// contents have to follow it the same way rather than on the host's curve.
+    @Test
+    func aResizedRowLaysOutItsContentsWithoutAnimating() throws {
+        let heights = HeightBox()
+        let listView = makeListView(count: 40, heights: heights)
+        let row = try #require(listView.rowView(for: 0) as? AmbientRow)
+
+        heights.values[0] = 40
+        listView.invalidateLayout(forRowWith: 0)
+        inAnAmbientAnimation {
+            requestLayout(listView)
+        }
+
+        #expect(row.fill.frame.height == 40)
+        #expect(animationKeys(of: row.fill).isEmpty)
+    }
+
+    /// A pooled row still shows the item it had. Filling it in inside a host's
+    /// animation must not carry the old item's values over on that curve.
+    @Test
+    func aReusedRowIsFilledInWithoutAnimating() throws {
+        let listView = makeListView()
+
+        listView.contentOffset.y = 2000
+        requestLayout(listView)
+        listView.contentOffset.y = 1000
+        inAnAmbientAnimation {
+            requestLayout(listView)
+        }
+
+        for view in listView.visibleRowViews {
+            let row = try #require(view as? AmbientRow)
+            #expect(!animationKeys(of: row.marker).contains("opacity"))
+        }
     }
 
     // MARK: - The layout pass at large

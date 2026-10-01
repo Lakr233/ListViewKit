@@ -53,6 +53,19 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     private var rowsPendingRemoval: [ListRowView] = []
     /// Rows placed this pass, still holding the previous item's arrangement.
     private var rowsPendingSettle: [ListRowView] = []
+    /// Rows kept mounted while an animation may still be showing them, with
+    /// the time it ends.
+    ///
+    /// Recycling reads where the layout says a row is, but while something
+    /// animates the reader sees where it is on the way there: a row sliding
+    /// off after an apply, or one the keyboard's resize is still uncovering.
+    /// Recycling such a row blanks part of the screen, and the pool can hand
+    /// the very view straight to another item while it is still on display.
+    /// Only rows already on screen are held. The pool keeps working, since
+    /// what is in it is off screen already.
+    var heldRows: [Item.ID: CFTimeInterval] = [:]
+    /// Releases the held rows once their animations have ended.
+    private var heldRowRelease: Timer?
 
     /// Displaces rows on top of the layout while the list scrolls.
     ///
@@ -225,6 +238,12 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             recycleRow(with: identifier)?.removeFromSuperview()
         }
 
+        // Where everything was, for rows that only come on screen because of
+        // this change: they travel in from there instead of appearing.
+        let previousGeometry = animated ? rowLayout.geometry : nil
+        let previousIndexByID = indexByID
+        let previouslyMounted = Set(visibleRows.keys)
+
         let previousCount = items.count
         items = newItems
         indexByID = difference.indexByID
@@ -245,7 +264,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         }
         prepareVisibleRows()
 
-        guard animated else {
+        guard animated, let previousGeometry else {
             requestLayout()
             layoutNow()
             return
@@ -253,6 +272,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         for identifier in difference.added {
             setAlpha(0, onRowWith: identifier, animated: false)
         }
+        for (identifier, entry) in visibleRows where !previouslyMounted.contains(identifier) {
+            guard let previousIndex = previousIndexByID[identifier],
+                  let previousFrame = previousGeometry.frame(for: previousIndex)
+            else { continue }
+            setRowFrame(entryFrame(from: previousFrame, of: entry.view), on: entry.view, animated: false)
+        }
+        holdMountedRows(for: listRowSlideDuration)
         // The rows are about to travel to their new frames. If the shorter
         // content pulls the offset off an edge, the viewport has to travel
         // with them instead of cutting to the destination.
@@ -270,6 +296,27 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
                 self.requestLayout()
             }
         }
+    }
+
+    /// Where a row that only came on screen because of an apply starts its
+    /// slide: where it was before, but no further out than just past the edge
+    /// of the mounted area.
+    ///
+    /// Its old position can be thousands of points away, and a row covering
+    /// that in one slide crosses the screen too fast to follow. Starting it at
+    /// the edge it was beyond keeps the direction of the move and the pace of
+    /// its neighbours. It keeps its new size, so only its position moves.
+    private func entryFrame(from previousFrame: CGRect, of view: ListRowView) -> CGRect {
+        let target = view.placedFrame
+        let edge = mountRect
+        let y = if previousFrame.maxY <= edge.minY {
+            max(previousFrame.minY, edge.minY - target.height)
+        } else if previousFrame.minY >= edge.maxY {
+            min(previousFrame.minY, edge.maxY)
+        } else {
+            previousFrame.minY
+        }
+        return CGRect(x: target.minX, y: y, width: target.width, height: target.height)
     }
 
     /// Adds items to the end without diffing.
@@ -322,6 +369,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             entry.view.removeFromSuperview()
         }
         visibleRows.removeAll()
+        heldRows.removeAll()
         rowsPendingRemoval.removeAll()
         rowsPendingSettle.removeAll()
         for index in reusePools.indices {
@@ -399,6 +447,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             contentSize = supposedContentSize
         }
 
+        // A pass inside a host's animation — the keyboard resizing the list,
+        // say — moves the viewport on screen over the length of that
+        // animation, while this pass only sees where it ends up.
+        holdMountedRows(for: ambientAnimationDuration)
         if contentOffset.y >= minimumContentOffset.y, contentOffset.y <= maximumContentOffset.y {
             recycleRowsOutsideViewport()
         }
@@ -508,6 +560,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         setRowFrame(targetFrame, on: rowView, animated: animated)
         guard sizeChanged else { return }
         rowView.requestLayout()
+        // The frame was set without animating, so the contents follow it the
+        // same way. Left to the framework, the row lays out as the pass
+        // descends into it — inside whatever animation the host has open —
+        // and its contents would slide to a size the row already snapped to.
+        if !animated {
+            rowsPendingSettle.append(rowView)
+        }
     }
 
     func requestLayout() {
@@ -597,12 +656,18 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         setRowFrame(rectForRow(at: index), on: view, animated: false)
         view.beginMount()
         rowsPendingSettle.append(view)
-        view.prepareForReuse()
-        registrations[registrationIndex].configure(
-            view,
-            item,
-            context(at: index, purpose: .display)
-        )
+        // Filled in without animating. A pooled row still shows the previous
+        // item, and whatever the configuration changes would otherwise travel
+        // from that item's values on the curve of any animation the host has
+        // open around the pass.
+        withoutListAnimation {
+            view.prepareForReuse()
+            registrations[registrationIndex].configure(
+                view,
+                item,
+                context(at: index, purpose: .display)
+            )
+        }
         view.requestLayout()
         visibleRows[item.id] = (view, registrationIndex)
         if view.superview !== self {
@@ -645,10 +710,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// the first time either side is widened.
     private func recycleRowsOutsideViewport() {
         let visibleRect = mountRect
+        let now = CACurrentMediaTime()
+        heldRows = heldRows.filter { $0.value > now }
         let stale = visibleRows.compactMap { identifier, _ -> Item.ID? in
             guard let index = indexByID[identifier],
                   let frame = rowLayout.frame(for: index)
             else { return identifier }
+            if heldRows[identifier] != nil { return nil }
             return frame.intersects(visibleRect) ? nil : identifier
         }
         for identifier in stale {
@@ -656,9 +724,36 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         }
     }
 
+    /// Keeps every row on screen mounted for `duration`, then lays out once
+    /// so the ones the layout has moved away are recycled.
+    func holdMountedRows(for duration: TimeInterval) {
+        guard duration > 0 else { return }
+        let releaseTime = CACurrentMediaTime() + duration
+        for identifier in visibleRows.keys {
+            heldRows[identifier] = max(heldRows[identifier] ?? 0, releaseTime)
+        }
+        // A timer rather than a dispatch: it fires from a nested run loop too,
+        // and one rescheduled later covers everything an earlier one would.
+        heldRowRelease?.invalidate()
+        let latest = heldRows.values.max() ?? releaseTime
+        heldRowRelease = Timer.scheduledTimer(
+            withTimeInterval: max(0, latest - CACurrentMediaTime()),
+            repeats: false
+        ) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.heldRowRelease = nil
+                self?.requestLayout()
+            }
+        }
+        if let heldRowRelease {
+            RunLoop.main.add(heldRowRelease, forMode: .common)
+        }
+    }
+
     @discardableResult
     func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
+        heldRows[identifier] = nil
         // Whatever the animator was showing belonged to the item leaving, so
         // it does not travel to the next one on the same view, and neither
         // does the spring it was showing it with.

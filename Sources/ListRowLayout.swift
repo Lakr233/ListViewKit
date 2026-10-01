@@ -49,13 +49,29 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     var pendingRowCount: Int { engine.pendingCount }
 
     func frame(for index: Int) -> CGRect? {
-        guard index >= 0, index < engine.count else { return nil }
-        return CGRect(
-            x: 0,
-            y: engine.offset(at: index),
-            width: contentWidth,
-            height: engine.height(at: index)
-        )
+        geometry.frame(for: index)
+    }
+
+    /// The row frames as they stand now, kept readable after the layout
+    /// changes. Free to take: the engine is a value, and the next structural
+    /// change replaces its storage rather than editing it.
+    var geometry: Geometry {
+        Geometry(engine: engine, width: contentWidth)
+    }
+
+    struct Geometry {
+        fileprivate let engine: ListLayoutEngine
+        fileprivate let width: CGFloat
+
+        func frame(for index: Int) -> CGRect? {
+            guard index >= 0, index < engine.count else { return nil }
+            return CGRect(
+                x: 0,
+                y: engine.offset(at: index),
+                width: width,
+                height: engine.height(at: index)
+            )
+        }
     }
 
     func hasPendingRows(intersecting rect: CGRect) -> Bool {

@@ -21,6 +21,16 @@ let listAnimationDuration: TimeInterval = 0.5
 #if canImport(UIKit)
     import UIKit
 
+    /// How long a row the list moves takes to arrive.
+    let listRowSlideDuration = listAnimationDuration
+
+    /// How long the animation a host has open around the current call has
+    /// left to run, or 0 outside one.
+    @MainActor
+    var ambientAnimationDuration: TimeInterval {
+        UIView.inheritedAnimationDuration
+    }
+
     @MainActor
     func withListAnimation(_ animation: @escaping () -> Void, completion: (@Sendable (Bool) -> Void)? = nil) {
         UIView.animate(
@@ -121,6 +131,33 @@ let listAnimationDuration: TimeInterval = 0.5
 
 #elseif canImport(AppKit)
     import AppKit
+
+    /// The spring a row slides on. What `init(perceptualDuration:bounce:)`
+    /// builds for a bounce of 0, spelt out because that initializer needs
+    /// macOS 14: a unit mass, stiffness (2π / duration)², and the critical
+    /// damping 2√stiffness.
+    private func makeRowSlide() -> CASpringAnimation {
+        let slide = CASpringAnimation(keyPath: "position")
+        let angularFrequency = 2 * Double.pi / listAnimationDuration
+        slide.mass = 1
+        slide.stiffness = angularFrequency * angularFrequency
+        slide.damping = 2 * angularFrequency
+        slide.duration = slide.settlingDuration
+        return slide
+    }
+
+    /// How long a row the list moves takes to arrive: the spring's settling
+    /// time, which outlasts ``listAnimationDuration``.
+    let listRowSlideDuration = makeRowSlide().duration
+
+    /// How long the animation a host has open around the current call has
+    /// left to run, or 0 outside one. Only an implicit context moves a view
+    /// whose frame the list sets directly.
+    @MainActor
+    var ambientAnimationDuration: TimeInterval {
+        let context = NSAnimationContext.current
+        return context.allowsImplicitAnimation ? context.duration : 0
+    }
 
     @MainActor
     func withListAnimation(_ animation: @escaping () -> Void, completion: (@Sendable (Bool) -> Void)? = nil) {
@@ -248,18 +285,10 @@ let listAnimationDuration: TimeInterval = 0.5
             y: previousPosition.y - layer.position.y
         )
         guard offset != .zero else { return }
-        // What `init(perceptualDuration:bounce:)` builds for a bounce of 0,
-        // spelt out because that initializer needs macOS 14: a unit mass,
-        // stiffness (2π / duration)², and the critical damping 2√stiffness.
-        let slide = CASpringAnimation(keyPath: "position")
-        let angularFrequency = 2 * Double.pi / listAnimationDuration
-        slide.mass = 1
-        slide.stiffness = angularFrequency * angularFrequency
-        slide.damping = 2 * angularFrequency
+        let slide = makeRowSlide()
         slide.fromValue = offset
         slide.toValue = CGPoint.zero
         slide.isAdditive = true
-        slide.duration = slide.settlingDuration
         slideSequence &+= 1
         layer.add(slide, forKey: "listRowSlide\(slideSequence)")
     }
