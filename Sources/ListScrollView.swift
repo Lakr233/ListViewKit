@@ -3,18 +3,24 @@
 //  Copyright (c) 2025 ktiays. All rights reserved.
 //
 
+import DisplayLink
+
 #if canImport(UIKit)
     import UIKit
 
     open class ListScrollView: UIScrollView {
-        var scrollingDisplayLink: CADisplayLink?
+        /// Bound to this view, so it ticks with the display showing it and
+        /// holds the view weakly. `CADisplayLink(target:)` did neither: it
+        /// ticked with the main screen wherever the list was, and kept the
+        /// list alive until the scroll it was running had landed.
+        var scrollingDisplayLink: DisplayLink?
         static let defaultScrollingAngularFrequency: Double = 10
         var scrollingContext = SoftSpring2D(
             angularFrequency: defaultScrollingAngularFrequency,
             dampingRatio: 1,
             threshold: 0.05
         )
-        var scrollingTik: CFTimeInterval = .init()
+        private var scrollingClock = DisplayLinkClock()
         private var scrollingTarget: CGPoint?
 
         var scrollLedger = ScrollLedger()
@@ -186,12 +192,10 @@
             scrollingTarget = target
 
             guard scrollingDisplayLink == nil else { return }
-            scrollingDisplayLink = CADisplayLink(target: self, selector: #selector(handleScrollingAnimation(_:)))
-            // Minimum 60, not 80: a 60 Hz display cannot satisfy an 80 floor,
-            // and the range should always contain a rate the hardware has.
-            scrollingDisplayLink?.preferredFrameRateRange = .init(minimum: 60, maximum: 120, preferred: 120)
-            scrollingTik = CACurrentMediaTime()
-            scrollingDisplayLink?.add(to: .main, forMode: .common)
+            let link = DisplayLink(context: .view(self), preferredFrameRateRange: .list)
+            link.delegate = self
+            scrollingDisplayLink = link
+            scrollingClock = DisplayLinkClock()
         }
 
         public func cancelCurrentScrolling() {
@@ -202,7 +206,6 @@
             )
             scrollingTarget = nil
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
-            scrollingDisplayLink?.invalidate()
             scrollingDisplayLink = nil
         }
 
@@ -231,14 +234,14 @@
             }
         }
 
-        @objc func handleScrollingAnimation(_: CADisplayLink) {
+        func handleScrollingAnimation(_ frame: DisplayLinkFrame) {
             if isTracking || scrollingContext.completed {
                 cancelCurrentScrolling()
                 return
             }
-            let time = CACurrentMediaTime()
-            let delta = min(1 / 30, time - scrollingTik)
-            scrollingTik = time
+            // Timestamps rather than `frame.duration`, which UIKit quotes at
+            // the display's fastest rate however fast the link really runs.
+            let delta = min(1 / 30, scrollingClock.elapsed(at: frame))
             scrollingContext.update(withDeltaTime: delta)
             let loc = nearestScrollLocationInBounds(offset: .init(
                 x: scrollingContext.x.value,
@@ -300,11 +303,28 @@
         /// Where a subclass lays out its content. Mirrors the AppKit hook so
         /// `ListView` needs no platform split.
         func layoutContent() {}
+
+        override open func didMoveToWindow() {
+            super.didMoveToWindow()
+            landScrollingOutsideTheDisplayLink()
+            windowDidChange()
+        }
+
+        /// Lands a programmatic scroll the display link can no longer be
+        /// trusted to finish. See the AppKit twin.
+        private func landScrollingOutsideTheDisplayLink() {
+            guard let target = scrollingTarget else { return }
+            cancelCurrentScrolling()
+            applyContentOffsetWithoutTravel(target)
+        }
+
+        /// Where a subclass hears about the view changing windows, after the
+        /// scroll view has landed whatever its link was animating.
+        func windowDidChange() {}
     }
 
 #elseif canImport(AppKit)
     import AppKit
-    import DisplayLink
 
     enum AppKitScrollPhysics {
         // AppKit exports distinct hyperbolic coefficients for trackpads and
@@ -475,7 +495,6 @@
             dampingRatio: 1,
             threshold: 0.05
         )
-        var scrollingTik: CFTimeInterval = .init()
         private var scrollingTarget: CGPoint?
 
         var scrollLedger = ScrollLedger()
@@ -710,7 +729,36 @@
             // Nothing else is left to bring back an overscroll the finger was
             // holding when it lost the view.
             if wasTracking { reconcileOffsetWithContentSize() }
+            landScrollingOutsideTheDisplayLink()
+            windowDidChange()
         }
+
+        /// Lands whatever the display link was animating, now rather than on
+        /// frames that may never come.
+        ///
+        /// The link is bound to this view and ticks only while it is in a
+        /// window. A scroll the view carried out of one would stay frozen
+        /// mid-flight with nothing left to finish it — and momentum frozen
+        /// that way keeps the offset reported as the user's, which holds off
+        /// clamping and keeps the slice drain polling for as long as the view
+        /// is out. A scroll asked for before the view had a window is the
+        /// same case seen from the other side: played on arrival, it would
+        /// slide a list the reader is only now seeing for the first time.
+        ///
+        /// A spring or a rebound lands on its target; momentum has none, and
+        /// stops where it is.
+        private func landScrollingOutsideTheDisplayLink() {
+            if let target = scrollingTarget {
+                cancelCurrentScrolling()
+                applyContentOffsetWithoutTravel(target)
+            } else if _momentumAnimation != nil {
+                cancelCurrentScrolling()
+            }
+        }
+
+        /// Where a subclass hears about the view changing windows, after the
+        /// scroll view has landed whatever its link was animating.
+        func windowDidChange() {}
 
         override open func didAddSubview(_ subview: NSView) {
             super.didAddSubview(subview)
@@ -1100,10 +1148,9 @@
             scrollingTarget = target
 
             guard scrollingDisplayLink == nil else { return }
-            let link = DisplayLink(context: .view(self))
+            let link = DisplayLink(context: .view(self), preferredFrameRateRange: .list)
             link.delegate = self
             scrollingDisplayLink = link
-            scrollingTik = CACurrentMediaTime()
         }
 
         @discardableResult
@@ -1123,10 +1170,9 @@
             scrollingTarget = nil
 
             guard scrollingDisplayLink == nil else { return true }
-            let link = DisplayLink(context: .view(self))
+            let link = DisplayLink(context: .view(self), preferredFrameRateRange: .list)
             link.delegate = self
             scrollingDisplayLink = link
-            scrollingTik = CACurrentMediaTime()
             return true
         }
 
@@ -1170,10 +1216,9 @@
             scrollingTarget = target
 
             guard scrollingDisplayLink == nil else { return }
-            let link = DisplayLink(context: .view(self))
+            let link = DisplayLink(context: .view(self), preferredFrameRateRange: .list)
             link.delegate = self
             scrollingDisplayLink = link
-            scrollingTik = CACurrentMediaTime()
         }
 
         public func cancelCurrentScrolling() {
@@ -1362,15 +1407,15 @@
         }
     }
 
-    extension ListScrollView: @MainActor DisplayLinkDelegate {
-        public func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
-            handleScrollingAnimation(frame)
-        }
-    }
-
 #else
     #error("ListViewKit requires UIKit or AppKit")
 #endif
+
+extension ListScrollView: @MainActor DisplayLinkDelegate {
+    public func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
+        handleScrollingAnimation(frame)
+    }
+}
 
 extension ListScrollView {
     /// How long auto scroll stays off after the event that suppressed it.

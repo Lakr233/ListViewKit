@@ -22,15 +22,19 @@ import DisplayLink
 @MainActor
 final class RowAnimatorDisplayLink {
     private let link: DisplayLink
-    private var lastTimestamp: TimeInterval?
+    private var clock = DisplayLinkClock()
     private let onTick: (TimeInterval) -> Void
 
     /// `onTick` is handed the time since the previous frame, not the frame
     /// the display nominally runs at.
     init(context: DisplayLinkContext, onTick: @escaping (TimeInterval) -> Void) {
-        link = DisplayLink(context: context)
+        link = DisplayLink(context: context, preferredFrameRateRange: .list)
         self.onTick = onTick
         link.delegate = self
+    }
+
+    var preferredFrameRateRange: DisplayLinkFrameRateRange {
+        link.preferredFrameRateRange
     }
 
     /// Delivers a frame as if the link had fired, so a test can choose the
@@ -38,29 +42,11 @@ final class RowAnimatorDisplayLink {
     func deliver(_ frame: DisplayLinkFrame) {
         displayLink(link, didUpdate: frame)
     }
-
-    /// How much time this frame covers.
-    ///
-    /// `duration` is the display's nominal period, not the time that passed:
-    /// on UIKit it is quoted at the fastest rate the display has, so a link
-    /// the system runs slower, or a frame the main thread missed, would
-    /// advance the spring by less than elapsed and slow it down in wall time.
-    /// The gap between timestamps is what actually passed. The nominal period
-    /// stands in only for the first frame, which has nothing to measure from,
-    /// and for a timestamp that did not move forward.
-    private func elapsed(at frame: DisplayLinkFrame) -> TimeInterval {
-        defer { lastTimestamp = frame.timestamp }
-        if let lastTimestamp {
-            let gap = frame.timestamp - lastTimestamp
-            if gap.isFinite, gap > 0 { return gap }
-        }
-        return frame.duration.isFinite ? max(0, frame.duration) : 0
-    }
 }
 
 extension RowAnimatorDisplayLink: DisplayLinkDelegate {
     func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
-        onTick(elapsed(at: frame))
+        onTick(clock.elapsed(at: frame))
     }
 }
 

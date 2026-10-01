@@ -804,5 +804,86 @@ struct ListScrollViewAppKitTests {
         }
         #expect(scrollView.contentOffset.y == 0)
     }
+
+    // MARK: - A link bound to the view
+
+    private func makeWindow() -> NSWindow {
+        NSWindow(
+            contentRect: CGRect(x: 0, y: 0, width: 200, height: 200),
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: true
+        )
+    }
+
+    /// The scrolling link ticks only while the view is in a window. A scroll
+    /// asked for before then lands as the view arrives, rather than sliding a
+    /// list the reader is only now seeing.
+    @Test
+    func aScrollAskedForOutsideAWindowLandsAsTheViewEntersOne() {
+        let window = makeWindow()
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+
+        window.contentView?.addSubview(scrollView)
+
+        #expect(scrollView.contentOffset.y == 800)
+        #expect(scrollView.scrollingDisplayLink == nil)
+    }
+
+    /// A scroll the view carries out of its window would wait for frames that
+    /// never come, frozen halfway.
+    @Test
+    func leavingTheWindowMidScrollLandsTheScroll() throws {
+        let window = makeWindow()
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        window.contentView?.addSubview(scrollView)
+        scrollView.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+        for _ in 0 ..< 4 {
+            tick(scrollView)
+        }
+        try #require(scrollView.contentOffset.y > 0 && scrollView.contentOffset.y < 800)
+
+        scrollView.removeFromSuperview()
+
+        #expect(scrollView.contentOffset.y == 800)
+        #expect(scrollView.scrollingDisplayLink == nil)
+    }
+
+    /// Momentum frozen out of a window would go on reporting the offset as the
+    /// user's, holding off every clamp and keeping the slice drain polling.
+    @Test
+    func leavingTheWindowMidMomentumHandsTheOffsetBack() throws {
+        let window = makeWindow()
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.contentOffset = CGPoint(x: 0, y: 500)
+        window.contentView?.addSubview(scrollView)
+
+        let start: CGEventTimestamp = 1_000_000_000
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 1, phase: .began, timestamp: start))
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 1, phase: .changed, timestamp: start + 10_000_000))
+        scrollView.scrollWheel(with: try makeWheelEvent(deltaY: 0, phase: .ended, timestamp: start + 11_000_000))
+        try #require(scrollView.isScrollOffsetOwnedByUser)
+        let offset = scrollView.contentOffset
+
+        scrollView.removeFromSuperview()
+
+        #expect(!scrollView.isScrollOffsetOwnedByUser)
+        #expect(scrollView.scrollingDisplayLink == nil)
+        #expect(scrollView.contentOffset == offset)
+    }
+
+    @Test
+    func theScrollingLinkAsksForTheListRate() {
+        let scrollView = ListScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 800), preserveVelocity: false)
+
+        #expect(scrollView.scrollingDisplayLink?.preferredFrameRateRange == .list)
+        scrollView.cancelCurrentScrolling()
+    }
 }
 #endif

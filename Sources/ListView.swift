@@ -424,6 +424,20 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         applyRowAnimator()
     }
 
+    /// Returns the rows to rest whenever the list changes windows.
+    ///
+    /// The animator's link ticks only while the list is in a window. Leaving
+    /// one mid-spring would hold the rows displaced, with a link waiting for
+    /// a frame that will not come. Entering one is no better: a layout pass
+    /// outside a window can still displace rows, and the link it would need
+    /// to settle them is never started there. Nobody saw either motion, so
+    /// neither is worth finishing.
+    override func windowDidChange() {
+        super.windowDidChange()
+        guard rowAnimator != nil else { return }
+        resetRowAnimator()
+    }
+
     /// Lays out the rows placed during this pass, with animation suppressed.
     ///
     /// A row out of the pool still has its contents arranged for the item it

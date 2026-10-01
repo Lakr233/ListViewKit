@@ -555,6 +555,69 @@ struct ListViewRowAnimatorAppKitTests {
         #expect(listView.rowAnimatorLink == nil)
     }
 
+    /// And puts the rows back at once. The link is quiet outside a window, so
+    /// the frame that would have settled them does not come, and no layout
+    /// pass is owed to notice.
+    @Test
+    func leavingTheWindowReturnsTheRowsToRest() {
+        let listView = makeListView()
+        let window = windowed(listView)
+
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
+        scroll(listView, by: 300)
+        listView.tickRowAnimator(duration: Self.frame)
+        #expect(displacements(listView).contains { $0 != 0 })
+
+        window.contentView = nil
+
+        #expect(listView.rowAnimatorLink == nil)
+        #expect(displacements(listView).allSatisfy { $0 == 0 })
+    }
+
+    /// A pass outside a window can displace rows, but starts no link to settle
+    /// them. Arriving in one must not show them stuck where that pass left
+    /// them.
+    @Test
+    func enteringAWindowReturnsRowsDisplacedOutsideOne() {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
+        scroll(listView, by: 300)
+        #expect(displacements(listView).contains { $0 != 0 })
+        #expect(listView.rowAnimatorLink == nil)
+
+        let window = NSWindow(
+            contentRect: listView.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentView = listView
+        defer { window.contentView = nil }
+
+        #expect(displacements(listView).allSatisfy { $0 == 0 })
+    }
+
+    /// Both links ask for one rate, so on one display they share one system
+    /// link instead of running two.
+    @Test
+    func theAnimatorLinkAndTheScrollingLinkAskForTheSameRate() throws {
+        let listView = makeListView()
+        let window = windowed(listView)
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = NeverSettlingAnimator()
+        scroll(listView, by: 100)
+        listView.scroll(to: CGPoint(x: 0, y: 1_000), preserveVelocity: false)
+        defer { listView.cancelCurrentScrolling() }
+
+        let animatorRate = try #require(listView.rowAnimatorLink?.preferredFrameRateRange)
+        let scrollingRate = try #require(listView.scrollingDisplayLink?.preferredFrameRateRange)
+        #expect(animatorRate == .list)
+        #expect(scrollingRate == .list)
+    }
+
     /// Taking the animator away stops the link too.
     @Test
     func clearingTheAnimatorStopsTheLink() {
