@@ -431,7 +431,6 @@ struct ListViewScrollAppKitTests {
         for _ in 0 ..< 2000 where listView.scrollingDisplayLink != nil {
             now += period
             listView.handleScrollingAnimation(.init(
-                duration: period,
                 timestamp: now,
                 targetTimestamp: now + period
             ))

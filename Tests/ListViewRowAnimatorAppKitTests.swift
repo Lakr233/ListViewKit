@@ -287,7 +287,6 @@ struct ListViewRowAnimatorAppKitTests {
 
         for _ in 0 ..< 600 {
             listView.handleScrollingAnimation(.init(
-                duration: Self.frame,
                 timestamp: 0,
                 targetTimestamp: Self.frame
             ))
@@ -607,7 +606,6 @@ struct ListViewRowAnimatorAppKitTests {
         let start: TimeInterval = 1000
         for frame in [0, 1, 3, 3] as [Double] {
             link.deliver(.init(
-                duration: period,
                 timestamp: start + frame * period,
                 targetTimestamp: start + (frame + 1) * period
             ))

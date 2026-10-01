@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import MSDisplayLink
+import DisplayLink
 
 #if canImport(UIKit)
     import UIKit
@@ -30,13 +30,13 @@ final class RowAnimatorDisplayLink {
     /// the display nominally runs at.
     init(onTick: @escaping (TimeInterval) -> Void) {
         proxy = Proxy(onTick: onTick)
-        link.delegatingObject(proxy)
+        link.delegate = proxy
     }
 
     /// Delivers a frame as if the link had fired, so a test can choose the
     /// timestamps.
-    func deliver(_ context: DisplayLinkCallbackContext) {
-        proxy.synchronization(context: context)
+    func deliver(_ frame: DisplayLinkFrame) {
+        proxy.displayLink(link, didUpdate: frame)
     }
 
     @MainActor
@@ -58,20 +58,20 @@ final class RowAnimatorDisplayLink {
         /// what actually passed. The nominal period stands in only for the
         /// first frame, which has nothing to measure from, and for a
         /// timestamp that did not move forward.
-        func elapsed(at context: DisplayLinkCallbackContext) -> TimeInterval {
-            defer { lastTimestamp = context.timestamp }
+        func elapsed(at frame: DisplayLinkFrame) -> TimeInterval {
+            defer { lastTimestamp = frame.timestamp }
             if let lastTimestamp {
-                let gap = context.timestamp - lastTimestamp
+                let gap = frame.timestamp - lastTimestamp
                 if gap.isFinite, gap > 0 { return gap }
             }
-            return context.duration.isFinite ? max(0, context.duration) : 0
+            return frame.duration.isFinite ? max(0, frame.duration) : 0
         }
     }
 }
 
 extension RowAnimatorDisplayLink.Proxy: @MainActor DisplayLinkDelegate {
-    func synchronization(context: DisplayLinkCallbackContext) {
-        onTick(elapsed(at: context))
+    func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
+        onTick(elapsed(at: frame))
     }
 }
 

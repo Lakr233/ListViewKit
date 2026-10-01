@@ -377,7 +377,7 @@ row i 自己就会动一点（`|c − a|` 是它中心到锚点的距离，通�
   run loop 强引用 link、link 强引用 target，现有代码靠 `cancelCurrentScrolling()`
   的显式 invalidate 兜住，而这条 link 的存活由用户代码的 `wantsNextFrame` 决定，
   兜不住。用一个持有弱引用的私有 proxy 做 target。
-- AppKit：`MSDisplayLink.DisplayLink` 只有一个 `delegatingObject`，第二条 link
+- AppKit：`DisplayLink` 只有一个 `delegate`，`ListScrollView` 已经占了它，第二条 link
   委派到同一个对象会跟滚动动画的回调撞在一起。同样需要私有转发壳。
 
 **生命周期**（§7.5 的完整规则）：

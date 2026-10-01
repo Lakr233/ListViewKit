@@ -304,7 +304,7 @@
 
 #elseif canImport(AppKit)
     import AppKit
-    import MSDisplayLink
+    import DisplayLink
 
     enum AppKitScrollPhysics {
         // AppKit exports distinct hyperbolic coefficients for trackpads and
@@ -1101,7 +1101,7 @@
 
             guard scrollingDisplayLink == nil else { return }
             let link = DisplayLink()
-            link.delegatingObject(self)
+            link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
         }
@@ -1124,7 +1124,7 @@
 
             guard scrollingDisplayLink == nil else { return true }
             let link = DisplayLink()
-            link.delegatingObject(self)
+            link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
             return true
@@ -1171,7 +1171,7 @@
 
             guard scrollingDisplayLink == nil else { return }
             let link = DisplayLink()
-            link.delegatingObject(self)
+            link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
         }
@@ -1190,7 +1190,7 @@
             // Do not clear _ignoresMomentumEvents here. AppKit may still be
             // sending native momentum from a gesture owned by a local animation.
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
-            scrollingDisplayLink?.delegatingObject(nil)
+            scrollingDisplayLink?.delegate = nil
             scrollingDisplayLink = nil
         }
 
@@ -1225,14 +1225,14 @@
             }
         }
 
-        func handleScrollingAnimation(_ context: DisplayLinkCallbackContext) {
+        func handleScrollingAnimation(_ frame: DisplayLinkFrame) {
             if _isTracking || _isVerticalScrollerTracking {
                 cancelCurrentScrolling()
                 return
             }
 
             if var rubberBandAnimation = _rubberBandAnimation {
-                rubberBandAnimation.elapsedTime += min(1 / 30, context.duration)
+                rubberBandAnimation.elapsedTime += min(1 / 30, frame.duration)
                 let displacement = AppKitScrollPhysics.elasticDelta(
                     initialPosition: rubberBandAnimation.initialPositionY,
                     initialVelocity: rubberBandAnimation.initialVelocityY,
@@ -1256,7 +1256,7 @@
             }
 
             if var momentumAnimation = _momentumAnimation {
-                momentumAnimation.elapsedTime += min(1 / 30, context.duration)
+                momentumAnimation.elapsedTime += min(1 / 30, frame.duration)
                 let displacement = AppKitScrollPhysics.momentumDisplacement(
                     initialVelocity: momentumAnimation.initialVelocityY,
                     elapsedTime: momentumAnimation.elapsedTime,
@@ -1298,7 +1298,7 @@
                 cancelCurrentScrolling()
                 return
             }
-            let delta = min(1 / 30, context.duration)
+            let delta = min(1 / 30, frame.duration)
             scrollingContext.update(withDeltaTime: delta)
             let loc = springFrameWithinBounds()
             if _scrollAnimationIsExcludedFromTravel {
@@ -1364,8 +1364,8 @@
     }
 
     extension ListScrollView: @MainActor DisplayLinkDelegate {
-        public func synchronization(context: DisplayLinkCallbackContext) {
-            handleScrollingAnimation(context)
+        public func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
+            handleScrollingAnimation(frame)
         }
     }
 

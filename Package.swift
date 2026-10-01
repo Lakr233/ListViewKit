@@ -6,21 +6,23 @@ import PackageDescription
 let package = Package(
     name: "ListViewKit",
     platforms: [
-        .iOS(.v17),
-        .macCatalyst(.v17),
-        .macOS(.v14),
+        .iOS(.v15),
+        .macCatalyst(.v15),
+        .macOS(.v12),
+        .tvOS(.v15),
+        .visionOS(.v1),
     ],
     products: [
         .library(name: "ListViewKit", targets: ["ListViewKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/MSDisplayLink", from: "2.2.0"),
+        .package(url: "https://github.com/Lakr233/DisplayLink", from: "3.0.1"),
     ],
     targets: [
         .target(
             name: "ListViewKit",
             dependencies: [
-                "MSDisplayLink",
+                .product(name: "DisplayLink", package: "DisplayLink"),
             ],
             path: "Sources"
         ),

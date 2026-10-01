@@ -36,9 +36,9 @@ jobs:
         run: swift build -c release --product ListViewKitBenchmarks
 
   apple-platforms:
-    name: iOS and Mac Catalyst
+    name: iOS, Mac Catalyst, tvOS and visionOS
     runs-on: macos-26
-    timeout-minutes: 40
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
 
@@ -62,6 +62,27 @@ jobs:
             -derivedDataPath "$RUNNER_TEMP/ListViewKitCatalystDerivedData" \
             CODE_SIGNING_ALLOWED=NO \
             test
+
+      - name: Test on tvOS Simulator
+        run: |
+          DEVICE_ID=$(xcrun simctl list devices available -j \
+            | jq -r '[.devices | to_entries[] | select(.key | contains("tvOS")) | .value[] | select(.name | startswith("Apple TV"))][0].udid')
+          xcodebuild \
+            -scheme ListViewKit-Package \
+            -destination "platform=tvOS Simulator,id=$DEVICE_ID" \
+            -derivedDataPath "$RUNNER_TEMP/ListViewKitTVDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
+      # Built, not run: a visionOS simulator is not guaranteed on the runner.
+      - name: Build for visionOS
+        run: |
+          xcodebuild \
+            -scheme ListViewKit-Package \
+            -destination 'generic/platform=visionOS Simulator' \
+            -derivedDataPath "$RUNNER_TEMP/ListViewKitVisionDerivedData" \
+            CODE_SIGNING_ALLOWED=NO \
+            build-for-testing
 
       - name: Build iOS example
         run: |

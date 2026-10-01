@@ -109,7 +109,7 @@ final class ViewController: UIViewController {
         Task { @MainActor in
             var follower = TailFollower(listView)
             for character in text {
-                try? await Task.sleep(for: .milliseconds(5))
+                try? await Task.sleep(nanoseconds: 5_000_000)
                 item.text.append(character)
                 follower.observe(listView)
                 listView.update(item)

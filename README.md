@@ -13,8 +13,8 @@ about the same whether it holds ten rows or a hundred thousand.
 ## Requirements
 
 - Swift 6.2+
-- iOS 17.0+ / macCatalyst 17.0+ / macOS 14.0+
-- One dependency: [MSDisplayLink](https://github.com/Lakr233/MSDisplayLink), a small display-link package.
+- iOS 15.0+ / Mac Catalyst 15.0+ / macOS 12.0+ / tvOS 15.0+ / visionOS 1.0+
+- One dependency: [DisplayLink](https://github.com/Lakr233/DisplayLink), a small display-link package.
 
 ## Installation
 

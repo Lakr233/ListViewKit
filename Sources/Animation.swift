@@ -248,8 +248,14 @@ let listAnimationDuration: TimeInterval = 0.5
             y: previousPosition.y - layer.position.y
         )
         guard offset != .zero else { return }
-        let slide = CASpringAnimation(perceptualDuration: listAnimationDuration, bounce: 0)
-        slide.keyPath = "position"
+        // What `init(perceptualDuration:bounce:)` builds for a bounce of 0,
+        // spelt out because that initializer needs macOS 14: a unit mass,
+        // stiffness (2π / duration)², and the critical damping 2√stiffness.
+        let slide = CASpringAnimation(keyPath: "position")
+        let angularFrequency = 2 * Double.pi / listAnimationDuration
+        slide.mass = 1
+        slide.stiffness = angularFrequency * angularFrequency
+        slide.damping = 2 * angularFrequency
         slide.fromValue = offset
         slide.toValue = CGPoint.zero
         slide.isAdditive = true

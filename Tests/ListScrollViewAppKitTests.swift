@@ -647,7 +647,6 @@ struct ListScrollViewAppKitTests {
 
     private func tick(_ scrollView: ListScrollView) {
         scrollView.handleScrollingAnimation(.init(
-            duration: Self.frame,
             timestamp: 0,
             targetTimestamp: Self.frame
         ))
