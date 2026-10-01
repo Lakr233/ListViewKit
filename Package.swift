@@ -16,7 +16,7 @@ let package = Package(
         .library(name: "ListViewKit", targets: ["ListViewKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/DisplayLink.git", from: "3.0.0"),
+        .package(url: "https://github.com/Lakr233/DisplayLink.git", from: "3.0.1"),
     ],
     targets: [
         .target(

@@ -20,7 +20,7 @@ about the same whether it holds ten rows or a hundred thousand.
 
 ```swift
 dependencies: [
-    .package(url: "https://github.com/Lakr233/ListViewKit", from: "3.0.0"),
+    .package(url: "https://github.com/Lakr233/ListViewKit", from: "4.4.0"),
 ]
 ```
 
