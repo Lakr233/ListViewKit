@@ -10,6 +10,10 @@ import UIKit
 
 final class ViewController: UIViewController {
     private let listView = ListView<ViewModel>()
+    /// Sits on the keyboard, so opening and closing it resizes the list
+    /// inside the keyboard's own animation.
+    private let inputBar = UIView()
+    private let textField = UITextField()
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -47,13 +51,36 @@ final class ViewController: UIViewController {
                 }
         }
 
+        listView.keyboardDismissMode = .interactive
         view.addSubview(listView)
         listView.translatesAutoresizingMaskIntoConstraints = false
+
+        inputBar.backgroundColor = .secondarySystemBackground
+        view.addSubview(inputBar)
+        inputBar.translatesAutoresizingMaskIntoConstraints = false
+
+        textField.placeholder = "Type, then Return to add a row"
+        textField.borderStyle = .roundedRect
+        textField.returnKeyType = .send
+        textField.delegate = self
+        inputBar.addSubview(textField)
+        textField.translatesAutoresizingMaskIntoConstraints = false
+
         NSLayoutConstraint.activate([
             listView.topAnchor.constraint(equalTo: view.topAnchor),
-            listView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            listView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
             listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+
+            inputBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            inputBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
+            inputBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
+
+            textField.topAnchor.constraint(equalTo: inputBar.topAnchor, constant: 8),
+            textField.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -8),
+            textField.leadingAnchor.constraint(equalTo: inputBar.safeAreaLayoutGuide.leadingAnchor, constant: 16),
+            textField.trailingAnchor.constraint(equalTo: inputBar.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            textField.heightAnchor.constraint(equalToConstant: 40),
         ])
 
         listView.apply([
@@ -132,6 +159,22 @@ final class ViewController: UIViewController {
 /// apart: growth below it and a bottom-pinned resize leave it where it is,
 /// and only scrolling moves it.
 @MainActor
+extension ViewController: UITextFieldDelegate {
+    /// Adds a row and keeps the keyboard up, so an insertion can be watched
+    /// while the list is resized around it.
+    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
+        let text = textField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        guard !text.isEmpty else {
+            textField.resignFirstResponder()
+            return false
+        }
+        textField.text = nil
+        listView.apply(listView.content + [ViewModel(text: text)], animated: true)
+        listView.scrollToBottom(animated: true)
+        return false
+    }
+}
+
 struct TailFollower {
     private var followedEdge: CGFloat?
 

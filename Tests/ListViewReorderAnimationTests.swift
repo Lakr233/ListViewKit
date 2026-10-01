@@ -35,7 +35,7 @@ struct ListViewReorderAnimationTests {
 
     /// A list in a real window, since a layer only publishes a presentation
     /// value once something is committing frames for it.
-    private func makeListView() -> ListView<ReorderItem> {
+    private func makeListView(count: Int = 5) -> ListView<ReorderItem> {
         let frame = CGRect(x: 0, y: 0, width: 400, height: 600)
         let listView = ListView<ReorderItem>(frame: frame)
         #if canImport(UIKit)
@@ -56,7 +56,7 @@ struct ListViewReorderAnimationTests {
                 .height { _, _ in Self.rowHeight }
                 .configure { _, _, _ in }
         }
-        listView.apply((0 ..< 5).map { ReorderItem(id: $0) })
+        listView.apply((0 ..< count).map { ReorderItem(id: $0) })
         settleLayout(listView)
         return listView
     }
@@ -147,5 +147,51 @@ struct ListViewReorderAnimationTests {
             let presented = try #require(presentationY(of: row))
             #expect(abs(presented - row.frame.origin.y) < 0.5)
         }
+    }
+
+    /// A row that only comes on screen because of the change slides in from
+    /// the side it was on, rather than appearing at its destination.
+    @Test
+    func aRowMovedOnScreenSlidesInFromBeyondTheEdge() throws {
+        let listView = makeListView(count: 20)
+        #expect(listView.rowView(for: 15) == nil)
+
+        var order = Array(0 ..< 20)
+        order.remove(at: 15)
+        order.insert(15, at: 0)
+        listView.apply(order.map { ReorderItem(id: $0) }, animated: true)
+        let row = try #require(listView.rowView(for: 15))
+        #expect(row.placedFrame.minY == 0)
+
+        advanceOneFrame()
+        // It was below the viewport, so it starts below the viewport's
+        // bottom edge and is still most of the way there one frame in.
+        let presented = try #require(presentationY(of: row))
+        #expect(presented > listView.bounds.height / 2)
+    }
+
+    /// A row moved off screen is still on screen until its slide ends, so a
+    /// layout pass in the meantime must not take it away.
+    @Test
+    func aRowMovedOffScreenStaysUntilItsSlideEnds() throws {
+        let listView = makeListView(count: 20)
+        let row = try #require(listView.rowView(for: 0))
+
+        var order = Array(0 ..< 20)
+        order.remove(at: 0)
+        order.append(0)
+        listView.apply(order.map { ReorderItem(id: $0) }, animated: true)
+        advanceOneFrame()
+        listView.requestLayout()
+        settleLayout(listView)
+        #expect(listView.rowView(for: 0) === row)
+        #expect(row.superview === listView)
+
+        // Once the slide has ended, the next pass lets it go.
+        RunLoop.main.run(until: Date().addingTimeInterval(listRowSlideDuration + 0.05))
+        listView.requestLayout()
+        settleLayout(listView)
+        #expect(listView.rowView(for: 0) == nil)
+        #expect(listView.heldRows.isEmpty)
     }
 }
