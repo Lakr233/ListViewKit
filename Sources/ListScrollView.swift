@@ -23,6 +23,12 @@ import DisplayLink
         private var scrollingClock = DisplayLinkClock()
         private var scrollingTarget: CGPoint?
 
+        /// Identifies the programmatic scroll in flight. Moved on by every
+        /// scroll a caller starts and every one that ends; left alone when the
+        /// running one is only retargeted. Whoever started a scroll compares
+        /// against it to tell whether that scroll is still the one running.
+        private(set) var scrollingSerial: UInt = 0
+
         var scrollLedger = ScrollLedger()
 
         /// While set, an offset that a content-size change pushed out of
@@ -137,7 +143,7 @@ import DisplayLink
                 let clamped = nearestScrollLocationInBounds(offset: target)
                 if clamped != target {
                     // Still the same scroll, so still at the pace it was given.
-                    scroll(
+                    runScroll(
                         to: clamped,
                         angularFrequency: isReboundingFromOverscroll ? nil : scrollingContext.y.angularFrequency
                     )
@@ -163,6 +169,26 @@ import DisplayLink
         ///   - angularFrequency: bigger value will handle animation faster
         ///   - preserveVelocity: keep current velocity when retargeting
         public func scroll(
+            to offset: CGPoint,
+            angularFrequency: Double? = nil,
+            preserveVelocity: Bool = true
+        ) {
+            scrollingSerial &+= 1
+            runScroll(to: offset, angularFrequency: angularFrequency, preserveVelocity: preserveVelocity)
+        }
+
+        /// Points the programmatic scroll in flight somewhere else without
+        /// starting a new one: it keeps its velocity, its pace and its
+        /// ``scrollingSerial``. Does nothing when no such scroll is running
+        /// or the target would not change.
+        func retargetScrolling(to offset: CGPoint) {
+            guard let current = scrollingTarget else { return }
+            let target = nearestScrollLocationInBounds(offset: offset)
+            guard target != current else { return }
+            runScroll(to: target, angularFrequency: scrollingContext.y.angularFrequency)
+        }
+
+        private func runScroll(
             to offset: CGPoint,
             angularFrequency: Double? = nil,
             preserveVelocity: Bool = true
@@ -199,6 +225,7 @@ import DisplayLink
         }
 
         public func cancelCurrentScrolling() {
+            scrollingSerial &+= 1
             let currentContentOffset = contentOffset
             scrollingContext.setCurrent(
                 .init(x: currentContentOffset.x, y: currentContentOffset.y),
@@ -496,6 +523,12 @@ import DisplayLink
             threshold: 0.05
         )
         private var scrollingTarget: CGPoint?
+
+        /// Identifies the programmatic scroll in flight. Moved on by every
+        /// scroll a caller starts and every one that ends; left alone when the
+        /// running one is only retargeted. Whoever started a scroll compares
+        /// against it to tell whether that scroll is still the one running.
+        private(set) var scrollingSerial: UInt = 0
 
         var scrollLedger = ScrollLedger()
 
@@ -909,7 +942,7 @@ import DisplayLink
                 let clamped = nearestScrollLocationInBounds(offset: target)
                 if clamped != target {
                     // Still the same scroll, so still at the pace it was given.
-                    scroll(
+                    runScroll(
                         to: clamped,
                         angularFrequency: isReboundingFromOverscroll ? nil : scrollingContext.y.angularFrequency
                     )
@@ -1186,6 +1219,26 @@ import DisplayLink
             angularFrequency: Double? = nil,
             preserveVelocity: Bool = true
         ) {
+            scrollingSerial &+= 1
+            runScroll(to: offset, angularFrequency: angularFrequency, preserveVelocity: preserveVelocity)
+        }
+
+        /// Points the programmatic scroll in flight somewhere else without
+        /// starting a new one: it keeps its velocity, its pace and its
+        /// ``scrollingSerial``. Does nothing when no such scroll is running
+        /// or the target would not change.
+        func retargetScrolling(to offset: CGPoint) {
+            guard let current = scrollingTarget else { return }
+            let target = nearestScrollLocationInBounds(offset: offset)
+            guard target != current else { return }
+            runScroll(to: target, angularFrequency: scrollingContext.y.angularFrequency)
+        }
+
+        private func runScroll(
+            to offset: CGPoint,
+            angularFrequency: Double? = nil,
+            preserveVelocity: Bool = true
+        ) {
             _rubberBandAnimation = nil
             _momentumAnimation = nil
             _isBouncing = false
@@ -1222,6 +1275,7 @@ import DisplayLink
         }
 
         public func cancelCurrentScrolling() {
+            scrollingSerial &+= 1
             let currentContentOffset = contentOffset
             scrollingContext.setCurrent(
                 .init(x: currentContentOffset.x, y: currentContentOffset.y),

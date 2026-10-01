@@ -87,5 +87,61 @@ struct ListScrollViewUIKitTests {
         #expect(scrollView.scrollingDisplayLink == nil)
     }
     #endif
+
+    // MARK: - Destinations on estimated rows
+
+    private struct Item: Identifiable, Hashable {
+        let id: Int
+    }
+
+    /// 200 rows that are 150pt each and all still at the 44pt estimate.
+    private func makeUnmeasuredListView() -> ListView<Item> {
+        let listView = ListView<Item>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        listView.contentInsetAdjustmentBehavior = .never
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { _, _ in 150 }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< 200).map { Item(id: $0) })
+        listView.setNeedsLayout()
+        listView.layoutIfNeeded()
+        return listView
+    }
+
+    private func flyScroll(_ listView: ListView<Item>) {
+        let period = 1.0 / 60.0
+        var now: TimeInterval = 1_000
+        for _ in 0 ..< 2000 where listView.scrollingDisplayLink != nil {
+            now += period
+            listView.handleScrollingAnimation(.init(timestamp: now, targetTimestamp: now + period))
+            listView.layoutIfNeeded()
+        }
+    }
+
+    /// Rows measured on the way down push the row further than its estimate
+    /// said, and compensation does not move the target for rows below the
+    /// anchor. The scroll has to keep resolving the row to land on it.
+    @Test
+    func animatedScrollToAnEstimatedRowLandsOnIt() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToRow(at: 60, at: .top, animated: true)
+        flyScroll(listView)
+
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(abs(listView.rectForRow(at: 60).minY - listView.contentOffset.y) < 1)
+    }
+
+    @Test
+    func animatedScrollToTheBottomOfAnEstimatedListReachesIt() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToBottom(animated: true)
+        flyScroll(listView)
+
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(listView.isScrolledToBottom())
+    }
 }
 #endif

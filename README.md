@@ -210,6 +210,12 @@ list.scrollToRow(with: message.id, at: .nearest)
 list.scrollToBottom()
 ```
 
+An animated scroll heads for the row or the end, not for an offset worked out
+when it started, so it lands there even when the rows on the way are still at
+their estimates. Scrolls animate only while the list is in a window: one still
+running when the list leaves its window, or asked for before the list has one,
+jumps to where it was going as the window changes.
+
 ### The scroller
 
 A list whose content outgrows its viewport draws an overlay scroller. Hosts

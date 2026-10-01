@@ -125,6 +125,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     private var layoutContentDepth = 0
     var deepestLayoutContentDepth = 0
 
+    /// Where the animated scroll in flight was asked to go, if it was asked
+    /// for a row or the end rather than an offset.
+    var scrollDestination: ListScrollDestination<Item.ID>?
+
     var isSliceDrainScheduled = false
     /// How many drain passes have started, so a test can show that one held
     /// off by a drag costs a handful of wake-ups rather than a spinning run
@@ -398,6 +402,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             measureViewport()
             contentSize = supposedContentSize
         }
+        // Every measurement this pass makes, and any the drain made since the
+        // last one, is in by now.
+        retargetScrollDestination()
 
         if contentOffset.y >= minimumContentOffset.y, contentOffset.y <= maximumContentOffset.y {
             recycleRowsOutsideViewport()
