@@ -4,7 +4,7 @@
 //
 
 import Foundation
-import MSDisplayLink
+import DisplayLink
 
 #if canImport(UIKit)
     import UIKit
@@ -16,33 +16,24 @@ import MSDisplayLink
 
 /// A display link that calls back without owning the thing it calls.
 ///
-/// `DisplayLink` holds a single delegate, weakly, and `ListScrollView` has
-/// already claimed that slot for its own physics — a second link pointed at
-/// the same object could not say which of the two had fired. The proxy gives
-/// this link its own delegate, and it is retained here rather than by the
-/// link, which holds it weakly.
+/// `ListScrollView` is already the delegate of its own scrolling link, so the
+/// row animator's link reports here instead, and the list is reached through
+/// a closure that holds it weakly.
 @MainActor
 final class RowAnimatorDisplayLink {
-    private let link = DisplayLink()
-    private let proxy: Proxy
+    private let link: DisplayLink
+    private let onTick: (DisplayLinkFrame) -> Void
 
-    init(onTick: @escaping (DisplayLinkCallbackContext) -> Void) {
-        proxy = Proxy(onTick: onTick)
-        link.delegatingObject(proxy)
-    }
-
-    @MainActor
-    fileprivate final class Proxy {
-        let onTick: (DisplayLinkCallbackContext) -> Void
-        init(onTick: @escaping (DisplayLinkCallbackContext) -> Void) {
-            self.onTick = onTick
-        }
+    init(context: DisplayLinkContext, onTick: @escaping (DisplayLinkFrame) -> Void) {
+        link = DisplayLink(context: context)
+        self.onTick = onTick
+        link.delegate = self
     }
 }
 
-extension RowAnimatorDisplayLink.Proxy: @MainActor DisplayLinkDelegate {
-    func synchronization(context: DisplayLinkCallbackContext) {
-        onTick(context)
+extension RowAnimatorDisplayLink: DisplayLinkDelegate {
+    func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
+        onTick(frame)
     }
 }
 
@@ -276,8 +267,8 @@ extension ListView {
             return
         }
         guard rowAnimatorLink == nil else { return }
-        rowAnimatorLink = RowAnimatorDisplayLink { [weak self] context in
-            self?.tickRowAnimator(duration: context.duration)
+        rowAnimatorLink = RowAnimatorDisplayLink(context: .view(self)) { [weak self] frame in
+            self?.tickRowAnimator(duration: frame.duration)
         }
     }
 

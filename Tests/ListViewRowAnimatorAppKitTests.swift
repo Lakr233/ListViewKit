@@ -287,7 +287,6 @@ struct ListViewRowAnimatorAppKitTests {
 
         for _ in 0 ..< 600 {
             listView.handleScrollingAnimation(.init(
-                duration: Self.frame,
                 timestamp: 0,
                 targetTimestamp: Self.frame
             ))

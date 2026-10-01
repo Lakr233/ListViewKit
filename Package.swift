@@ -14,13 +14,13 @@ let package = Package(
         .library(name: "ListViewKit", targets: ["ListViewKit"]),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/MSDisplayLink", from: "2.2.0"),
+        .package(url: "https://github.com/Lakr233/DisplayLink.git", from: "3.0.0"),
     ],
     targets: [
         .target(
             name: "ListViewKit",
             dependencies: [
-                "MSDisplayLink",
+                "DisplayLink",
             ],
             path: "Sources"
         ),
