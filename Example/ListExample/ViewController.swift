@@ -98,9 +98,36 @@ final class ViewController: UIViewController {
             ViewModel(text: "梨花已落千山"),
         ])
 
+        let stressActions = [UIAction(title: "All") { [weak self] _ in
+            self?.stress(StressScenario.all)
+        }] + StressScenario.all.map { scenario in
+            UIAction(title: scenario.name, subtitle: scenario.summary) { [weak self] _ in
+                self?.stress([scenario])
+            }
+        }
         navigationItem.leftBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .compose, target: self, action: #selector(compose)),
+            UIBarButtonItem(
+                title: "Stress",
+                image: UIImage(systemName: "bolt"),
+                menu: UIMenu(title: "Stress test", children: stressActions)
+            ),
         ]
+    }
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        if let scenarios = StressLog.requestedScenarios, !didRunRequestedStress {
+            didRunRequestedStress = true
+            stress(scenarios)
+        }
+    }
+
+    private var didRunRequestedStress = false
+
+    private func stress(_ scenarios: [StressScenario]) {
+        view.endEditing(true)
+        navigationController?.pushViewController(StressViewController(scenarios: scenarios), animated: true)
         navigationItem.rightBarButtonItems = [
             UIBarButtonItem(barButtonSystemItem: .refresh, target: self, action: #selector(shuffle)),
             UIBarButtonItem(barButtonSystemItem: .add, target: self, action: #selector(addItem)),
