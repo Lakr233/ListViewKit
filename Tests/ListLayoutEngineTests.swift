@@ -149,6 +149,51 @@ struct ListLayoutEngineTests {
         expectMatches(engine, naive, &random)
     }
 
+    /// A batch appended at once has to leave the tree exactly as appending it
+    /// row by row would. Every split of an existing count and a batch size up
+    /// to 40 crosses each shape of span reaching the old end, and checking
+    /// every prefix afterwards reads every node.
+    @Test
+    func appendingABatchMatchesAppendingRowByRow() {
+        var random = SplitMix64(state: 0xBA7C4)
+        for existing in 0 ..< 40 {
+            for batch in 0 ..< 40 {
+                let rows = (0 ..< existing + batch).map { _ in
+                    ListLayoutEngine.Row(
+                        height: random.height(),
+                        isPending: random.int(below: 2) == 0
+                    )
+                }
+                var engine = ListLayoutEngine()
+                engine.reset(Array(rows[..<existing]))
+                engine.append(contentsOf: Array(rows[existing...]))
+
+                var naive = NaiveLayout()
+                naive.rows = rows
+                #expect(engine.count == rows.count)
+                var offset: CGFloat = 0
+                var pending = 0
+                for index in 0 ... rows.count {
+                    #expect(engine.offset(at: index) == offset)
+                    #expect(engine.pendingCount(in: 0 ..< index) == pending)
+                    guard index < rows.count else { break }
+                    offset += rows[index].height
+                    pending += rows[index].isPending ? 1 : 0
+                }
+                // Further single appends and measurements build on the batch's
+                // nodes, so a node it left short would show up here too.
+                engine.append(.init(height: 7, isPending: true))
+                naive.rows.append(.init(height: 7, isPending: true))
+                if !rows.isEmpty {
+                    let index = random.int(below: rows.count)
+                    engine.setHeight(13, at: index)
+                    naive.rows[index] = .init(height: 13, isPending: false)
+                }
+                expectMatches(engine, naive, &random)
+            }
+        }
+    }
+
     /// Zero-height rows share a prefix sum with their neighbours, which is
     /// exactly where a descent's tie-breaking can disagree with a linear scan.
     @Test

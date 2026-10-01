@@ -87,24 +87,88 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
     /// Rebuilds row order from the list's items, carrying measured heights
     /// across by identity. Unknown rows enter as pending estimates.
-    func reload() {
-        engine.reset(listView.items.map(row(for:)))
+    ///
+    /// `stale` names the rows whose measurement no longer holds, as
+    /// ``invalidateHeights(for:)`` would after the rebuild: each comes back
+    /// pending at the height it had, so content does not jump before the new
+    /// one arrives. Settling them here instead of afterwards drops their
+    /// measurements before the rest are looked up, which after a shift that
+    /// moved every row of a registration measured by its index is nearly all
+    /// of them.
+    ///
+    /// The lists come in as arrays rather than one joined sequence, and the
+    /// loop works on local copies of the two dictionaries: it runs
+    /// unspecialized, and a joined iterator or an exclusivity check on every
+    /// property access costs about as much as the lookup itself.
+    func reload(invalidating stale: [Item.ID]...) {
+        var invalidated: [(index: Int, height: CGFloat)] = []
+        if !measured.isEmpty {
+            let indexByID = listView.indexByID
+            var measured: [Item.ID: CGFloat] = [:]
+            swap(&measured, &self.measured)
+            for identifiers in stale {
+                for position in identifiers.indices {
+                    let identifier = identifiers[position]
+                    guard let height = measured.removeValue(forKey: identifier),
+                          let index = indexByID[identifier]
+                    else { continue }
+                    invalidated.append((index, height))
+                }
+            }
+            self.measured = measured
+        }
+        var rows = rows(for: listView.items[...])
+        for row in invalidated {
+            rows[row.index] = .init(height: row.height, isPending: true)
+        }
+        engine.reset(rows)
     }
 
     /// Adds `count` rows at the end without touching the existing ones. This
-    /// is the path a chat client takes for every new message.
+    /// is the path a chat client takes for every new message, and the one a
+    /// first load takes, so the engine takes them in one linear pass.
     func appendRows(count: Int) {
         let items = listView.items
-        for index in items.count - count ..< items.count {
-            engine.append(row(for: items[index]))
-        }
+        engine.append(contentsOf: rows(for: items[(items.count - count)...]))
     }
 
-    private func row(for item: Item) -> ListLayoutEngine.Row {
-        if let height = measured[item.id] {
-            return .init(height: height, isPending: false)
+    /// Every item as an estimate, then the measured ones settled on top.
+    ///
+    /// Both halves avoid a per-item cost where they can. When the estimate
+    /// does not depend on the item, which is the usual list of one row type,
+    /// every row is the same value. And the measurements are found from
+    /// whichever side is smaller: a first load has none, and a long list
+    /// typically has only the stretch near the viewport measured, so looking
+    /// those up beats hashing every identifier in the list.
+    private func rows(for items: ArraySlice<Item>) -> [ListLayoutEngine.Row] {
+        var rows: [ListLayoutEngine.Row]
+        if let estimate = listView.uniformEstimatedHeight {
+            rows = Array(repeating: .init(height: estimate, isPending: true), count: items.count)
+        } else {
+            rows = []
+            rows.reserveCapacity(items.count)
+            for index in items.indices {
+                rows.append(.init(height: listView.estimatedHeight(for: items[index]), isPending: true))
+            }
         }
-        return .init(height: listView.estimatedHeight(for: item), isPending: true)
+
+        let start = items.startIndex
+        let measured = measured
+        if measured.count < items.count {
+            let indexByID = listView.indexByID
+            for (identifier, height) in measured {
+                // Measurements outlive their rows until an apply drops them,
+                // and an append only covers the rows past the old end.
+                guard let index = indexByID[identifier], items.indices.contains(index) else { continue }
+                rows[index - start] = .init(height: height, isPending: false)
+            }
+        } else {
+            for index in items.indices {
+                guard let height = measured[items[index].id] else { continue }
+                rows[index - start] = .init(height: height, isPending: false)
+            }
+        }
+        return rows
     }
 
     /// Marks rows as needing measurement again, keeping the current height as

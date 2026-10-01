@@ -130,16 +130,18 @@ struct ListLayoutEngine {
     mutating func reset(_ newRows: [Row]) {
         rows = newRows
         tree = Array(repeating: Sums(), count: rows.count + 1)
-        for index in rows.indices {
-            let node = index + 1
-            tree[node].height += rows[index].height
-            tree[node].pending += rows[index].isPending ? 1 : 0
-            let parent = node + lowbit(node)
-            if parent < tree.count {
-                tree[parent].height += tree[node].height
-                tree[parent].pending += tree[node].pending
-            }
-        }
+        buildNodes(after: 0)
+    }
+
+    /// Adds rows at the end in O(k + log n) for k rows, rather than the
+    /// O(k log n) of appending them one at a time — the path a first load
+    /// and a page of new messages take.
+    mutating func append(contentsOf newRows: [Row]) {
+        guard !newRows.isEmpty else { return }
+        let previousCount = rows.count
+        rows.append(contentsOf: newRows)
+        tree.append(contentsOf: repeatElement(Sums(), count: newRows.count))
+        buildNodes(after: previousCount)
     }
 
     /// Adds a row at the end in O(log n) — the path a chat client takes for
@@ -200,6 +202,36 @@ struct ListLayoutEngine {
             node -= lowbit(node)
         }
         return sums
+    }
+
+    /// Fills in the zeroed nodes past `previousCount` from `rows`, in one
+    /// linear pass.
+    ///
+    /// Each node is folded into its parent once it is complete, the usual
+    /// linear construction. The nodes up to `previousCount` are complete
+    /// already, and the only ones among them with a parent past it are those
+    /// whose span reaches its end — exactly the nodes a prefix walk of
+    /// `previousCount` visits.
+    private mutating func buildNodes(after previousCount: Int) {
+        var node = previousCount
+        while node > 0 {
+            fold(node)
+            node -= lowbit(node)
+        }
+        for index in previousCount ..< rows.count {
+            let node = index + 1
+            tree[node].height += rows[index].height
+            tree[node].pending += rows[index].isPending ? 1 : 0
+            fold(node)
+        }
+    }
+
+    /// Adds a complete node into its parent, if the parent exists yet.
+    private mutating func fold(_ node: Int) {
+        let parent = node + lowbit(node)
+        guard parent < tree.count else { return }
+        tree[parent].height += tree[node].height
+        tree[parent].pending += tree[node].pending
     }
 
     private mutating func add(height: CGFloat, pending: Int, at index: Int) {

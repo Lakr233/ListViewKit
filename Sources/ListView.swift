@@ -255,13 +255,16 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         items = newItems
         indexByID = difference.indexByID
 
+        // A tail append has nothing removed, changed or moved to invalidate.
         if difference.isTailAppend(previousCount: previousCount) {
             rowLayout.appendRows(count: difference.added.count)
         } else {
-            rowLayout.reload()
+            rowLayout.reload(
+                invalidating: difference.removed,
+                difference.changed,
+                movedRowsMeasuredByIndex(difference.moved)
+            )
         }
-        rowLayout.invalidateHeights(for: difference.removed + difference.changed)
-        rowLayout.invalidateHeights(for: movedRowsMeasuredByIndex(difference.moved))
         // Settle the viewport before anything animates: rows placed at their
         // estimate would animate to the wrong height and snap once the real
         // one arrives.
@@ -640,8 +643,31 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     // MARK: - Row views
 
     /// Index of the registration that claims `item`, or nil when none does.
+    ///
+    /// Runs for every row measured, and for every row an apply estimates when
+    /// the rows have conditions, so it reads only the condition out of each
+    /// registration instead of copying the whole thing.
     func registrationIndex(for item: Item) -> Int? {
-        registrations.firstIndex { $0.matches(item) }
+        for index in registrations.indices {
+            guard let matches = registrations[index].matches else { return index }
+            if matches(item) { return index }
+        }
+        return nil
+    }
+
+    /// Height assumed for `item` until it is measured.
+    func estimatedHeight(for item: Item) -> CGFloat {
+        guard let index = registrationIndex(for: item) else { return estimatedRowHeight }
+        return registrations[index].estimatedHeight ?? estimatedRowHeight
+    }
+
+    /// The estimate every item gets when it does not depend on the item: the
+    /// first registration claims everything, or there are none yet. Nil when
+    /// each item has to be asked.
+    var uniformEstimatedHeight: CGFloat? {
+        guard let first = registrations.first else { return estimatedRowHeight }
+        guard first.matches == nil else { return nil }
+        return first.estimatedHeight ?? estimatedRowHeight
     }
 
     func registration(_ index: Int) -> ListRowRegistration<Item> {

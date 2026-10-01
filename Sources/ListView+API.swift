@@ -83,9 +83,4 @@ extension ListView {
         }
         return selfSizingHeight(for: item, registrationIndex: registrationIndex, context: context)
     }
-
-    func estimatedHeight(for item: Item) -> CGFloat {
-        guard let index = registrationIndex(for: item) else { return estimatedRowHeight }
-        return registration(index).estimatedHeight ?? estimatedRowHeight
-    }
 }

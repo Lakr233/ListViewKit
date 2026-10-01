@@ -127,7 +127,11 @@ public struct ListRow<Item: Identifiable & Hashable & SendableMetatype, RowView:
 /// the type lets a caller's closure touch main-actor state without ceremony,
 /// and lets `makeRow` call a view initializer at all.
 public struct ListRowRegistration<Item: Identifiable & Hashable & SendableMetatype> {
-    var matches: @MainActor (Item) -> Bool = { _ in true }
+    /// Nil for a row without a condition, which claims every item. Kept nil
+    /// rather than an always-true closure so finding an item's row — once
+    /// per item on every apply — skips the call for the common list of one
+    /// unconditional row.
+    var matches: (@MainActor (Item) -> Bool)?
     var makeRow: @MainActor () -> ListRowView
     var height: (@MainActor (Item, ListRowContext) -> CGFloat)?
     var estimatedHeight: CGFloat?

@@ -38,30 +38,115 @@ struct ListDifference<Item: Identifiable & Hashable & SendableMetatype> {
             && added.count == indexByID.count - previousCount
     }
 
+    /// Every loop here runs once per item, and the list is generic over a type
+    /// from another module, so nothing in them is specialized: each hash, each
+    /// `id` and each comparison goes through a witness table. What keeps an
+    /// apply cheap is doing fewer of those per item, not doing them faster.
     init(from old: [Item], to new: [Item], indexByID oldIndexByID: [Item.ID: Int]) {
-        var indexByID = [Item.ID: Int](minimumCapacity: new.count)
-        var added: [Item.ID] = []
-        var changed: [Item.ID] = []
-        var moved: [Item.ID] = []
-
-        for (index, item) in new.enumerated() {
-            let displaced = indexByID.updateValue(index, forKey: item.id)
-            precondition(displaced == nil, "duplicate identifier \(item.id) in the new content.")
-
-            guard let previousIndex = oldIndexByID[item.id] else {
-                added.append(item.id)
-                continue
+        // Nothing to compare against, so every item is new. This is a list's
+        // first load, and it needs no lookups at all.
+        guard !old.isEmpty else {
+            var indexByID = [Item.ID: Int](minimumCapacity: new.count)
+            var added: [Item.ID] = []
+            added.reserveCapacity(new.count)
+            for index in new.indices {
+                let identifier = new[index].id
+                let displaced = indexByID.updateValue(index, forKey: identifier)
+                precondition(displaced == nil, "duplicate identifier \(identifier) in the new content.")
+                added.append(identifier)
             }
-            if old[previousIndex] != item {
-                changed.append(item.id)
-            } else if previousIndex != index {
-                moved.append(item.id)
+            self.indexByID = indexByID
+            removed = []
+            self.added = added
+            changed = []
+            moved = []
+            return
+        }
+
+        // Items whose identifiers line up at either end are known to survive
+        // without looking them up, and their old position is known without
+        // the old index. Typical edits — an append, a page of history loaded
+        // above, one row changed — leave almost everything in these two runs.
+        let shorter = min(old.count, new.count)
+        var prefix = 0
+        while prefix < shorter, old[prefix].id == new[prefix].id {
+            prefix += 1
+        }
+        var suffix = 0
+        while suffix < shorter - prefix,
+              old[old.count - 1 - suffix].id == new[new.count - 1 - suffix].id
+        {
+            suffix += 1
+        }
+        let shift = new.count - old.count
+        let oldMiddle = prefix ..< old.count - suffix
+        let newMiddle = prefix ..< new.count - suffix
+        let newSuffix = newMiddle.upperBound ..< new.count
+
+        // The two runs hold the identifiers they held before, which the old
+        // index already proved unique, so only the middle can bring in a
+        // duplicate. When the runs are most of the list, the old index is
+        // carried over rather than hashing every identifier in them again:
+        // only the suffix positions change, and all by the same shift.
+        var indexByID: [Item.ID: Int]
+        if oldMiddle.count < prefix + suffix {
+            let oldSuffixStart = oldMiddle.upperBound
+            indexByID = shift == 0 ? oldIndexByID : oldIndexByID.mapValues {
+                $0 < oldSuffixStart ? $0 : $0 + shift
+            }
+            for index in oldMiddle {
+                indexByID.removeValue(forKey: old[index].id)
+            }
+            indexByID.reserveCapacity(new.count)
+        } else {
+            indexByID = .init(minimumCapacity: new.count)
+            for index in 0 ..< prefix {
+                indexByID[new[index].id] = index
+            }
+            for index in newSuffix {
+                indexByID[new[index].id] = index
             }
         }
 
+        var added: [Item.ID] = []
+        var changed: [Item.ID] = []
+        var moved: [Item.ID] = []
+        // The prefix kept its index, so it can only have changed.
+        for index in 0 ..< prefix where old[index] != new[index] {
+            changed.append(new[index].id)
+        }
+        for index in newMiddle {
+            let item = new[index]
+            let identifier = item.id
+            let displaced = indexByID.updateValue(index, forKey: identifier)
+            precondition(displaced == nil, "duplicate identifier \(identifier) in the new content.")
+
+            guard let previousIndex = oldIndexByID[identifier] else {
+                added.append(identifier)
+                continue
+            }
+            if old[previousIndex] != item {
+                changed.append(identifier)
+            } else if previousIndex != index {
+                moved.append(identifier)
+            }
+        }
+        // The whole suffix moved by however much the count changed.
+        for index in newSuffix {
+            if old[index - shift] != new[index] {
+                changed.append(new[index].id)
+            } else if shift != 0 {
+                moved.append(new[index].id)
+            }
+        }
+
+        // Only the old middle can hold anything that is gone.
         var removed: [Item.ID] = []
-        for item in old where indexByID[item.id] == nil {
-            removed.append(item.id)
+        for index in oldMiddle {
+            let identifier = old[index].id
+            if indexByID[identifier] == nil {
+                removed.append(identifier)
+            }
         }
 
         self.indexByID = indexByID
