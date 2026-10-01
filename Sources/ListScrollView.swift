@@ -311,6 +311,8 @@ import DisplayLink
 
         override open func layoutSubviews() {
             super.layoutSubviews()
+            // Before the suppression below, which records the new size.
+            keepBottomAcrossResize()
             // Both of these before `layoutContent`, so the content-size change
             // it makes already sees the suppression.
             suppressAutoScrollIfViewportResized()
@@ -734,6 +736,8 @@ import DisplayLink
 
         override open func layout() {
             super.layout()
+            // Before the suppression below, which records the new size.
+            keepBottomAcrossResize()
             // Before `layoutContent`, so the content-size change it makes
             // already sees the suppression.
             suppressAutoScrollIfViewportResized()
@@ -1541,6 +1545,45 @@ extension ListScrollView {
     /// call from layout: the frame arrives through several setters the
     /// platforms do not agree on, while every one of them lands here, and
     /// scrolling moves only the bounds *origin*.
+    /// Keeps a list resting at its end there when its viewport changes height.
+    ///
+    /// The keyboard is the case this is for: opening it shortens the list, and
+    /// a reader at the end of a conversation expects the last message to rise
+    /// with it rather than slip under it. Closing it again would otherwise
+    /// leave the offset past the new end, to be clamped back in one step.
+    ///
+    /// The one offset change the list makes on the host's curve. The resize
+    /// moving the list's bottom edge is that host's animation, and an offset
+    /// that snapped while the edge slid would jump the rows ahead of it, so
+    /// the offset is written inside whatever animation is open. It is not
+    /// travel either: the rows hold still against the edge they rest on.
+    func keepBottomAcrossResize() {
+        let height = bounds.height
+        guard height > 0,
+              let previous = lastLaidOutViewportSize?.height,
+              previous > 0, previous != height,
+              !isScrollOffsetOwnedByUser
+        else { return }
+        let previousBottom = ceil(max(
+            minimumContentOffset.y,
+            contentSize.height - previous + bottomContentInset
+        ))
+        guard contentOffset.y >= previousBottom - 1 else { return }
+        let dy = maximumContentOffset.y - contentOffset.y
+        guard dy != 0 else { return }
+        scrollLedger.exclude(dy)
+        contentOffset.y += dy
+    }
+
+    /// The inset ``maximumContentOffset`` leaves below the content.
+    private var bottomContentInset: CGFloat {
+        #if canImport(UIKit)
+            adjustedContentInset.bottom
+        #elseif canImport(AppKit)
+            contentInsets.bottom
+        #endif
+    }
+
     func suppressAutoScrollIfViewportResized() {
         let size = bounds.size
         // Only a viewport with area is a viewport the reader saw, and only

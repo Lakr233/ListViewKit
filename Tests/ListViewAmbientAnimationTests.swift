@@ -350,6 +350,60 @@ struct ListViewAmbientAnimationTests {
         }
     }
 
+    /// A reader at the end of the list keeps the last row in view when the
+    /// keyboard shortens it, instead of the keyboard covering it.
+    @Test
+    func aListAtItsEndStaysThereWhenTheKeyboardShortensIt() {
+        let listView = makeListView(count: 40, size: CGSize(width: 200, height: 600))
+        listView.contentOffset.y = listView.maximumContentOffset.y
+        requestLayout(listView)
+        let bottomBefore = listView.contentOffset.y
+        let travelBefore = listView.scrollLedger.pending
+
+        inAnAmbientAnimation {
+            listView.frame = CGRect(x: 0, y: 0, width: 200, height: 300)
+            requestLayout(listView)
+        }
+
+        #expect(listView.contentOffset.y == listView.maximumContentOffset.y)
+        #expect(listView.contentOffset.y == bottomBefore + 300)
+        // The rows hold still against the edge they rest on; that is not
+        // travel for an animator to spring on.
+        #expect(listView.scrollLedger.pending == travelBefore)
+    }
+
+    /// Only the end is held. A reader further up keeps the rows they were
+    /// reading where they were.
+    @Test
+    func aListAwayFromItsEndKeepsItsOffsetWhenResized() {
+        let listView = makeListView(count: 40, size: CGSize(width: 200, height: 600))
+        listView.contentOffset.y = 500
+        requestLayout(listView)
+
+        inAnAmbientAnimation {
+            listView.frame = CGRect(x: 0, y: 0, width: 200, height: 300)
+            requestLayout(listView)
+        }
+
+        #expect(listView.contentOffset.y == 500)
+    }
+
+    /// Closing the keyboard gives the room back with the end still in place,
+    /// rather than leaving the offset past it to be clamped in one step.
+    @Test
+    func aListAtItsEndStaysThereWhenTheKeyboardCloses() {
+        let listView = makeListView(count: 40, size: CGSize(width: 200, height: 300))
+        listView.contentOffset.y = listView.maximumContentOffset.y
+        requestLayout(listView)
+
+        inAnAmbientAnimation {
+            listView.frame = CGRect(x: 0, y: 0, width: 200, height: 600)
+            requestLayout(listView)
+        }
+
+        #expect(listView.contentOffset.y == listView.maximumContentOffset.y)
+    }
+
     // MARK: - The layout pass at large
 
     @Test
