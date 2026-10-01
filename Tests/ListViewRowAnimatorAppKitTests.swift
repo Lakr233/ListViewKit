@@ -417,12 +417,11 @@ struct ListViewRowAnimatorAppKitTests {
 
         let bouncy = try! #require(listView.bouncy)
         for row in listView.visibleRowViews {
-            let index = try! #require(listView.visibleRows.first { $0.value.view === row }.flatMap { listView.index(of: $0.key) })
             // Re-querying is idempotent — the board is only pumped by a
             // frame — so this reads the exact value the pass landed. A row
             // this pass attached reads zero, which is where the original
             // anchors a cell entering the buffered viewport.
-            #expect(row.presentationOffset == bouncy.displacement(forKey: index))
+            #expect(row.presentationOffset == bouncy.displacement(forKey: row.mountID))
             #expect(row.frame.minY == row.placedFrame.minY + row.presentationOffset)
         }
     }
@@ -574,6 +573,52 @@ struct ListViewRowAnimatorAppKitTests {
         #expect(listView.rowAnimatorLink == nil)
     }
 
+    /// Reduce Motion switched on mid-bounce puts every row back and stops
+    /// the link, rather than leaving both where they were.
+    @Test
+    func reduceMotionMidBounceClearsTheRowsAndStopsTheLink() {
+        let listView = makeListView()
+        let window = windowed(listView)
+        defer { window.contentView = nil }
+
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.layoutSubtreeIfNeeded()
+        scroll(listView, by: 300)
+        listView.tickRowAnimator(duration: Self.frame)
+        #expect(displacements(listView).contains { $0 != 0 })
+        #expect(listView.rowAnimatorLink != nil)
+
+        listView.reducedMotionOverride = true
+        listView.tickRowAnimator(duration: Self.frame)
+
+        #expect(listView.rowAnimatorLink == nil)
+        #expect(displacements(listView).allSatisfy { $0 == 0 })
+        #expect(listView.isDrivingRowAnimator == false)
+    }
+
+    /// The link advances the animator by the time that passed, not by the
+    /// display's nominal period, so a missed frame does not slow the spring.
+    @Test
+    func theLinkAdvancesByTheTimeThatPassed() {
+        var ticks: [TimeInterval] = []
+        let link = RowAnimatorDisplayLink(context: .main) { ticks.append($0) }
+        let period = 1.0 / 120.0
+        let start: TimeInterval = 1000
+        for frame in [0, 1, 3, 3] as [Double] {
+            link.deliver(.init(
+                timestamp: start + frame * period,
+                targetTimestamp: start + (frame + 1) * period
+            ))
+        }
+        // First frame and a timestamp that did not move fall back to the
+        // nominal period; the skipped frame is paid for.
+        let expected = [period, period, 2 * period, period]
+        #expect(ticks.count == expected.count)
+        for (tick, want) in zip(ticks, expected) {
+            #expect(abs(tick - want) < 1e-9)
+        }
+    }
+
     // MARK: - Shape on screen
 
     /// The lag is graded by distance from the touch, in the direction of the
@@ -649,6 +694,94 @@ struct ListViewRowAnimatorAppKitTests {
             sawAGap = true
         }
         #expect(sawAGap, "the reversal should open gaps above the hand")
+    }
+
+    /// An apply that shifts indices mid-bounce leaves every row on its own
+    /// spring.
+    ///
+    /// Springs keyed by index would hand each row the one its neighbour was
+    /// riding, and every row on screen would jump by the difference.
+    @Test
+    func anInsertionMidBounceKeepsEachRowOnItsOwnSpring() {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        listView.setContentOffset(CGPoint(x: 0, y: 1000), animated: false)
+        listView.layoutSubtreeIfNeeded()
+        for _ in 0 ..< 8 {
+            scroll(listView, by: 40)
+            listView.tickRowAnimator(duration: Self.frame)
+        }
+
+        let before = Dictionary(uniqueKeysWithValues: listView.visibleRows.map {
+            ($0.key, $0.value.view.presentationOffset)
+        })
+        #expect(Set(before.values).count > 1)
+
+        listView.apply([AnimatorItem(id: -1)] + listView.content)
+
+        for (identifier, entry) in listView.visibleRows {
+            guard let offset = before[identifier] else { continue }
+            #expect(entry.view.presentationOffset == offset, "row \(identifier)")
+        }
+    }
+
+    /// Springs belong to mounts, and a list sitting still does not hoard the
+    /// ones whose mounts have ended.
+    ///
+    /// Pruning by time needs a clock, and only a running animation advances
+    /// it — but every layout pass offers its rows, so a list at rest that
+    /// keeps remounting them would otherwise grow the table without bound.
+    @Test
+    func remountingAtRestDoesNotAccumulateSprings() throws {
+        let listView = makeListView()
+        listView.rowAnimator = ListBouncyAnimator()
+        drain(listView)
+
+        for _ in 0 ..< 20 {
+            listView.reloadData()
+            drain(listView)
+        }
+        for index in 0 ..< 20 {
+            listView.apply(listView.content.filter { $0.id != index })
+            drain(listView)
+        }
+
+        let animator = try #require(listView.rowAnimator as? ListBouncyAnimator)
+        #expect(animator.board.attachments.count <= listView.visibleRows.count)
+    }
+
+    /// One animator value installed on two lists drives two independent sets
+    /// of springs.
+    ///
+    /// The value is configuration; the springs belong to whichever list is
+    /// showing them. Shared springs would let one list's scrolling pump and
+    /// step the other's rows, and clearing one list's animator would reset
+    /// the other's.
+    @Test
+    func oneAnimatorValueOnTwoListsKeepsTheirSpringsApart() {
+        let shared = ListBouncyAnimator()
+        let first = makeListView()
+        let second = makeListView()
+        first.rowAnimator = shared
+        second.rowAnimator = shared
+
+        for _ in 0 ..< 8 {
+            scroll(second, by: 40)
+            second.tickRowAnimator(duration: Self.frame)
+        }
+        let secondBefore = second.attachmentValues
+        #expect(secondBefore?.values.contains { $0 != 0 } == true)
+
+        // Scrolling the first list is none of the second's business.
+        for _ in 0 ..< 4 {
+            scroll(first, by: 40)
+            first.tickRowAnimator(duration: Self.frame)
+        }
+        #expect(second.attachmentValues == secondBefore)
+
+        // Nor is taking the first list's animator away.
+        first.rowAnimator = nil
+        #expect(second.attachmentValues == secondBefore)
     }
 }
 #endif

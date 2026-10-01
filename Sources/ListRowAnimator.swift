@@ -83,6 +83,22 @@ public protocol ListRowAnimator {
     var maximumDisplacement: CGFloat { get }
 }
 
+/// An animator whose copies share their per-row state by reference.
+///
+/// The list calls `takeOwnedState` once, on the copy it has just installed,
+/// so that copy stops sharing with every other — the caller's, and any other
+/// list's the same value was installed on.
+protocol ListRowAnimatorOwnedState {
+    mutating func takeOwnedState()
+
+    /// Drops whatever is held for one mount of a row, which has just ended.
+    ///
+    /// Per-row state keyed by mount would otherwise only ever grow while the
+    /// list sits still: every layout pass offers its rows, and time-based
+    /// pruning needs a clock that only a running animation advances.
+    func forgetRow(mountID: Int)
+}
+
 public extension ListRowAnimator {
     mutating func willUpdate(_: ListAnimatorContext) {}
     func update(row _: ListRowView, at _: Int, frame _: CGRect, in _: ListAnimatorContext) {}

@@ -27,6 +27,9 @@
         /// Vertical displacement currently shown on top of ``placedFrame``.
         var presentationOffset: CGFloat = 0
 
+        /// Which showing of an item this is. See ``ListRowView/beginMount()``.
+        var mountID = 0
+
         /// Called before this row is filled in, including the first time and
         /// including a row already on screen. Clear transient state here:
         /// text, images, menus, callbacks, in-flight requests. Must be
@@ -84,6 +87,9 @@
         /// Vertical displacement currently shown on top of ``placedFrame``.
         var presentationOffset: CGFloat = 0
 
+        /// Which showing of an item this is. See ``ListRowView/beginMount()``.
+        var mountID = 0
+
         /// Called before this row is filled in, including the first time and
         /// including a row already on screen. Clear transient state here:
         /// text, images, menus, callbacks, in-flight requests. Must be
@@ -120,3 +126,20 @@
 #else
     #error("ListViewKit requires UIKit or AppKit")
 #endif
+
+extension ListRowView {
+    private static var lastMountID = 0
+
+    /// Gives this row a new identity for the item it is about to show.
+    ///
+    /// An index names a slot, and an apply hands the slot to another item;
+    /// the view itself is pooled and handed to another item too. Neither can
+    /// key state that belongs to one item on screen — an animator's spring
+    /// keyed either way would jump rows onto each other's springs — so the
+    /// list stamps each mount instead, and the stamp lasts exactly as long
+    /// as that item stays on this view.
+    func beginMount() {
+        Self.lastMountID &+= 1
+        mountID = Self.lastMountID
+    }
+}

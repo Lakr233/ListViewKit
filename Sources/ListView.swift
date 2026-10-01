@@ -104,6 +104,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// How many frames the animator has been advanced for, so a test can show
     /// an idle list never ticks and a scrolling one ticks once per frame.
     var animatorTickCount: Int = 0
+    /// Stands in for the system's reduce-motion setting when set, so a test
+    /// can switch it mid-animation.
+    var reducedMotionOverride: Bool?
     /// Where the reader last held the content, measured from the viewport's
     /// top edge, or `nil` before any interaction has been seen.
     ///
@@ -138,9 +141,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     /// the content height together while the list scrolls. A value close to
     /// the typical row keeps the scroller proportion steady as measurement
     /// catches up.
-    public var estimatedRowHeight: CGFloat = 44 {
-        didSet { invalidateLayout() }
-    }
+    ///
+    /// Set it before applying content. A row takes its estimate when the
+    /// layout picks it up and keeps it until measured, so changing this later
+    /// reaches rows added afterwards and, on any apply that is not a plain
+    /// append, every row still unmeasured. It never discards a measurement:
+    /// an estimate cannot make a measured height wrong.
+    public var estimatedRowHeight: CGFloat = 44
 
     public var topInset: CGFloat = 0 {
         didSet { requestLayout() }
@@ -311,6 +318,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
 
     private func reloadRowViews() {
         for entry in visibleRows.values {
+            forgetRowAnimation(of: entry.view)
             entry.view.removeFromSuperview()
         }
         visibleRows.removeAll()
@@ -383,6 +391,13 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         refreshMountOverscan()
         measureViewport()
         contentSize = supposedContentSize
+        // Content that shrank pulls the offset back onto its new end, which
+        // brings rows into view the measurement above never saw. Each round
+        // measures every one of them, so this ends.
+        while rowLayout.hasPendingRows(intersecting: mountRect) {
+            measureViewport()
+            contentSize = supposedContentSize
+        }
 
         if contentOffset.y >= minimumContentOffset.y, contentOffset.y <= maximumContentOffset.y {
             recycleRowsOutsideViewport()
@@ -580,6 +595,7 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         // its contents out against a size about to change, and parenting it
         // there would show it in the wrong place for a frame.
         setRowFrame(rectForRow(at: index), on: view, animated: false)
+        view.beginMount()
         rowsPendingSettle.append(view)
         view.prepareForReuse()
         registrations[registrationIndex].configure(
@@ -644,9 +660,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
         // Whatever the animator was showing belonged to the item leaving, so
-        // it does not travel to the next one on the same view. The scalar
-        // model makes this free: there is no per-row state to tear down.
+        // it does not travel to the next one on the same view, and neither
+        // does the spring it was showing it with.
         clearRowDisplacement(on: entry.view)
+        forgetRowAnimation(of: entry.view)
         reusePools[entry.registration].append(entry.view)
         rowsPendingRemoval.append(entry.view)
         return entry.view

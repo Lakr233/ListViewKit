@@ -113,13 +113,19 @@ struct ListViewRowAnimatorUIKitTests {
         listView.rowAnimator = ListBouncyAnimator()
         displace(listView)
 
-        let row = try #require(listView.visibleRowViews.first { $0.presentationOffset > 1 })
-        let drawnCentre = CGPoint(
-            x: row.placedFrame.midX,
-            y: row.placedFrame.midY + row.presentationOffset
-        )
+        // Rows are mounted a margin beyond the viewport, and a point outside
+        // the list's bounds never reaches its subviews, so the row has to be
+        // drawn where a touch can land.
+        let row = try #require(listView.visibleRowViews.first {
+            $0.presentationOffset > 1 && listView.bounds.contains(Self.drawnCentre(of: $0))
+        })
+        let drawnCentre = Self.drawnCentre(of: row)
         let hit = listView.hitTest(drawnCentre, with: nil)
         #expect(hit === row || hit?.isDescendant(of: row) == true)
+    }
+
+    private static func drawnCentre(of row: ListRowView) -> CGPoint {
+        CGPoint(x: row.placedFrame.midX, y: row.placedFrame.midY + row.presentationOffset)
     }
 
     /// Returning to rest leaves no transform behind.

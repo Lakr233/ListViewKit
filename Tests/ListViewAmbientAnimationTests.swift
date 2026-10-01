@@ -8,7 +8,7 @@
 //  Nothing the layout pass does is the caller's animation to inherit.
 //
 //  Runs on both platforms; the UIKit half needs
-//  `xcodebuild test -scheme ListViewKitTests -destination 'platform=iOS Simulator,…'`.
+//  `xcodebuild test -scheme ListViewKit-Package -destination 'platform=iOS Simulator,…'`.
 //
 
 #if canImport(UIKit)
@@ -45,7 +45,7 @@ private final class AmbientRow: ListRowView {
 
     override init(frame: CGRect) {
         super.init(frame: frame)
-        #if canImport(AppKit)
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
             marker.wantsLayer = true
         #endif
         addSubview(marker)
@@ -302,7 +302,7 @@ struct ListViewAmbientAnimationTests {
         #expect(!animationKeys(of: listView).contains("bounds.origin"))
     }
 
-    #if canImport(AppKit)
+    #if canImport(AppKit) && !targetEnvironment(macCatalyst)
         @Test
         func theScrollerOverlayDoesNotSlideInsideAForeignContext() throws {
             let listView = makeListView(count: 40)

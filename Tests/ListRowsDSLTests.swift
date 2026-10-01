@@ -139,5 +139,39 @@ struct ListRowsDSLTests {
                 == CGFloat(measuredRows) * 25 + CGFloat(listView.rowLayout.pendingRowCount) * 250
         )
     }
+
+    /// `if`, `if`/`else` and `for` inside `rows {}` contribute their rows
+    /// in declaration order, like any other result builder.
+    @Test
+    func controlFlowInsideRowsContributesRegistrations() {
+        let showWide = true
+        let useSelfSizing = false
+        let listView = ListView<DSLItem>(frame: CGRect(x: 0, y: 0, width: 320, height: 400))
+        listView.rows {
+            if showWide {
+                ListRow(WideRow.self)
+                    .when(\.isWide)
+                    .height { _, _ in 80 }
+            }
+            for threshold in [1000] {
+                ListRow(WideRow.self)
+                    .when { $0.id >= threshold }
+                    .height { _, _ in 90 }
+            }
+            if useSelfSizing {
+                ListRow(SelfSizingRow.self)
+            } else {
+                ListRow(NarrowRow.self)
+                    .height { _, _ in 20 }
+            }
+        }
+        listView.apply([DSLItem(id: 0), DSLItem(id: 1, isWide: true), DSLItem(id: 1000)])
+
+        #expect(listView.rowView(for: 0) is NarrowRow)
+        #expect(listView.rowView(for: 1) is WideRow)
+        #expect(listView.rectForRow(at: 0).height == 20)
+        #expect(listView.rectForRow(at: 1).height == 80)
+        #expect(listView.rectForRow(at: 2).height == 90)
+    }
 }
 #endif

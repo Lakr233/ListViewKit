@@ -63,7 +63,7 @@ final class ViewController: NSViewController {
             "若故事没说完",
         ].randomElement()!
         var items = listView.content
-        let index = (0 ..< max(items.count, 1)).randomElement() ?? 0
+        let index = Int.random(in: 0 ... items.count)
         items.insert(ViewModel(text: content), at: index)
         listView.apply(items, animated: true)
         listView.scrollToRow(at: index, at: .nearest)
@@ -76,8 +76,8 @@ final class ViewController: NSViewController {
     /// Whether the streaming scroll asks the list before following the tail.
     ///
     /// Off is what an ungated host does, and is here to be compared against:
-    /// scroll the wheel while a response streams and the two fight for the
-    /// offset, a notch at a time.
+    /// it follows the tail on every token, so scroll the wheel while a
+    /// response streams and the two fight for the offset, a notch at a time.
     private var gatesAutoScroll = true
 
     @objc func toggleAutoScrollGate(_ sender: NSToolbarItem) {
@@ -104,15 +104,58 @@ final class ViewController: NSViewController {
         """
         let text = ([String](repeating: paragraph, count: 8)).joined(separator: "\n\n")
         Task { @MainActor in
+            var follower = TailFollower(listView)
             for character in text {
-                try? await Task.sleep(for: .milliseconds(5))
+                try? await Task.sleep(nanoseconds: 5_000_000)
                 item.text.append(character)
+                follower.observe(listView)
                 listView.update(item)
-                // A reader who has scrolled away — or who just did, or who is
+                // A reader who has scrolled away — or who is scrolling, or
                 // resizing the window — is left where they are.
-                if gatesAutoScroll, listView.isUserInteractingWithScroll { continue }
+                if gatesAutoScroll, !follower.isFollowing || listView.isUserInteractingWithScroll { continue }
                 listView.scrollToBottom(animated: false)
+                follower.didFollow(listView)
             }
         }
+    }
+}
+
+/// Decides whether a stream keeps the list pinned to its tail.
+///
+/// "Within a few points of the bottom" cannot tell the reader scrolling away
+/// from the row growing past the edge while a token was not followed — during
+/// a gesture, say — and it drops the tail for good the first time that
+/// happens. The viewport's bottom edge in content coordinates tells them
+/// apart: growth below it and a bottom-pinned resize leave it where it is,
+/// and only scrolling moves it.
+@MainActor
+struct TailFollower {
+    private var followedEdge: CGFloat?
+
+    init(_ listView: ListView<ViewModel>) {
+        if listView.isScrolledToBottom(tolerance: 4) {
+            followedEdge = Self.bottomEdge(of: listView)
+        }
+    }
+
+    var isFollowing: Bool { followedEdge != nil }
+
+    /// Call before the update that grows the row.
+    mutating func observe(_ listView: ListView<ViewModel>) {
+        let edge = Self.bottomEdge(of: listView)
+        if let followedEdge, edge < followedEdge - 4 {
+            self.followedEdge = nil
+        } else if followedEdge == nil, listView.isScrolledToBottom(tolerance: 4) {
+            followedEdge = edge
+        }
+    }
+
+    /// Call after scrolling to the bottom.
+    mutating func didFollow(_ listView: ListView<ViewModel>) {
+        followedEdge = Self.bottomEdge(of: listView)
+    }
+
+    private static func bottomEdge(of listView: ListView<ViewModel>) -> CGFloat {
+        listView.contentOffset.y + listView.frame.height
     }
 }

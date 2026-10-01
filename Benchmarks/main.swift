@@ -1,4 +1,4 @@
-#if canImport(AppKit)
+#if canImport(AppKit) && !targetEnvironment(macCatalyst)
 import AppKit
 import Foundation
 import ListViewKit
@@ -112,6 +112,13 @@ private enum ListViewKitBenchmarks {
         let itemCounts = environmentList("LVK_ITEMS").map { $0.compactMap(Int.init) } ?? [1_000, 10_000, 100_000]
         let selectedKeys = environmentList("LVK_BENCH").map(Set.init)
         let selected = benchmarks.filter { selectedKeys?.contains($0.key) ?? true }
+        let unknownKeys = (selectedKeys ?? []).subtracting(benchmarks.map(\.key))
+        guard unknownKeys.isEmpty, !selected.isEmpty else {
+            let known = benchmarks.map(\.key).joined(separator: ", ")
+            let unknown = unknownKeys.sorted().joined(separator: ", ")
+            FileHandle.standardError.write(Data("Unknown LVK_BENCH key: \(unknown). Known keys: \(known).\n".utf8))
+            exit(1)
+        }
 
         warmUp()
 
@@ -175,5 +182,12 @@ private func blackHole(_ value: some Any) {
     withExtendedLifetime(value) {}
 }
 #else
-#error("ListViewKitBenchmarks currently requires AppKit")
+// Xcode builds every package product for the test destination, so this
+// target has to compile on UIKit platforms even though it only runs on macOS.
+@main
+enum Benchmarks {
+    static func main() {
+        print("ListViewKitBenchmarks requires AppKit; run it on macOS.")
+    }
+}
 #endif

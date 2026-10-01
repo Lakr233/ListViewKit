@@ -38,7 +38,11 @@ extension ListView {
     #if canImport(UIKit)
         private func disposalSnapshot(of view: ListRowView) -> UIView? {
             view.layoutIfNeeded()
-            return view.snapshotView(afterScreenUpdates: false)
+            let snapshot = view.snapshotView(afterScreenUpdates: false)
+            // The list animates with `.allowUserInteraction`, so the fade is
+            // hit-testable; the row sliding in underneath is the one to touch.
+            snapshot?.isUserInteractionEnabled = false
+            return snapshot
         }
 
     #elseif canImport(AppKit)
@@ -50,9 +54,19 @@ extension ListView {
             view.cacheDisplay(in: view.bounds, to: bitmap)
             let image = NSImage(size: view.bounds.size)
             image.addRepresentation(bitmap)
-            let snapshot = NSImageView(image: image)
+            let snapshot = DisposalSnapshotView(image: image)
             snapshot.wantsLayer = true
             return snapshot
         }
     #endif
 }
+
+#if canImport(AppKit) && !canImport(UIKit)
+    /// A picture of a row on its way out. It sits on top of the rows sliding
+    /// into its slot for the length of the fade, so it answers no clicks.
+    private final class DisposalSnapshotView: NSImageView {
+        override func hitTest(_: NSPoint) -> NSView? {
+            nil
+        }
+    }
+#endif

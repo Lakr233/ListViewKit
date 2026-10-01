@@ -406,5 +406,42 @@ struct ListViewScrollAppKitTests {
         let reported = Set(listView.indicesForVisibleRows)
         #expect(mounted == reported)
     }
+
+    /// An animated scroll to a row far down an unmeasured list lands on the
+    /// row. The target is resolved once, from 44pt estimates; rows measured
+    /// on the way past sit at or below the compensation anchor, so nothing
+    /// moves the target with them and the scroll stops short.
+    @Test
+    func animatedScrollToAnEstimatedRowLandsOnIt() {
+        let probe = HeightProbe()
+        for id in 0 ..< 200 { probe.heights[id] = 150 }
+        let listView = ListView<ScrollItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { item, _ in probe.height(of: item) }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< 200).map { ScrollItem(id: $0) })
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+
+        listView.scrollToRow(at: 60, at: .top, animated: true)
+        let period = 1.0 / 60.0
+        var now: TimeInterval = 0
+        for _ in 0 ..< 2000 where listView.scrollingDisplayLink != nil {
+            now += period
+            listView.handleScrollingAnimation(.init(
+                timestamp: now,
+                targetTimestamp: now + period
+            ))
+            listView.layoutSubtreeIfNeeded()
+        }
+
+        let rowTop = listView.rectForRow(at: 60).minY
+        let viewportTop = listView.contentOffset.y + listView.adjustedContentInset.top
+        withKnownIssue("S5: the target is not re-resolved as rows are measured") {
+            #expect(abs(rowTop - viewportTop) < 1)
+        }
+    }
 }
 #endif

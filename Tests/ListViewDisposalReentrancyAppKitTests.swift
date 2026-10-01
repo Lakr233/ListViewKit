@@ -89,5 +89,22 @@
                 #expect(lower.minY >= upper.maxY)
             }
         }
+
+        /// The fading copy of a removed row is only a picture: a click in its
+        /// slot reaches the row that has moved in underneath it.
+        @Test
+        func theDisposalSnapshotLetsClicksThrough() throws {
+            let (listView, window) = makeListView(count: 5)
+            defer { window.close() }
+
+            listView.apply(listView.content.filter { $0.id != 1 }, animated: true)
+            listView.layoutSubtreeIfNeeded()
+
+            let successor = try #require(listView.rowView(for: 2))
+            let slot = CGPoint(x: successor.placedFrame.midX, y: successor.placedFrame.midY)
+            let point = listView.convert(slot, to: listView.superview)
+            let hit = try #require(listView.hitTest(point))
+            #expect(hit === successor || hit.isDescendant(of: successor))
+        }
     }
 #endif

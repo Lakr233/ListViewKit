@@ -58,6 +58,10 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         )
     }
 
+    func hasPendingRows(intersecting rect: CGRect) -> Bool {
+        engine.pendingCount(in: indices(intersecting: rect)) > 0
+    }
+
     func indices(intersecting rect: CGRect) -> Range<Int> {
         guard !rect.isEmpty else { return 0 ..< 0 }
         return engine.indices(in: rect.minY ..< rect.maxY)
