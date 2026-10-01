@@ -14,7 +14,7 @@ about the same whether it holds ten rows or a hundred thousand.
 
 - Swift 6.2+
 - iOS 15.0+ / Mac Catalyst 15.0+ / macOS 12.0+ / tvOS 15.0+ / visionOS 1.0+
-- One dependency: [DisplayLink](https://github.com/Lakr233/DisplayLink), a small display-link package.
+- No dependencies beyond [DisplayLink](https://github.com/Lakr233/DisplayLink), for frame timing.
 
 ## Installation
 

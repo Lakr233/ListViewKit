@@ -16,60 +16,49 @@ import DisplayLink
 
 /// A display link that calls back without owning the thing it calls.
 ///
-/// `DisplayLink` holds a single delegate, weakly, and `ListScrollView` has
-/// already claimed that slot for its own physics — a second link pointed at
-/// the same object could not say which of the two had fired. The proxy gives
-/// this link its own delegate, and it is retained here rather than by the
-/// link, which holds it weakly.
+/// `ListScrollView` is already the delegate of its own scrolling link, so the
+/// row animator's link reports here instead, and the list is reached through
+/// a closure that holds it weakly.
 @MainActor
 final class RowAnimatorDisplayLink {
-    private let link = DisplayLink()
-    private let proxy: Proxy
+    private let link: DisplayLink
+    private var lastTimestamp: TimeInterval?
+    private let onTick: (TimeInterval) -> Void
 
     /// `onTick` is handed the time since the previous frame, not the frame
     /// the display nominally runs at.
-    init(onTick: @escaping (TimeInterval) -> Void) {
-        proxy = Proxy(onTick: onTick)
-        link.delegate = proxy
+    init(context: DisplayLinkContext, onTick: @escaping (TimeInterval) -> Void) {
+        link = DisplayLink(context: context)
+        self.onTick = onTick
+        link.delegate = self
     }
 
     /// Delivers a frame as if the link had fired, so a test can choose the
     /// timestamps.
     func deliver(_ frame: DisplayLinkFrame) {
-        proxy.displayLink(link, didUpdate: frame)
+        displayLink(link, didUpdate: frame)
     }
 
-    @MainActor
-    fileprivate final class Proxy {
-        let onTick: (TimeInterval) -> Void
-        private var lastTimestamp: TimeInterval?
-
-        init(onTick: @escaping (TimeInterval) -> Void) {
-            self.onTick = onTick
+    /// How much time this frame covers.
+    ///
+    /// `duration` is the display's nominal period, not the time that passed:
+    /// on UIKit it is quoted at the fastest rate the display has, so a link
+    /// the system runs slower, or a frame the main thread missed, would
+    /// advance the spring by less than elapsed and slow it down in wall time.
+    /// The gap between timestamps is what actually passed. The nominal period
+    /// stands in only for the first frame, which has nothing to measure from,
+    /// and for a timestamp that did not move forward.
+    private func elapsed(at frame: DisplayLinkFrame) -> TimeInterval {
+        defer { lastTimestamp = frame.timestamp }
+        if let lastTimestamp {
+            let gap = frame.timestamp - lastTimestamp
+            if gap.isFinite, gap > 0 { return gap }
         }
-
-        /// How much time this frame covers.
-        ///
-        /// `duration` is the display's nominal period, not the time that
-        /// passed: on UIKit it is quoted at the fastest rate the display
-        /// has, so a link the system runs slower, or a frame the main
-        /// thread missed, would advance the spring by less than elapsed
-        /// and slow it down in wall time. The gap between timestamps is
-        /// what actually passed. The nominal period stands in only for the
-        /// first frame, which has nothing to measure from, and for a
-        /// timestamp that did not move forward.
-        func elapsed(at frame: DisplayLinkFrame) -> TimeInterval {
-            defer { lastTimestamp = frame.timestamp }
-            if let lastTimestamp {
-                let gap = frame.timestamp - lastTimestamp
-                if gap.isFinite, gap > 0 { return gap }
-            }
-            return frame.duration.isFinite ? max(0, frame.duration) : 0
-        }
+        return frame.duration.isFinite ? max(0, frame.duration) : 0
     }
 }
 
-extension RowAnimatorDisplayLink.Proxy: @MainActor DisplayLinkDelegate {
+extension RowAnimatorDisplayLink: DisplayLinkDelegate {
     func displayLink(_: DisplayLink, didUpdate frame: DisplayLinkFrame) {
         onTick(elapsed(at: frame))
     }
@@ -327,7 +316,7 @@ extension ListView {
             return
         }
         guard rowAnimatorLink == nil else { return }
-        rowAnimatorLink = RowAnimatorDisplayLink { [weak self] elapsed in
+        rowAnimatorLink = RowAnimatorDisplayLink(context: .view(self)) { [weak self] elapsed in
             self?.tickRowAnimator(duration: elapsed)
         }
     }

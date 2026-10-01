@@ -1100,7 +1100,7 @@
             scrollingTarget = target
 
             guard scrollingDisplayLink == nil else { return }
-            let link = DisplayLink()
+            let link = DisplayLink(context: .view(self))
             link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
@@ -1123,7 +1123,7 @@
             scrollingTarget = nil
 
             guard scrollingDisplayLink == nil else { return true }
-            let link = DisplayLink()
+            let link = DisplayLink(context: .view(self))
             link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
@@ -1170,7 +1170,7 @@
             scrollingTarget = target
 
             guard scrollingDisplayLink == nil else { return }
-            let link = DisplayLink()
+            let link = DisplayLink(context: .view(self))
             link.delegate = self
             scrollingDisplayLink = link
             scrollingTik = CACurrentMediaTime()
@@ -1190,7 +1190,6 @@
             // Do not clear _ignoresMomentumEvents here. AppKit may still be
             // sending native momentum from a gesture owned by a local animation.
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
-            scrollingDisplayLink?.delegate = nil
             scrollingDisplayLink = nil
         }
 

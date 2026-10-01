@@ -601,7 +601,7 @@ struct ListViewRowAnimatorAppKitTests {
     @Test
     func theLinkAdvancesByTheTimeThatPassed() {
         var ticks: [TimeInterval] = []
-        let link = RowAnimatorDisplayLink { ticks.append($0) }
+        let link = RowAnimatorDisplayLink(context: .main) { ticks.append($0) }
         let period = 1.0 / 120.0
         let start: TimeInterval = 1000
         for frame in [0, 1, 3, 3] as [Double] {
