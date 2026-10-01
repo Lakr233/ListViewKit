@@ -10,10 +10,10 @@ import UIKit
 
 final class ViewController: UIViewController {
     private let listView = ListView<ViewModel>()
-    /// Sits on the keyboard, so opening and closing it resizes the list
-    /// inside the keyboard's own animation.
-    private let inputBar = UIView()
-    private let textField = UITextField()
+    /// Floats on the keyboard. The list ends at the keyboard too, so opening
+    /// and closing it resizes the list inside the keyboard's own animation.
+    private let composer = ComposerBar()
+    private static let composerMargin: CGFloat = 8
 
     override func viewDidLoad() {
         super.viewDidLoad()
@@ -52,35 +52,43 @@ final class ViewController: UIViewController {
         }
 
         listView.keyboardDismissMode = .interactive
+        // Rows scroll on under the composer; the last one stops above it.
+        listView.bottomInset = ComposerBar.height + Self.composerMargin * 2
         view.addSubview(listView)
         listView.translatesAutoresizingMaskIntoConstraints = false
 
-        inputBar.backgroundColor = .secondarySystemBackground
-        view.addSubview(inputBar)
-        inputBar.translatesAutoresizingMaskIntoConstraints = false
+        // Tapping the list puts the keyboard away without taking the tap from
+        // the row under it.
+        let dismiss = UITapGestureRecognizer(target: self, action: #selector(dismissKeyboard))
+        dismiss.cancelsTouchesInView = false
+        listView.addGestureRecognizer(dismiss)
 
-        textField.placeholder = "Type, then Return to add a row"
-        textField.borderStyle = .roundedRect
-        textField.returnKeyType = .send
-        textField.delegate = self
-        inputBar.addSubview(textField)
-        textField.translatesAutoresizingMaskIntoConstraints = false
+        composer.onSend = { [weak self] text in
+            guard let self else { return }
+            listView.apply(listView.content + [ViewModel(text: text)], animated: true)
+            listView.scrollToBottom(animated: true)
+        }
+        view.addSubview(composer)
+        composer.translatesAutoresizingMaskIntoConstraints = false
 
         NSLayoutConstraint.activate([
             listView.topAnchor.constraint(equalTo: view.topAnchor),
-            listView.bottomAnchor.constraint(equalTo: inputBar.topAnchor),
+            listView.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
             listView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
             listView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
-            inputBar.leadingAnchor.constraint(equalTo: view.leadingAnchor),
-            inputBar.trailingAnchor.constraint(equalTo: view.trailingAnchor),
-            inputBar.bottomAnchor.constraint(equalTo: view.keyboardLayoutGuide.topAnchor),
-
-            textField.topAnchor.constraint(equalTo: inputBar.topAnchor, constant: 8),
-            textField.bottomAnchor.constraint(equalTo: inputBar.bottomAnchor, constant: -8),
-            textField.leadingAnchor.constraint(equalTo: inputBar.safeAreaLayoutGuide.leadingAnchor, constant: 16),
-            textField.trailingAnchor.constraint(equalTo: inputBar.safeAreaLayoutGuide.trailingAnchor, constant: -16),
-            textField.heightAnchor.constraint(equalToConstant: 40),
+            composer.leadingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.leadingAnchor,
+                constant: Self.composerMargin * 1.5
+            ),
+            composer.trailingAnchor.constraint(
+                equalTo: view.safeAreaLayoutGuide.trailingAnchor,
+                constant: -Self.composerMargin * 1.5
+            ),
+            composer.bottomAnchor.constraint(
+                equalTo: view.keyboardLayoutGuide.topAnchor,
+                constant: -Self.composerMargin
+            ),
         ])
 
         listView.apply([
@@ -122,6 +130,10 @@ final class ViewController: UIViewController {
         listView.apply(listView.content.shuffled(), animated: true)
     }
 
+    @objc func dismissKeyboard() {
+        view.endEditing(true)
+    }
+
     /// A streaming response: append once, then update that one row as tokens
     /// arrive. `update` never diffs the rest of the list.
     @objc func compose() {
@@ -159,22 +171,6 @@ final class ViewController: UIViewController {
 /// apart: growth below it and a bottom-pinned resize leave it where it is,
 /// and only scrolling moves it.
 @MainActor
-extension ViewController: UITextFieldDelegate {
-    /// Adds a row and keeps the keyboard up, so an insertion can be watched
-    /// while the list is resized around it.
-    func textFieldShouldReturn(_ textField: UITextField) -> Bool {
-        let text = textField.text?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        guard !text.isEmpty else {
-            textField.resignFirstResponder()
-            return false
-        }
-        textField.text = nil
-        listView.apply(listView.content + [ViewModel(text: text)], animated: true)
-        listView.scrollToBottom(animated: true)
-        return false
-    }
-}
-
 struct TailFollower {
     private var followedEdge: CGFloat?
 
