@@ -92,31 +92,60 @@ struct ListViewReorderAnimationTests {
     /// the first animation ending early: the rows stop dead mid-slide and set
     /// off again. Both orders here move row 0 further down, so a stall shows up
     /// as lost speed rather than as a change of direction.
+    ///
+    /// Speeds are taken per second of real time, and a run whose frames
+    /// overran is thrown away and run again. A busy machine can stretch a
+    /// frame's run-loop slice to a quarter of a second, and by then the first
+    /// slide has nearly landed: a row slowing into its destination looks
+    /// exactly like the stall this is looking for.
     @Test
     func interruptingAReorderKeepsTheRowsMoving() throws {
+        for _ in 0 ..< 10 {
+            guard let speeds = try speedsAcrossAnInterruptedReorder() else { continue }
+            // The row has to be genuinely under way, or there is no stall to
+            // catch: a point a frame at 60Hz.
+            #expect(speeds.before > 60)
+            // Measured: ~0.93x of the previous frame's speed when the slide is
+            // additive, ~0.11x when the new animation replaces the old one.
+            #expect(speeds.after > speeds.before / 2)
+            return
+        }
+        // Not a failure of the list: there was no run to judge it on.
+        withKnownIssue("Every run overran its frames; the machine was too busy to measure on.", isIntermittent: true) {
+            Issue.record("No run kept its frames on time.")
+        }
+    }
+
+    /// Row 0's speed, in points per second, in the frame before a second
+    /// reorder and the frame after it, or nil if the timing overran.
+    private func speedsAcrossAnInterruptedReorder() throws -> (before: CGFloat, after: CGFloat)? {
         let listView = makeListView()
         let row = try #require(listView.rowView(for: 0))
 
         listView.apply([4, 0, 1, 2, 3].map { ReorderItem(id: $0) }, animated: true)
-        // A layer has no presentation value until something commits a frame.
-        advanceOneFrame()
-        var speedBefore: CGFloat = 0
-        for _ in 0 ..< 8 {
-            let start = try #require(presentationY(of: row))
-            advanceOneFrame()
-            speedBefore = try #require(presentationY(of: row)) - start
-        }
-        // The row has to be genuinely under way, or there is no stall to catch.
-        #expect(speedBefore > 1)
+        let started = CACurrentMediaTime()
+        // Long enough for frames to have been committed and the slide to be
+        // under way. Only the two frames measured below have to be on time.
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        guard let before = try speed(of: row) else { return nil }
 
         listView.apply([3, 4, 0, 1, 2].map { ReorderItem(id: $0) }, animated: true)
-        let start = try #require(presentationY(of: row))
-        advanceOneFrame()
-        let speedAfter = try #require(presentationY(of: row)) - start
+        guard let after = try speed(of: row) else { return nil }
+        // The first slide lasts half a second, and past this it is already
+        // slowing to land.
+        guard CACurrentMediaTime() - started < 0.3 else { return nil }
+        return (before, after)
+    }
 
-        // Measured: ~0.93x of the previous frame's speed when the slide is
-        // additive, ~0.11x when the new animation replaces the old one.
-        #expect(speedAfter > speedBefore / 2)
+    /// Points per second across one frame, or nil if the frame overran.
+    private func speed(of row: ListRowView) throws -> CGFloat? {
+        let startY = try #require(presentationY(of: row))
+        let startTime = CACurrentMediaTime()
+        advanceOneFrame()
+        let endY = try #require(presentationY(of: row))
+        let elapsed = CACurrentMediaTime() - startTime
+        guard elapsed < 2.0 / 60 else { return nil }
+        return (endY - startY) / elapsed
     }
 
     /// Blending two animations must not cost the destination: whatever the
