@@ -138,6 +138,10 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
     private var layoutContentDepth = 0
     var deepestLayoutContentDepth = 0
 
+    /// Where the animated scroll in flight was asked to go, if it was asked
+    /// for a row or the end rather than an offset.
+    var scrollDestination: ListScrollDestination<Item.ID>?
+
     var isSliceDrainScheduled = false
     /// How many drain passes have started, so a test can show that one held
     /// off by a drag costs a handful of wake-ups rather than a spinning run
@@ -446,6 +450,9 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
             measureViewport()
             contentSize = supposedContentSize
         }
+        // Every measurement this pass makes, and any the drain made since the
+        // last one, is in by now.
+        retargetScrollDestination()
 
         // A pass inside a host's animation — the keyboard resizing the list,
         // say — moves the viewport on screen over the length of that
@@ -474,6 +481,20 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         removeUnusedRowsFromSuperview()
         settleNewlyPlacedRows()
         applyRowAnimator()
+    }
+
+    /// Returns the rows to rest whenever the list changes windows.
+    ///
+    /// The animator's link ticks only while the list is in a window. Leaving
+    /// one mid-spring would hold the rows displaced, with a link waiting for
+    /// a frame that will not come. Entering one is no better: a layout pass
+    /// outside a window can still displace rows, and the link it would need
+    /// to settle them is never started there. Nobody saw either motion, so
+    /// neither is worth finishing.
+    override func windowDidChange() {
+        super.windowDidChange()
+        guard rowAnimator != nil else { return }
+        resetRowAnimator()
     }
 
     /// Lays out the rows placed during this pass, with animation suppressed.
@@ -764,7 +785,11 @@ public final class ListView<Item: Identifiable & Hashable & SendableMetatype>: L
         return entry.view
     }
 
+    /// Runs twice in every layout pass, which on most frames of a scroll has
+    /// recycled nothing. The early return keeps those frames from building a
+    /// set of every mounted row only to find nothing to look up in it.
     private func removeUnusedRowsFromSuperview() {
+        guard !rowsPendingRemoval.isEmpty else { return }
         let pending = rowsPendingRemoval
         rowsPendingRemoval.removeAll(keepingCapacity: true)
         let reused = Set(visibleRows.values.map { ObjectIdentifier($0.view) })

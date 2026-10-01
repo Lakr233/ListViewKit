@@ -407,12 +407,9 @@ struct ListViewScrollAppKitTests {
         #expect(mounted == reported)
     }
 
-    /// An animated scroll to a row far down an unmeasured list lands on the
-    /// row. The target is resolved once, from 44pt estimates; rows measured
-    /// on the way past sit at or below the compensation anchor, so nothing
-    /// moves the target with them and the scroll stops short.
-    @Test
-    func animatedScrollToAnEstimatedRowLandsOnIt() {
+    /// A 200-row list whose rows are all 150pt and all still at the 44pt
+    /// estimate.
+    private func makeUnmeasuredListView() -> ListView<ScrollItem> {
         let probe = HeightProbe()
         for id in 0 ..< 200 { probe.heights[id] = 150 }
         let listView = ListView<ScrollItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
@@ -424,11 +421,15 @@ struct ListViewScrollAppKitTests {
         listView.apply((0 ..< 200).map { ScrollItem(id: $0) })
         listView.needsLayout = true
         listView.layoutSubtreeIfNeeded()
+        return listView
+    }
 
-        listView.scrollToRow(at: 60, at: .top, animated: true)
+    /// Runs the programmatic scroll to the end, laying out after every frame
+    /// the way a real one would.
+    private func flyScroll(_ listView: ListView<ScrollItem>, frames: Int = 2000) {
         let period = 1.0 / 60.0
         var now: TimeInterval = 0
-        for _ in 0 ..< 2000 where listView.scrollingDisplayLink != nil {
+        for _ in 0 ..< frames where listView.scrollingDisplayLink != nil {
             now += period
             listView.handleScrollingAnimation(.init(
                 timestamp: now,
@@ -436,12 +437,87 @@ struct ListViewScrollAppKitTests {
             ))
             listView.layoutSubtreeIfNeeded()
         }
+    }
+
+    /// An animated scroll to a row far down an unmeasured list lands on the
+    /// row. Its offset starts out computed from 44pt estimates, and rows
+    /// measured on the way sit at or below the compensation anchor, so
+    /// compensation does not move the target with them: only resolving the
+    /// row again after each pass does.
+    @Test
+    func animatedScrollToAnEstimatedRowLandsOnIt() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToRow(at: 60, at: .top, animated: true)
+        flyScroll(listView)
 
         let rowTop = listView.rectForRow(at: 60).minY
         let viewportTop = listView.contentOffset.y + listView.adjustedContentInset.top
-        withKnownIssue("S5: the target is not re-resolved as rows are measured") {
-            #expect(abs(rowTop - viewportTop) < 1)
-        }
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(abs(rowTop - viewportTop) < 1)
+    }
+
+    /// The same for the other end of the row, where `.nearest` resolves to
+    /// for a row below the viewport.
+    @Test
+    func animatedScrollToTheNearestEdgeOfAnEstimatedRowLandsOnIt() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToRow(at: 60, at: .nearest, animated: true)
+        flyScroll(listView)
+
+        let rowBottom = listView.rectForRow(at: 60).maxY
+        let viewportBottom = listView.contentOffset.y + listView.bounds.height
+            - listView.adjustedContentInset.bottom
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(abs(rowBottom - viewportBottom) < 1)
+    }
+
+    /// Rows measured during the flight grow the content, so the end the
+    /// scroll set out for is no longer the end.
+    @Test
+    func animatedScrollToTheBottomOfAnEstimatedListReachesIt() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToBottom(animated: true)
+        flyScroll(listView)
+
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(listView.isScrolledToBottom())
+    }
+
+    /// A destination belongs to the scroll that set out for it. Once that
+    /// scroll is stopped, measurement must not start it up again.
+    @Test
+    func aStoppedScrollIsNotRetargeted() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToRow(at: 60, at: .top, animated: true)
+        flyScroll(listView, frames: 20)
+        let stoppedAt = listView.contentOffset
+        listView.setContentOffset(stoppedAt, animated: false)
+        listView.invalidateLayout()
+        listView.layoutSubtreeIfNeeded()
+
+        #expect(listView.scrollingDisplayLink == nil)
+        #expect(listView.scrollDestination == nil)
+    }
+
+    /// Nor may it steer a scroll someone else started.
+    @Test
+    func aReplacedScrollIsNotRetargeted() {
+        let listView = makeUnmeasuredListView()
+
+        listView.scrollToRow(at: 60, at: .top, animated: true)
+        flyScroll(listView, frames: 20)
+        listView.scroll(to: CGPoint(x: 0, y: 0))
+        flyScroll(listView, frames: 5)
+
+        // Measurement on the way back may shift the target with the content,
+        // but never point it at the row again.
+        let rowOffset = listView.rectForRow(at: 60).minY
+        #expect(abs(CGFloat(listView.scrollingContext.y.target) - rowOffset) > 1_000)
+        #expect(listView.scrollDestination == nil)
     }
 }
 #endif

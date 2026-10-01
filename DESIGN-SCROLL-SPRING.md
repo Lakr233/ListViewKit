@@ -373,13 +373,16 @@ row i 自己就会动一点（`|c − a|` 是它中心到锚点的距离，通�
 
 所以弹簧自己拥有一条 display link，与 `scrollingDisplayLink` 完全独立：
 
-- UIKit：一条独立的 `CADisplayLink`。**不能用 `CADisplayLink(target: self,)`**——
-  run loop 强引用 link、link 强引用 target，现有代码靠 `cancelCurrentScrolling()`
-  的显式 invalidate 兜住，而这条 link 的存活由用户代码的 `wantsNextFrame` 决定，
-  兜不住。用一个持有弱引用的私有 proxy 做 target。
-- AppKit：一条独立的 `DisplayLink`（DisplayLink 3.0），绑定 `.view(self)`。
+- 两端都是一条独立的 `DisplayLink`（DisplayLink 3），绑定 `.view(self)`。
+  **不能用 `CADisplayLink(target: self,)`**——run loop 强引用 link、link 强引用
+  target，而这条 link 的存活由用户代码的 `wantsNextFrame` 决定，兜不住。
   `ListScrollView` 已经是滚动那条 link 的 delegate，弹簧的 link 不能再委派给它，
   所以由 `RowAnimatorDisplayLink` 自己做 delegate，用弱引用闭包回到列表。
+- 滚动那条 link 在 UIKit 上原本也是 `CADisplayLink(target: self,)`，现在同样换成
+  绑定视图的 `DisplayLink`。两条 link 都显式请求同一个帧率区间
+  （`DisplayLinkFrameRateRange.list`），同一块屏幕上共用一条系统 link。
+- `.view` link 只在视图有 window 时才 tick。所以视图换 window（进或出）时，
+  滚动直接落到目标（惯性原地停下），行动画器整体复位——不等一帧不会来的 tick。
 
 **生命周期**（§7.5 的完整规则）：
 
