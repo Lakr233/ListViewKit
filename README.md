@@ -246,6 +246,36 @@ own, which also keeps the scroller's geometry pass from running at all. Either
 way this hides the report, not the range: everything still scrolls exactly as
 far as it did.
 
+### Subclassing
+
+`ListView`, `ListScrollView` and `ListRowView` are all `open`, and so is the
+row lifecycle: a subclass can step into mounting (`mountRowView(at:)`),
+filling in (`configureRowView(_:with:at:registrationIndex:)`,
+`reconfigureRow(with:)`), recycling (`recycleRow(with:)`) and the reuse pool
+(`makeRowView(forRegistrationAt:)`, `dequeueReusableRowView(forRegistrationAt:)`,
+`enqueueReusableRowView(_:forRegistrationAt:)`), as well as the content
+calls, `layoutContent()` and the scroll calls.
+
+```swift
+final class ChatList: ListView<Message> {
+    var streamingID: Message.ID?
+
+    /// Keeps the streaming answer's row out of the pool while it is
+    /// scrolled away.
+    override func recycleRow(with identifier: Message.ID) -> ListRowView? {
+        if identifier == streamingID { return nil }
+        return super.recycleRow(with: identifier)
+    }
+}
+```
+
+Overrides must call `super` unless the member's documentation says
+otherwise. What stays closed is storage the list keeps consistent across those
+calls, and the work and reads done on every layout pass — the pass's own
+mounting, placing and recycling loops, `contentOffset`, `contentSize`,
+`rectForRow(at:)`, `placedFrame`, `topInset` — where an overridable member
+would cost dynamic dispatch on the hottest path.
+
 ## Migrating from 2.x
 
 | 2.x | 3.0 |
