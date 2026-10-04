@@ -65,6 +65,8 @@ struct ListRowAnimatorPublicAPITests {
 
     private func makeListView(count: Int = 200) -> ListView<APIItem> {
         let listView = ListView<APIItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { _, _ in Self.rowHeight }
@@ -150,6 +152,8 @@ struct ListRowAnimatorPublicAPITests {
     func overscannedRowsAreNotChurned() {
         var configureCounts: [Int: Int] = [:]
         let listView = ListView<APIItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { _, _ in Self.rowHeight }
@@ -293,6 +297,8 @@ struct ListRowAnimatorPublicAPITests {
     func aListWithNoAnimatorDoesNoAnimatorWork() {
         var configureCounts = 0
         let listView = ListView<APIItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { _, _ in Self.rowHeight }

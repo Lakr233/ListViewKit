@@ -89,6 +89,8 @@ struct ListRowAnimatorShapeTests {
 
     private func makeListView(count: Int = 60) -> ListView<ShapeItem> {
         let listView = ListView<ShapeItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { _, _ in Self.rowHeight }
@@ -271,6 +273,8 @@ struct ListRowAnimatorShapeTests {
     @Test
     func measurementDrivenCompensationAlsoRebases() {
         let listView = ListView<ShapeItem>(frame: CGRect(x: 0, y: 0, width: 200, height: 400))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 // Taller than the estimate, so measuring rows above the

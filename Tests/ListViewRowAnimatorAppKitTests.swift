@@ -49,6 +49,8 @@ struct ListViewRowAnimatorAppKitTests {
         size: CGSize = CGSize(width: 200, height: 400)
     ) -> ListView<AnimatorItem> {
         let listView = ListView<AnimatorItem>(frame: CGRect(origin: .zero, size: size))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { _, _ in Self.rowHeight }

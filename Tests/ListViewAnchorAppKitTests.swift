@@ -33,6 +33,8 @@ struct ListViewAnchorAppKitTests {
     private func makeContext(count: Int = 100, height: CGFloat = 400) -> Context {
         let probe = AnchorProbe()
         let listView = ListView<AnchorItem>(frame: CGRect(x: 0, y: 0, width: 400, height: height))
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
         listView.rows {
             ListRow(ListRowView.self)
                 .height { item, ctx in probe.height(of: item, width: ctx.width) }
