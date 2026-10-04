@@ -43,26 +43,6 @@ public extension ListView {
         guard let index = index(of: identifier) else { return .zero }
         return rectForRow(at: index)
     }
-
-    /// Invalidates every row height.
-    ///
-    /// Prefer ``invalidateLayout(forRowWith:)`` when one self-sizing row
-    /// changes: keeping the other measurements is substantially cheaper for
-    /// streaming or expandable content.
-    func invalidateLayout() {
-        rowLayout.invalidateAll()
-        requestLayout()
-    }
-
-    /// Invalidates the measured height of one row.
-    ///
-    /// Use this when hosted or expandable content changes size without the
-    /// item itself changing. The row keeps its current height as an estimate
-    /// until it is measured again.
-    func invalidateLayout(forRowWith identifier: Item.ID) {
-        rowLayout.invalidateHeights(for: CollectionOfOne(identifier))
-        requestLayout()
-    }
 }
 
 /// Internal collaboration with ``ListRowLayout``.

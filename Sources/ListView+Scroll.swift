@@ -45,46 +45,6 @@ struct ListScrollDestination<ID: Hashable> {
     let serial: UInt
 }
 
-public extension ListView {
-    /// Scrolls until the row at `index` sits at `position`.
-    ///
-    /// Animated, the scroll keeps heading for the row as rows on the way are
-    /// measured, so it lands on the row rather than on where the estimates
-    /// placed it.
-    func scrollToRow(at index: Int, at position: ListRowPosition, animated: Bool = true) {
-        guard index >= 0, index < content.count else { return }
-
-        let placement = resolvedPlacement(ofRowAt: index, at: position)
-        let targetOffset = placement.map { offset(showingRowAt: index, at: $0) } ?? contentOffset
-        guard animated else {
-            setContentOffset(targetOffset, animated: false)
-            return
-        }
-        scroll(to: targetOffset)
-        if let placement {
-            scrollDestination = .init(place: .row(content[index].id, placement), serial: scrollingSerial)
-        }
-    }
-
-    /// Scrolls until the row for `identifier` sits at `position`.
-    func scrollToRow(with identifier: Item.ID, at position: ListRowPosition, animated: Bool = true) {
-        guard let index = index(of: identifier) else { return }
-        scrollToRow(at: index, at: position, animated: animated)
-    }
-
-    /// Scrolls to the end of the content.
-    ///
-    /// Animated, the scroll follows the end as rows on the way are measured.
-    func scrollToBottom(animated: Bool = true) {
-        guard animated else {
-            setContentOffset(maximumContentOffset, animated: false)
-            return
-        }
-        scroll(to: maximumContentOffset)
-        scrollDestination = .init(place: .bottom, serial: scrollingSerial)
-    }
-}
-
 extension ListView {
     /// Points the scroll in flight at where its destination is now.
     ///
@@ -115,7 +75,7 @@ extension ListView {
     /// Turns `.nearest` into the edge the row will be aligned to, or `nil`
     /// when it is already fully visible and nothing should move. Every other
     /// position is returned as it is.
-    private func resolvedPlacement(ofRowAt index: Int, at position: ListRowPosition) -> ListRowPosition? {
+    func resolvedPlacement(ofRowAt index: Int, at position: ListRowPosition) -> ListRowPosition? {
         guard position == .nearest else { return position }
         let targetRect = rectForRow(at: index)
         let insets = adjustedContentInset
@@ -131,7 +91,7 @@ extension ListView {
         return .bottom
     }
 
-    private func offset(showingRowAt index: Int, at position: ListRowPosition) -> CGPoint {
+    func offset(showingRowAt index: Int, at position: ListRowPosition) -> CGPoint {
         let targetRect = rectForRow(at: index)
         let insets = adjustedContentInset
         let visibleHeight = max(0, bounds.height - insets.top - insets.bottom)
