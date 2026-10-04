@@ -39,7 +39,7 @@ struct ListViewReorderAnimationTests {
         let frame = CGRect(x: 0, y: 0, width: 400, height: 600)
         let listView = ListView<ReorderItem>(frame: frame)
         #if canImport(UIKit)
-            let window = UIWindow(frame: frame)
+            let window = makeWindow(frame: frame)
             window.addSubview(listView)
             window.makeKeyAndVisible()
         #else
@@ -60,6 +60,22 @@ struct ListViewReorderAnimationTests {
         settleLayout(listView)
         return listView
     }
+
+    #if canImport(UIKit)
+        /// A window that draws. In an app with scenes, a window outside every
+        /// scene is never on screen, so nothing commits frames for its layers
+        /// and they have no presentation value; such a host gets the window
+        /// attached to its scene.
+        private func makeWindow(frame: CGRect) -> UIWindow {
+            let scene = UIApplication.shared.connectedScenes
+                .compactMap { $0 as? UIWindowScene }
+                .first
+            guard let scene else { return UIWindow(frame: frame) }
+            let window = UIWindow(windowScene: scene)
+            window.frame = frame
+            return window
+        }
+    #endif
 
     private func settleLayout(_ listView: ListView<ReorderItem>) {
         #if canImport(UIKit)
