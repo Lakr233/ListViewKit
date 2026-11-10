@@ -67,6 +67,30 @@ struct ListViewReconfigureTests {
         #expect(row.configuredText == "hello world")
     }
 
+    @Test("rebuilding rows detaches a recycled view before the next layout", arguments: [false, true])
+    func rebuildDetachesPendingRecycledView(replaceRegistrations: Bool) throws {
+        let listView = makeListView()
+        listView.apply([ReconfigureItem(id: 1, text: "hello")])
+        let recycled = try #require(listView.recycleRow(with: 1))
+        #expect(recycled.superview === listView)
+
+        if replaceRegistrations {
+            listView.rows {
+                ListRow(ReconfigureRow.self)
+                    .height { _, _ in 44 }
+                    .configure { row, item, _ in row.configuredText = item.text }
+            }
+        } else {
+            listView.reloadData()
+        }
+
+        #expect(recycled.superview == nil)
+        listView.layoutSubtreeIfNeeded()
+        let replacement = try #require(listView.rowView(for: 1))
+        #expect(replacement !== recycled)
+        #expect(replacement.superview === listView)
+    }
+
     /// A row coming back from the pool is showing someone else's content, so
     /// it does get reset.
     @Test("a recycled row is reset before it is filled in again")

@@ -441,13 +441,14 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     }
 
     private final func reloadRowViews() {
+        // Recycled rows may still be attached until the next layout.
+        removeUnusedRowsFromSuperview()
         for entry in visibleRows.values {
             forgetRowAnimation(of: entry.view)
             entry.view.removeFromSuperview()
         }
         visibleRows.removeAll()
         heldRows.removeAll()
-        rowsPendingRemoval.removeAll()
         rowsPendingSettle.removeAll()
         for index in reusePools.indices {
             reusePools[index].removeAll()
