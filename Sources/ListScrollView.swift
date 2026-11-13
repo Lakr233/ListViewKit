@@ -382,25 +382,34 @@ import DisplayLink
         // touch input. macOS trackpad scrolling uses 0.075; 0.55 is the touch
         // coefficient used by UIKit-style rubber banding.
         static let rubberBandCoefficient: CGFloat = 0.075
+        static let touchRubberBandCoefficient: CGFloat = 0.55
         static let reboundAmplitude: CGFloat = 0.31
         static let reboundPeriod: TimeInterval = 1.6
         static let reboundStiffness: CGFloat = 20
         static let maximumReboundVelocity: CGFloat = 20_000
 
-        static func elasticDelta(forReboundDelta delta: CGFloat, dimension: CGFloat) -> CGFloat {
+        static func elasticDelta(
+            forReboundDelta delta: CGFloat,
+            dimension: CGFloat,
+            coefficient: CGFloat = rubberBandCoefficient
+        ) -> CGFloat {
             guard dimension > 0 else { return 0 }
             let magnitude = abs(delta)
-            let elasticMagnitude = dimension * magnitude * rubberBandCoefficient
-                / (dimension + magnitude * rubberBandCoefficient)
+            let elasticMagnitude = dimension * magnitude * coefficient
+                / (dimension + magnitude * coefficient)
             return delta < 0 ? -elasticMagnitude : elasticMagnitude
         }
 
-        static func reboundDelta(forElasticDelta delta: CGFloat, dimension: CGFloat) -> CGFloat {
+        static func reboundDelta(
+            forElasticDelta delta: CGFloat,
+            dimension: CGFloat,
+            coefficient: CGFloat = rubberBandCoefficient
+        ) -> CGFloat {
             guard dimension > 0 else { return 0 }
             let magnitude = abs(delta)
             guard magnitude < dimension else { return delta }
             let reboundMagnitude = magnitude * dimension
-                / (rubberBandCoefficient * (dimension - magnitude))
+                / (coefficient * (dimension - magnitude))
             return delta < 0 ? -reboundMagnitude : reboundMagnitude
         }
 
@@ -517,6 +526,36 @@ import DisplayLink
         }
     }
 
+    /// Target and delegate of the touch-display pan. A separate object so the
+    /// Objective-C surface it needs stays off the open scroll view.
+    @MainActor
+    private final class ListTouchPanDriver: NSObject, NSGestureRecognizerDelegate {
+        weak var owner: ListScrollView?
+
+        @objc func handlePan(_ recognizer: NSPanGestureRecognizer) {
+            owner?.touchPanDidChange(recognizer)
+        }
+
+        func gestureRecognizer(_: NSGestureRecognizer, shouldReceive touch: NSTouch) -> Bool {
+            owner?.shouldScroll(with: touch) ?? false
+        }
+
+        func gestureRecognizer(
+            _: NSGestureRecognizer,
+            shouldBeRequiredToFailBy other: NSGestureRecognizer
+        ) -> Bool {
+            owner?.touchScrollTakesPrecedence(over: other) ?? false
+        }
+
+        func gestureRecognizerShouldBegin(_ recognizer: NSGestureRecognizer) -> Bool {
+            guard let owner, let pan = recognizer as? NSPanGestureRecognizer else { return true }
+            // The list scrolls one way. A sideways drag belongs to whatever
+            // is inside the row; magnitudes only, so flipping cannot matter.
+            let translation = pan.translation(in: owner)
+            return abs(translation.y) >= abs(translation.x)
+        }
+    }
+
     open class ListScrollView: NSView {
         // Members that are not open are `final`, so the list's calls into
         // them stay direct now that `ListView` is open. See `ListView`.
@@ -572,6 +611,21 @@ import DisplayLink
         /// Raw (un-rubber-banded) Y offset during user scroll tracking.
         /// Delta is always applied to this value; rubber-band is applied only for display.
         private final var _trackingRawOffsetY: CGFloat = 0
+
+        /// How hard the edge resists the gesture in progress. A finger on the
+        /// display pulls the content further past an edge than a trackpad does.
+        private final var _trackingRubberBandCoefficient = AppKitScrollPhysics.rubberBandCoefficient
+
+        /// True while a finger on a touch display is dragging the list.
+        ///
+        /// AppKit turns a touch into scroll-wheel events only for views it
+        /// takes for a non-AppKit framework's; a plain `NSView` overriding
+        /// `scrollWheel(with:)` receives nothing. So the touch is tracked by a
+        /// pan recognizer of our own, and feeds the same raw-offset tracking
+        /// the wheel does.
+        private final var _isTouchPanning = false
+        private final var _touchPanViewportY: CGFloat = 0
+        private final let touchPanDriver = ListTouchPanDriver()
 
         /// Where the pointer last delivered a scroll event, measured from the
         /// viewport's top edge. See the UIKit twin for why viewport-relative.
@@ -760,6 +814,31 @@ import DisplayLink
             scrollerOverlay.documentView = scrollerDocumentView
             addSubview(scrollerOverlay)
             updateVerticalScroller()
+            installTouchScrolling()
+        }
+
+        /// Makes the list answer a finger on a touch display (macOS 27).
+        ///
+        /// Direct touches never reach the responder chain; a gesture
+        /// recognizer is the only way to hear them. With no mouse button in
+        /// its mask this one hears nothing else, so the mouse and the trackpad
+        /// keep arriving through `scrollWheel(with:)` exactly as before.
+        private final func installTouchScrolling() {
+            guard #available(macOS 27.0, *) else { return }
+            touchPanDriver.owner = self
+            let pan = NSPanGestureRecognizer(
+                target: touchPanDriver,
+                action: #selector(ListTouchPanDriver.handlePan(_:))
+            )
+            pan.buttonMask = 0
+            pan.allowedTouchTypes = .direct
+            pan.delegate = touchPanDriver
+            addGestureRecognizer(pan)
+            // The overlay exists for its scroller. Its own touch scrolling
+            // would move a document nobody sees, underneath a knob drag.
+            // `isTouchScrollingEnabled`, set by key: the property is new in
+            // the macOS 27 SDK, and an older one still has to build this file.
+            scrollerOverlay.setValue(false, forKey: "touchScrollingEnabled")
         }
 
         @available(*, unavailable)
@@ -798,6 +877,7 @@ import DisplayLink
             // end of the native momentum it was ignoring.
             let wasTracking = _isTracking
             _isTracking = false
+            _isTouchPanning = false
             _ignoresMomentumEvents = false
             // Nothing else is left to bring back an overscroll the finger was
             // holding when it lost the view.
@@ -1031,6 +1111,9 @@ import DisplayLink
         }
 
         override open func scrollWheel(with event: NSEvent) {
+            // One hand at a time: a finger already dragging the list owns the
+            // offset, and a wheel applied on top would count the motion twice.
+            guard !_isTouchPanning else { return }
             scrollerOverlay.observeScrollWheel(event)
 
             // Every wheel event carries the pointer, including momentum ones.
@@ -1038,8 +1121,6 @@ import DisplayLink
                 _lastScrollWheelViewportY = convert(event.locationInWindow, from: nil).y - contentOffset.y
             }
 
-            let min = minimumContentOffset
-            let max = maximumContentOffset
             let isDiscreteWheelEvent = event.phase.isEmpty && event.momentumPhase.isEmpty
             let hasDirectGesturePhase = !event.phase.isEmpty
             let startsDirectInteraction = hasDirectGesturePhase && (
@@ -1086,56 +1167,16 @@ import DisplayLink
                 // .changed while the previous momentum stream is still ending.
                 // Always rebase raw tracking on the current visual offset so a
                 // tiny follow-up gesture cannot jump back to the prior release point.
-                _isTracking = true
-                _isBouncing = false
                 // Do not clear _ignoresMomentumEvents here. AppKit can deliver the
                 // old momentum tail after a new direct touch has already started.
-                cancelCurrentScrolling()
-                // Initialize raw offset from current visual position.
-                // If out of bounds (e.g. grabbed during bounce-back animation),
-                // invert the rubber-band to recover the raw position for continuity.
-                let currentY = contentOffset.y
-                if currentY < min.y {
-                    let visualOverscroll = min.y - currentY
-                    _trackingRawOffsetY = min.y - inverseRubberBand(visualOverscroll, dimension: bounds.height)
-                } else if currentY > max.y {
-                    let visualOverscroll = currentY - max.y
-                    _trackingRawOffsetY = max.y + inverseRubberBand(visualOverscroll, dimension: bounds.height)
-                } else {
-                    _trackingRawOffsetY = currentY
-                }
-                _scrollVelocityY = 0
-                _prevScrollTime = event.timestamp
-                _lastVelocitySampleTime = event.timestamp
+                beginTracking(
+                    timestamp: event.timestamp,
+                    rubberBandCoefficient: AppKitScrollPhysics.rubberBandCoefficient
+                )
             }
 
             let deltaY = event.scrollingDeltaY * (event.hasPreciseScrollingDeltas ? 1 : 10)
-            let previousRawOffsetY = _trackingRawOffsetY
-            _trackingRawOffsetY -= deltaY
-
-            // Apply rubber-band only for display
-            var visualY = _trackingRawOffsetY
-            if visualY < min.y {
-                let overscroll = min.y - visualY
-                visualY = min.y - rubberBand(overscroll, dimension: bounds.height)
-            } else if visualY > max.y {
-                let overscroll = visualY - max.y
-                visualY = max.y + rubberBand(overscroll, dimension: bounds.height)
-            }
-
-            // AppKit feeds the undamped gesture velocity into its snap-back
-            // curve. The ended event commonly carries a zero delta, so retain
-            // the last meaningful estimate rather than replacing it with zero.
-            let now = event.timestamp
-            let dt = now - _prevScrollTime
-            let rawDisplacement = _trackingRawOffsetY - previousRawOffsetY
-            if dt > 0 && dt < 0.1 && abs(rawDisplacement) > 0.5 {
-                _scrollVelocityY = rawDisplacement / dt
-                _lastVelocitySampleTime = now
-            } else if now - _lastVelocitySampleTime >= 0.1 {
-                _scrollVelocityY = 0
-            }
-            _prevScrollTime = now
+            let visualY = trackedVisualOffsetY(applyingDelta: deltaY, timestamp: event.timestamp)
 
             if isDiscreteWheelEvent {
                 // A detented wheel jumps a line at a time; there is no glide
@@ -1180,17 +1221,7 @@ import DisplayLink
             // Finger lifted while out of bounds → immediately rebound with velocity.
             // Do not wait for momentum; AppKit's decay curve owns the handoff.
             if event.phase == .ended || event.phase == .cancelled {
-                _isTracking = false
-                let clamped = nearestScrollLocationInBounds(offset: contentOffset)
-                if clamped != contentOffset {
-                    _ignoresMomentumEvents = true
-                    startRubberBandAnimation(to: clamped, velocityY: _scrollVelocityY)
-                    return
-                }
-                if event.phase == .ended, startMomentumAnimation(velocityY: _scrollVelocityY) {
-                    return
-                }
-                // A cancelled gesture stops in place.
+                if endTracking(cancelled: event.phase == .cancelled) { return }
             }
 
             // Momentum ended while out of bounds (e.g. momentum carried past bounds)
@@ -1203,12 +1234,191 @@ import DisplayLink
             }
         }
 
+        /// Starts a gesture that drags the content: rebases raw tracking on
+        /// wherever the content visibly is, and stops whatever was moving it.
+        private final func beginTracking(timestamp: TimeInterval, rubberBandCoefficient: CGFloat) {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+            _isTracking = true
+            _isBouncing = false
+            _trackingRubberBandCoefficient = rubberBandCoefficient
+            cancelCurrentScrolling()
+            // Initialize raw offset from current visual position.
+            // If out of bounds (e.g. grabbed during bounce-back animation),
+            // invert the rubber-band to recover the raw position for continuity.
+            let currentY = contentOffset.y
+            if currentY < min.y {
+                let visualOverscroll = min.y - currentY
+                _trackingRawOffsetY = min.y - inverseRubberBand(visualOverscroll, dimension: bounds.height)
+            } else if currentY > max.y {
+                let visualOverscroll = currentY - max.y
+                _trackingRawOffsetY = max.y + inverseRubberBand(visualOverscroll, dimension: bounds.height)
+            } else {
+                _trackingRawOffsetY = currentY
+            }
+            _scrollVelocityY = 0
+            _prevScrollTime = timestamp
+            _lastVelocitySampleTime = timestamp
+        }
+
+        /// Moves raw tracking by `deltaY` (positive carries the content down,
+        /// as a wheel delta does) and answers where that puts the content on
+        /// screen. The caller applies it.
+        private final func trackedVisualOffsetY(
+            applyingDelta deltaY: CGFloat,
+            timestamp now: TimeInterval
+        ) -> CGFloat {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+            let previousRawOffsetY = _trackingRawOffsetY
+            _trackingRawOffsetY -= deltaY
+
+            // Apply rubber-band only for display
+            var visualY = _trackingRawOffsetY
+            if visualY < min.y {
+                let overscroll = min.y - visualY
+                visualY = min.y - rubberBand(overscroll, dimension: bounds.height)
+            } else if visualY > max.y {
+                let overscroll = visualY - max.y
+                visualY = max.y + rubberBand(overscroll, dimension: bounds.height)
+            }
+
+            // AppKit feeds the undamped gesture velocity into its snap-back
+            // curve. The ended event commonly carries a zero delta, so retain
+            // the last meaningful estimate rather than replacing it with zero.
+            let dt = now - _prevScrollTime
+            let rawDisplacement = _trackingRawOffsetY - previousRawOffsetY
+            if dt > 0 && dt < 0.1 && abs(rawDisplacement) > 0.5 {
+                _scrollVelocityY = rawDisplacement / dt
+                _lastVelocitySampleTime = now
+            } else if now - _lastVelocitySampleTime >= 0.1 {
+                _scrollVelocityY = 0
+            }
+            _prevScrollTime = now
+            return visualY
+        }
+
+        /// Lets go of the content. Lifted while out of bounds, it rebounds
+        /// with the gesture's velocity at once rather than waiting for
+        /// momentum; AppKit's decay curve owns that handoff. Lifted in bounds,
+        /// it glides. A cancelled gesture stops in place.
+        ///
+        /// - Returns: Whether a rebound or a glide took the offset over.
+        private final func endTracking(cancelled: Bool) -> Bool {
+            _isTracking = false
+            let clamped = nearestScrollLocationInBounds(offset: contentOffset)
+            if clamped != contentOffset {
+                _ignoresMomentumEvents = true
+                startRubberBandAnimation(to: clamped, velocityY: _scrollVelocityY)
+                return true
+            }
+            return !cancelled && startMomentumAnimation(velocityY: _scrollVelocityY)
+        }
+
+        // MARK: Touch display
+
+        fileprivate final func shouldScroll(with touch: NSTouch) -> Bool {
+            guard touch.type == .direct else { return false }
+            // A finger on the scroller is dragging the knob, not the list.
+            return scrollerOverlay.hitTest(touch.location(in: self)) == nil
+        }
+
+        /// Whether `other` has to wait for the list's pan to give up.
+        ///
+        /// A row that overrides `mouseDown(with:)` — selectable text, say —
+        /// is handed a pan by AppKit that replays the finger as a mouse drag.
+        /// It is gathered alongside the list's, and left alone the two run at
+        /// once: the list scrolls while the row selects. Scrolling goes
+        /// first, as it does inside an `NSScrollView`; a sideways drag makes
+        /// the list's pan fail, and the row gets its drag after all.
+        ///
+        /// Only that pan. One a row installed for itself — a nested list, a
+        /// terminal — knows what it is doing and keeps its finger. AppKit
+        /// offers nothing public to tell the two apart, so this goes by the
+        /// action it sends; should that name change, rows are back to
+        /// dragging while the list scrolls, and nothing worse.
+        final func touchScrollTakesPrecedence(over other: NSGestureRecognizer) -> Bool {
+            guard other is NSPanGestureRecognizer,
+                  let view = other.view, view !== self, view.isDescendant(of: self),
+                  let action = other.action
+            else { return false }
+            return NSStringFromSelector(action) == "_panForLeftMouseRecognized:"
+        }
+
+        final func touchPanDidChange(_ recognizer: NSPanGestureRecognizer) {
+            let timestamp = ProcessInfo.processInfo.systemUptime
+            // Measured from the viewport's top edge, which stays put while
+            // the bounds origin scrolls underneath the finger.
+            let viewportY = recognizer.location(in: self).y - bounds.origin.y
+            switch recognizer.state {
+            case .began:
+                touchScrollBegan(atViewportY: viewportY, timestamp: timestamp)
+            case .changed:
+                touchScrollMoved(toViewportY: viewportY, timestamp: timestamp)
+            case .ended:
+                touchScrollEnded(cancelled: false, timestamp: timestamp)
+            case .cancelled, .failed:
+                touchScrollEnded(cancelled: true, timestamp: timestamp)
+            default:
+                break
+            }
+        }
+
+        /// The three steps of a finger dragging the list, apart from the
+        /// recognizer that reports them so tests can take its place.
+        final func touchScrollBegan(atViewportY viewportY: CGFloat, timestamp: TimeInterval) {
+            _isTouchPanning = true
+            _touchPanViewportY = viewportY
+            _lastScrollWheelViewportY = viewportY
+            suppressAutoScroll()
+            beginTracking(
+                timestamp: timestamp,
+                rubberBandCoefficient: AppKitScrollPhysics.touchRubberBandCoefficient
+            )
+        }
+
+        final func touchScrollMoved(toViewportY viewportY: CGFloat, timestamp: TimeInterval) {
+            guard _isTouchPanning else { return }
+            // The view is flipped: a finger moving down the display grows the
+            // viewport Y, and carries the content down with it.
+            let deltaY = viewportY - _touchPanViewportY
+            _touchPanViewportY = viewportY
+            _lastScrollWheelViewportY = viewportY
+            suppressAutoScroll()
+            let visualY = trackedVisualOffsetY(applyingDelta: deltaY, timestamp: timestamp)
+            applyContentOffset(.init(x: contentOffset.x, y: visualY))
+        }
+
+        final func touchScrollEnded(cancelled: Bool, timestamp: TimeInterval) {
+            guard _isTouchPanning else { return }
+            _isTouchPanning = false
+            suppressAutoScroll()
+            // The recognizer reports movement only, so a finger that came to
+            // rest before lifting left the last estimate standing.
+            if timestamp - _lastVelocitySampleTime >= 0.1 {
+                _scrollVelocityY = 0
+            }
+            // A touch has no native momentum to ignore. Whatever a trackpad
+            // gesture before it still has in flight keeps being ignored.
+            let ignoredMomentumEvents = _ignoresMomentumEvents
+            _ = endTracking(cancelled: cancelled)
+            _ignoresMomentumEvents = ignoredMomentumEvents
+        }
+
         private final func rubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
-            AppKitScrollPhysics.elasticDelta(forReboundDelta: offset, dimension: dimension)
+            AppKitScrollPhysics.elasticDelta(
+                forReboundDelta: offset,
+                dimension: dimension,
+                coefficient: _trackingRubberBandCoefficient
+            )
         }
 
         private final func inverseRubberBand(_ offset: CGFloat, dimension: CGFloat) -> CGFloat {
-            AppKitScrollPhysics.reboundDelta(forElasticDelta: offset, dimension: dimension)
+            AppKitScrollPhysics.reboundDelta(
+                forElasticDelta: offset,
+                dimension: dimension,
+                coefficient: _trackingRubberBandCoefficient
+            )
         }
 
         private final func startRubberBandAnimation(to target: CGPoint, velocityY: CGFloat) {
