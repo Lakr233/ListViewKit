@@ -83,6 +83,10 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     final var heldRows: [Item.ID: CFTimeInterval] = [:]
     /// Releases the held rows once their animations have ended.
     private final var heldRowRelease: Timer?
+    /// Rows whose boxes are still opening at a seam, by mount, with whether
+    /// each clipped before and how many unfolds it is in. See
+    /// ``beginUnfolding(_:)``.
+    final var unfoldingRows: [Int: (clipped: Bool, count: Int)] = [:]
 
     /// Displaces rows on top of the layout while the list scrolls.
     ///
@@ -255,10 +259,15 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // pass mounts the item again on the very view just pooled, the loop
         // below takes that view out of the hierarchy, and the list keeps a
         // detached row parked in the slot for good.
+        // Only stood in place here. How each one leaves — closing into a
+        // seam, or fading where it is — waits for the new layout.
+        var departing: [(identifier: Item.ID, snapshot: DisposalSnapshotView)] = []
         if animated {
             for identifier in difference.removed {
-                guard let view = visibleRows[identifier]?.view else { continue }
-                animateDisposal(of: view)
+                guard let view = visibleRows[identifier]?.view,
+                      let snapshot = placeDisposalSnapshot(of: view)
+                else { continue }
+                departing.append((identifier, snapshot))
             }
         }
         for identifier in difference.removed {
@@ -312,9 +321,26 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             layoutNow()
             return
         }
+        // Every new row fades in. One that opens a seam also grows out of
+        // it; the others stand where they belong (`ListView+Seams.swift`).
+        let openingSeams = openingSeams(
+            added: difference.added,
+            previousItems: previousItems,
+            previousIndexByID: previousIndexByID,
+            previousGeometry: previousGeometry
+        )
+        var opening: [(view: ListRowView, mountID: Int, frame: CGRect)] = []
         for identifier in difference.added {
             setAlpha(0, onRowWith: identifier, animated: false)
+            guard let seamY = openingSeams[identifier],
+                  let view = visibleRows[identifier]?.view
+            else { continue }
+            let frame = view.placedFrame
+            setRowFrame(CGRect(x: frame.minX, y: seamY, width: frame.width, height: 0), on: view, animated: false)
+            beginUnfolding(view)
+            opening.append((view, view.mountID, frame))
         }
+        let unfolding = opening
         for (identifier, entry) in visibleRows where !previouslyMounted.contains(identifier) {
             guard let previousIndex = previousIndexByID[identifier],
                   let previousFrame = previousGeometry.frame(for: previousIndex)
@@ -328,6 +354,12 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         animatesContentSizeCorrection = true
         defer { animatesContentSizeCorrection = false }
         withListAnimation {
+            // Before the pass over every row, which would slide these to
+            // their frames and leave their boxes to open at once.
+            for row in unfolding {
+                unfoldRow(to: row.frame, on: row.view)
+                row.view.requestLayout()
+            }
             self.updateVisibleRowFrames(animated: true)
             for identifier in difference.added {
                 self.setAlpha(1, onRowWith: identifier, animated: true)
@@ -337,6 +369,27 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                 // Only ask for a layout. Forcing one here would run inside a
                 // later animation if applies overlap, moving its rows early.
                 self.requestLayout()
+            }
+        }
+        if !unfolding.isEmpty {
+            afterRowSlide { [weak self] in
+                for row in unfolding {
+                    self?.endUnfolding(row.view, mountID: row.mountID)
+                }
+            }
+        }
+        guard !departing.isEmpty else { return }
+        let closingSeams = closingSeams(
+            removed: difference.removed,
+            previousItems: previousItems,
+            previousIndexByID: previousIndexByID,
+            previousGeometry: previousGeometry
+        )
+        for (identifier, snapshot) in departing {
+            if let seamY = closingSeams[identifier] {
+                foldDisposal(snapshot, toSeamAt: seamY)
+            } else {
+                fadeDisposal(snapshot)
             }
         }
     }
@@ -445,6 +498,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         removeUnusedRowsFromSuperview()
         for entry in visibleRows.values {
             forgetRowAnimation(of: entry.view)
+            stopUnfolding(entry.view)
             entry.view.removeFromSuperview()
         }
         visibleRows.removeAll()
@@ -1037,6 +1091,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     open func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
         heldRows[identifier] = nil
+        stopUnfolding(entry.view)
         // Whatever the animator was showing belonged to the item leaving, so
         // it does not travel to the next one on the same view, and neither
         // does the spring it was showing it with.

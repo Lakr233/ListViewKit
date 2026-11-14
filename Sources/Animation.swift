@@ -129,6 +129,30 @@ let listAnimationDuration: TimeInterval = 0.5
         view.transform = dy == 0 ? .identity : CGAffineTransform(translationX: 0, y: dy)
     }
 
+    /// Moves a row to its frame from a box of another height, the box
+    /// growing or closing over what the row holds.
+    ///
+    /// For a row that enters at a seam: it stands there with no height, and
+    /// travels to its frame while its box opens over it. The row's contents
+    /// are laid out for the frame it is headed to throughout, so nothing in
+    /// it moves; the box uncovers it. A block animation carries the size
+    /// with the position, on the same spring as the rows sliding beside it.
+    @MainActor
+    func unfoldRow(to frame: CGRect, on view: ListRowView) {
+        setRowFrame(frame, on: view, animated: true)
+    }
+
+    /// Whether a row cuts off what it draws past its box.
+    @MainActor
+    func rowClipsToBounds(_ view: ListRowView) -> Bool {
+        view.clipsToBounds
+    }
+
+    @MainActor
+    func setRowClipsToBounds(_ clips: Bool, on view: ListRowView) {
+        view.clipsToBounds = clips
+    }
+
 #elseif canImport(AppKit)
     import AppKit
 
@@ -136,8 +160,8 @@ let listAnimationDuration: TimeInterval = 0.5
     /// builds for a bounce of 0, spelt out because that initializer needs
     /// macOS 14: a unit mass, stiffness (2π / duration)², and the critical
     /// damping 2√stiffness.
-    private func makeRowSlide() -> CASpringAnimation {
-        let slide = CASpringAnimation(keyPath: "position")
+    private func makeRowSlide(keyPath: String = "position") -> CASpringAnimation {
+        let slide = CASpringAnimation(keyPath: keyPath)
         let angularFrequency = 2 * Double.pi / listAnimationDuration
         slide.mass = 1
         slide.stiffness = angularFrequency * angularFrequency
@@ -291,6 +315,92 @@ let listAnimationDuration: TimeInterval = 0.5
         slide.isAdditive = true
         slideSequence &+= 1
         layer.add(slide, forKey: "listRowSlide\(slideSequence)")
+    }
+
+    /// Moves a row to its frame from a box of another height, the box
+    /// growing or closing over what the row holds.
+    ///
+    /// For a row that enters at a seam: it stands there with no height, and
+    /// travels to its frame while its box opens over it. The row's contents
+    /// are laid out for the frame it is headed to throughout, so nothing in
+    /// it moves; the box uncovers it.
+    ///
+    /// ``setRowFrame(_:on:animated:)`` slides a row and lets its size change
+    /// at once, which is right for a row that was already showing. Here the
+    /// size travels too, as a second additive spring beside the slide, with
+    /// the same numbers: the row's lower edge then stays on the row sliding
+    /// under it for the whole of the move.
+    @MainActor
+    func unfoldRow(to frame: CGRect, on view: ListRowView) {
+        guard let layer = view.layer else {
+            setRowFrame(frame, on: view, animated: false)
+            return
+        }
+        let previousSize = layer.bounds.size
+        setRowFrame(frame, on: view, animated: true)
+        let closed = CGSize(
+            width: previousSize.width - layer.bounds.width,
+            height: previousSize.height - layer.bounds.height
+        )
+        guard closed != .zero else { return }
+        let unfold = makeRowSlide(keyPath: "bounds.size")
+        unfold.fromValue = closed
+        unfold.toValue = CGSize.zero
+        unfold.isAdditive = true
+        slideSequence &+= 1
+        layer.add(unfold, forKey: "listRowUnfold\(slideSequence)")
+    }
+
+    /// Closes a view over what it holds, down to nothing at `seamY`, on the
+    /// spring a row slides on.
+    ///
+    /// For the picture of a row that left at a seam. The view keeps the
+    /// frame it has: AppKit draws a view only while it has a size, and the
+    /// picture is drawn after this returns. What closes is what the reader
+    /// is shown, held where it lands until the caller takes the view away.
+    ///
+    /// Called inside the list's animation, as the rows' slides are added:
+    /// an animation added there takes the group's timing on top of its own,
+    /// and this one has to keep step with them.
+    @MainActor
+    func foldView(_ view: NSView, toSeamAt seamY: CGFloat) {
+        guard let layer = view.layer else { return }
+        let standing = view.frame
+        let position = layer.position
+        let size = layer.bounds.size
+        // Where the layer would stand with the view closed at the seam,
+        // read off the view rather than worked out from its anchor.
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        view.frame = CGRect(x: standing.minX, y: seamY, width: standing.width, height: 0)
+        let closedPosition = layer.position
+        let closedSize = layer.bounds.size
+        view.frame = standing
+        CATransaction.commit()
+
+        let slide = makeRowSlide()
+        slide.fromValue = position
+        slide.toValue = closedPosition
+        let fold = makeRowSlide(keyPath: "bounds.size")
+        fold.fromValue = size
+        fold.toValue = closedSize
+        for animation in [slide, fold] {
+            animation.fillMode = .forwards
+            animation.isRemovedOnCompletion = false
+        }
+        layer.add(slide, forKey: "listRowFoldPosition")
+        layer.add(fold, forKey: "listRowFoldSize")
+    }
+
+    /// Whether a row cuts off what it draws past its box.
+    @MainActor
+    func rowClipsToBounds(_ view: ListRowView) -> Bool {
+        view.layer?.masksToBounds ?? false
+    }
+
+    @MainActor
+    func setRowClipsToBounds(_ clips: Bool, on view: ListRowView) {
+        view.layer?.masksToBounds = clips
     }
 
 #else
