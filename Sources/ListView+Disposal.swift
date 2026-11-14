@@ -12,51 +12,100 @@
 #endif
 
 extension ListView {
-    /// Stands a picture of a removed row where the row stood, and returns it.
-    ///
-    /// The row itself goes straight back to the reuse pool, so what leaves
-    /// the screen is a throwaway copy rather than a row held hostage for the
-    /// duration. The picture stands still until ``fadeDisposal(_:)`` or
-    /// ``foldDisposal(_:toSeamAt:)`` sends it off; how it goes is not known
-    /// until the new layout is, and the picture has to be taken before any
-    /// row is recycled.
-    func placeDisposalSnapshot(of view: ListRowView) -> DisposalSnapshotView? {
-        let frameInList = view.convert(view.bounds, to: self)
-        guard let picture = disposalPicture(of: view) else { return nil }
-        let snapshot = DisposalSnapshotView(picture: picture, size: frameInList.size)
-        placeView(frameInList, on: snapshot)
-        addSubview(snapshot)
-        return snapshot
+    /// A removed row about to leave the screen, noted before it is recycled.
+    struct LeavingRow {
+        let identifier: Item.ID
+        /// Where the row stood, in the list.
+        let frame: CGRect
+        #if canImport(UIKit)
+            /// Its picture, standing where it stood.
+            let snapshot: DisposalSnapshotView
+        #elseif canImport(AppKit)
+            let view: ListRowView
+            let registration: Int
+        #endif
     }
 
-    /// Fades a removed row's picture out in its place.
+    /// Notes the mounted rows among `removed` before any of them is
+    /// recycled, each with what it takes to show it leaving.
+    ///
+    /// On UIKit that is a picture, taken now: the row goes straight back to
+    /// the reuse pool, and what leaves the screen is a throwaway copy. On
+    /// AppKit it is the row itself, which ``placeDisposals(_:)`` takes back
+    /// out of the pool for the length of its exit. A picture there is
+    /// drawn by `cacheDisplay`, which sees nothing a layer was handed
+    /// directly: an avatar showed as its placeholder letter in the copy,
+    /// an image as an empty frame, and a glass bubble over a wallpaper as
+    /// its words alone.
+    func prepareDisposals(of removed: [Item.ID]) -> [LeavingRow] {
+        var leaving: [LeavingRow] = []
+        for identifier in removed {
+            guard let entry = visibleRows[identifier] else { continue }
+            let frame = entry.view.convert(entry.view.bounds, to: self)
+            #if canImport(UIKit)
+                guard let picture = disposalPicture(of: entry.view) else { continue }
+                let snapshot = DisposalSnapshotView(holding: picture, size: frame.size)
+                placeView(frame, on: snapshot)
+                addSubview(snapshot)
+                leaving.append(.init(identifier: identifier, frame: frame, snapshot: snapshot))
+            #elseif canImport(AppKit)
+                leaving.append(.init(identifier: identifier, frame: frame, view: entry.view, registration: entry.registration))
+            #endif
+        }
+        return leaving
+    }
+
+    /// Stands each noted row where it stood, now that the rows themselves
+    /// have been recycled, and returns what will leave the screen for each.
+    ///
+    /// The box stands still until ``fadeDisposal(_:)`` or
+    /// ``foldDisposal(_:toSeamAt:)`` sends it off; how it goes is not known
+    /// until the new layout is.
+    func placeDisposals(_ leaving: [LeavingRow]) -> [(identifier: Item.ID, snapshot: DisposalSnapshotView)] {
+        #if canImport(UIKit)
+            leaving.map { ($0.identifier, $0.snapshot) }
+        #elseif canImport(AppKit)
+            leaving.compactMap { row in
+                guard let snapshot = disposalSnapshot(of: row) else { return nil }
+                placeView(row.frame, on: snapshot)
+                addSubview(snapshot)
+                return (row.identifier, snapshot)
+            }
+        #endif
+    }
+
+    /// Fades a removed row out in its place.
     ///
     /// For a row nothing closes over: the last rows of the list, or one that
     /// left as another came in at the same place.
     func fadeDisposal(_ snapshot: DisposalSnapshotView) {
-        withListAnimation {
-            #if canImport(UIKit)
+        #if canImport(UIKit)
+            withListAnimation {
                 snapshot.alpha = 0
-            #elseif canImport(AppKit)
-                snapshot.alphaValue = 0
-            #endif
-        } completion: { _ in
-            MainActor.assumeIsolated {
-                snapshot.removeFromSuperview()
+            } completion: { _ in
+                MainActor.assumeIsolated {
+                    snapshot.removeFromSuperview()
+                }
             }
-        }
+        #elseif canImport(AppKit)
+            withListAnimation {
+                snapshot.alphaValue = 0
+            }
+            afterRowSlide { [weak self] in
+                self?.endDisposal(snapshot)
+            }
+        #endif
     }
 
-    /// Closes a removed row's picture down to nothing at `seamY`, where the
-    /// rows on either side of it meet in the new layout, as it fades.
+    /// Closes a removed row down to nothing at `seamY`, where the rows on
+    /// either side of it meet in the new layout, as it fades.
     ///
-    /// The picture's lower edge then rides on the row sliding up under it,
-    /// which covers it as it comes: nothing is ever drawn over anything
-    /// else. A picture left to fade where it stood had the rows below
-    /// sliding through it for the length of the fade, their words over its.
-    /// It still fades: the last of a box to close is the top edge of what
-    /// it held, and a strip of that, left opaque, lingers on the spring's
-    /// tail.
+    /// Its lower edge then rides on the row sliding up under it, which
+    /// covers it as it comes: nothing is ever drawn over anything else. A
+    /// row left to fade where it stood had the rows below sliding through
+    /// it for the length of the fade, their words over its. It still
+    /// fades: the last of a box to close is the top edge of what it held,
+    /// and a strip of that, left opaque, lingers on the spring's tail.
     func foldDisposal(_ snapshot: DisposalSnapshotView, toSeamAt seamY: CGFloat) {
         #if canImport(UIKit)
             withListAnimation {
@@ -77,8 +126,8 @@ extension ListView {
                 foldView(snapshot, toSeamAt: seamY)
                 snapshot.alphaValue = 0
             }
-            afterRowSlide {
-                snapshot.removeFromSuperview()
+            afterRowSlide { [weak self] in
+                self?.endDisposal(snapshot)
             }
         #endif
     }
@@ -90,6 +139,34 @@ extension ListView {
         }
 
     #elseif canImport(AppKit)
+        /// The box a recycled row leaves the screen in: around the row
+        /// itself, taken back out of the pool, or around a picture of it
+        /// when the pool it went to is not the list's.
+        private func disposalSnapshot(of row: LeavingRow) -> DisposalSnapshotView? {
+            if let generation = withholdRecycledRow(row.view, registration: row.registration) {
+                // Whatever was still moving it was aimed at a place in the
+                // list; in the box it stands at the box's corner.
+                cancelRowAnimations(on: row.view)
+                let snapshot = DisposalSnapshotView(holding: row.view, size: row.frame.size)
+                snapshot.heldRow = (row.registration, generation)
+                return snapshot
+            }
+            guard let picture = disposalPicture(of: row.view) else { return nil }
+            return DisposalSnapshotView(holding: picture, size: row.frame.size)
+        }
+
+        /// Takes a box that has left off the screen, and puts the row it
+        /// held back in the pool.
+        private func endDisposal(_ snapshot: DisposalSnapshotView) {
+            snapshot.removeFromSuperview()
+            guard let held = snapshot.heldRow, let view = snapshot.subviews.first as? ListRowView else { return }
+            snapshot.heldRow = nil
+            view.removeFromSuperview()
+            releaseWithheldRow(view, registration: held.registration, generation: held.generation)
+        }
+
+        /// A picture of a row, for one the list cannot hold: drawn by
+        /// AppKit, so without anything its layers were handed directly.
         private func disposalPicture(of view: ListRowView) -> NSView? {
             view.display()
             guard let bitmap = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
@@ -113,7 +190,7 @@ extension ListView {
     final class DisposalSnapshotView: UIView {
         /// `size` is the row's: a picture just made has not always been
         /// given one.
-        init(picture: UIView, size: CGSize) {
+        init(holding picture: UIView, size: CGSize) {
             super.init(frame: CGRect(origin: .zero, size: size))
             clipsToBounds = true
             isUserInteractionEnabled = false
@@ -129,16 +206,21 @@ extension ListView {
     }
 
 #elseif canImport(AppKit)
-    /// A picture of a row on its way out, in a box that can close over it.
+    /// A row on its way out — the row itself, or a picture of it — in a
+    /// box that can close over it.
     ///
-    /// The picture keeps its size and its place at the box's top while the
-    /// box closes, so it is covered rather than squeezed. It sits on top of
-    /// the rows sliding into its slot for as long as it stands, so it
-    /// answers no clicks.
+    /// What it holds keeps its size and its place at the box's top while
+    /// the box closes, so it is covered rather than squeezed. The box sits
+    /// on top of the rows sliding into its slot for as long as it stands,
+    /// so it answers no clicks, and neither does the row inside it.
     final class DisposalSnapshotView: NSView {
+        /// The pool the row inside came out of, when it is a row: its
+        /// registration, and the pools' generation when it was taken.
+        var heldRow: (registration: Int, generation: Int)?
+
         /// `size` is the row's: a picture just made has not always been
         /// given one.
-        init(picture: NSView, size: CGSize) {
+        init(holding picture: NSView, size: CGSize) {
             super.init(frame: CGRect(origin: .zero, size: size))
             wantsLayer = true
             layer?.masksToBounds = true

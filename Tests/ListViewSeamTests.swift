@@ -352,6 +352,54 @@ struct ListViewSeamTests {
             #expect(snapshots(in: listView).isEmpty)
         }
 
+        /// What leaves is the row itself, not a drawing of it: a drawing
+        /// misses whatever the row's layers were handed directly — an
+        /// avatar, an image, a glass bubble. It is out of the pool for as
+        /// long as it is on its way out, and back in it afterwards.
+        @Test
+        func aRowLeavingIsTheRowItselfHeldOutOfThePoolUntilItHasLeft() throws {
+            let listView = makeListView([0, 1, 2])
+            let row = try #require(listView.rowView(for: 1))
+
+            listView.apply([0, 2].map(SeamItem.init), animated: true)
+
+            let snapshot = try #require(snapshots(in: listView).first)
+            #expect(snapshot.subviews.first === row)
+            #expect(!listView.reusePools[0].contains { $0 === row })
+
+            waitForTheSpring()
+            #expect(listView.reusePools[0].contains { $0 === row })
+            #expect(row.superview == nil)
+        }
+
+        /// A row still on its way out is not handed to the next item that
+        /// needs one: it would leave and arrive at once.
+        @Test
+        func aRowLeavingIsNotHandedToAnotherItemMeanwhile() throws {
+            let listView = makeListView([0, 1, 2])
+            let row = try #require(listView.rowView(for: 1))
+
+            listView.apply([0, 2].map(SeamItem.init), animated: true)
+            listView.apply([0, 2, 3].map(SeamItem.init))
+
+            let next = try #require(listView.rowView(for: 3))
+            #expect(next !== row)
+        }
+
+        /// Pools started over while a row was leaving do not get it back.
+        @Test
+        func aRowThatLeftAcrossAReloadIsNotPooledAgain() throws {
+            let listView = makeListView([0, 1, 2])
+            let row = try #require(listView.rowView(for: 1))
+
+            listView.apply([0, 2].map(SeamItem.init), animated: true)
+            listView.reloadData()
+
+            waitForTheSpring()
+            #expect(!listView.reusePools[0].contains { $0 === row })
+            #expect(snapshots(in: listView).isEmpty)
+        }
+
         /// The last row has nothing to slide up under it: its picture fades
         /// where it stands, as before.
         @Test

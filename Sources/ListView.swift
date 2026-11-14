@@ -68,6 +68,10 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
 
     private final var prototypes: [Int: Prototype] = [:]
     private final var rowsPendingRemoval: [ListRowView] = []
+    /// How many times the pools have been started over. A row held out of
+    /// its pool while it leaves the screen is not put back into pools that
+    /// have been emptied since. See ``withholdRecycledRow(_:registration:)``.
+    private final var poolGeneration = 0
     /// Rows placed this pass, still holding the previous item's arrangement.
     private final var rowsPendingSettle: [ListRowView] = []
     /// Rows kept mounted while an animation may still be showing them, with
@@ -227,6 +231,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         registrations = build()
         precondition(!registrations.isEmpty, "A list needs at least one row type.")
         reusePools = .init(repeating: [], count: registrations.count)
+        poolGeneration &+= 1
         for prototype in prototypes.values {
             prototype.view.removeFromSuperview()
         }
@@ -261,18 +266,11 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // detached row parked in the slot for good.
         // Only stood in place here. How each one leaves — closing into a
         // seam, or fading where it is — waits for the new layout.
-        var departing: [(identifier: Item.ID, snapshot: DisposalSnapshotView)] = []
-        if animated {
-            for identifier in difference.removed {
-                guard let view = visibleRows[identifier]?.view,
-                      let snapshot = placeDisposalSnapshot(of: view)
-                else { continue }
-                departing.append((identifier, snapshot))
-            }
-        }
+        let leaving = animated ? prepareDisposals(of: difference.removed) : []
         for identifier in difference.removed {
             recycleRow(with: identifier)?.removeFromSuperview()
         }
+        let departing = placeDisposals(leaving)
 
         // Where everything was, for rows that only come on screen because of
         // this change: they travel in from there instead of appearing.
@@ -507,6 +505,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         for index in reusePools.indices {
             reusePools[index].removeAll()
         }
+        poolGeneration &+= 1
         invalidateLayout()
     }
 
@@ -1025,6 +1024,28 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// the row out of the pool; the list holds no other reference to it.
     open func enqueueReusableRowView(_ view: ListRowView, forRegistrationAt registrationIndex: Int) {
         reusePools[registrationIndex].append(view)
+    }
+
+    /// Takes a row the list has just recycled back out of its pool and out
+    /// of the rows waiting to leave the hierarchy, so it can be shown on its
+    /// way out, and returns the token ``releaseWithheldRow(_:registration:generation:)``
+    /// needs. Nil when the row is not in the list's pool: a subclass that
+    /// keeps rows in a pool of its own may hand this one out at any moment,
+    /// and it is not the list's to hold.
+    final func withholdRecycledRow(_ view: ListRowView, registration: Int) -> Int? {
+        guard registration < reusePools.count,
+              let index = reusePools[registration].lastIndex(where: { $0 === view })
+        else { return nil }
+        reusePools[registration].remove(at: index)
+        rowsPendingRemoval.removeAll { $0 === view }
+        return poolGeneration
+    }
+
+    /// Puts a row held by ``withholdRecycledRow(_:registration:)`` back in
+    /// its pool, unless the pools have been started over since.
+    final func releaseWithheldRow(_ view: ListRowView, registration: Int, generation: Int) {
+        guard generation == poolGeneration, registration < reusePools.count else { return }
+        reusePools[registration].append(view)
     }
 
     /// Recycles the rows the viewport has left behind.
