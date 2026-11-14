@@ -40,7 +40,13 @@ private final class SpillingRow: ListRowView {
     }
 }
 
-@Suite(.serialized)
+@Suite(
+    .serialized,
+    .disabled(
+        if: ProcessInfo.processInfo.isMacCatalystApp,
+        "A hostless Mac Catalyst test bundle has no NSApplication, so it cannot create a UIWindow"
+    )
+)
 @MainActor
 struct ListViewSeamTests {
     private static let rowHeight: CGFloat = 100
