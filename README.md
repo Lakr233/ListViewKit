@@ -95,10 +95,20 @@ configured again, because `context.index` has changed.
 ### Animations
 
 The list animates what you asked it to animate, and nothing else.
-`apply(_:animated: true)` fades insertions in, fades removals out, and slides
-the rows in between. A second reorder arriving while the first is still running
-adds to it instead of replacing it, so the rows carry their speed through the
-interruption rather than stopping dead and setting off again.
+`apply(_:animated: true)` slides the rows that stay to their new places and
+brings the others in and out around them. A second reorder arriving while the
+first is still running adds to it instead of replacing it, so the rows carry
+their speed through the interruption rather than stopping dead and setting off
+again.
+
+Rows that come in between two rows that stay — a fold opening, a reply landing
+in the middle — grow out of the seam between those two, each with its lower
+edge on the row sliding away under it; rows that leave from between two that
+stay close into the seam the same way, fading as they go. One spring moves all
+of it, so no row is ever drawn over another. A row is clipped to its box while
+the box opens, whatever it asks for the rest of the time. Everywhere else — the
+ends of the list, or a row that takes another's place — insertions fade in and
+removals fade out where they stand.
 
 Everything else is layout, and layout does not animate. A row entering the
 viewport is *placed*, not moved: one coming back from the reuse pool is still
