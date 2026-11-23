@@ -102,7 +102,19 @@ import DisplayLink
             get { super.contentOffset }
             set {
                 guard super.contentOffset != newValue else { return }
+                // A finger, or the momentum it leaves, moving the offset takes
+                // over from a programmatic scroll in flight here, in the same
+                // turn. The link's own check comes a tick later, and a busy
+                // main thread can deliver the whole drag between two ticks:
+                // the next tick then found the finger already lifted and put
+                // the offset back where the spring had it, undoing the drag
+                // at once (AppKit cancels as its gesture begins). Cancelled
+                // after the write, so the scroll stops where the hand put it:
+                // a tick already on its way finds nothing to move back.
                 super.contentOffset = newValue
+                if scrollingTarget != nil, isTracking || isDragging || isDecelerating {
+                    cancelCurrentScrolling()
+                }
             }
         }
 
