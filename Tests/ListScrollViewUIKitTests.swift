@@ -88,6 +88,78 @@ struct ListScrollViewUIKitTests {
     }
     #endif
 
+    /// Says the user owns the offset when the test says so: a real touch
+    /// cannot be made in a unit test.
+    private final class HandledScrollView: ListScrollView {
+        var finger = false
+        var momentum = false
+        override var isTracking: Bool { finger || super.isTracking }
+        override var isDragging: Bool { finger || super.isDragging }
+        override var isDecelerating: Bool { momentum || super.isDecelerating }
+    }
+
+    private func makeHandledScrollView() -> HandledScrollView {
+        let scrollView = HandledScrollView(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+        scrollView.contentSize = CGSize(width: 200, height: 2_000)
+        scrollView.contentInsetAdjustmentBehavior = .never
+        return scrollView
+    }
+
+    /// A busy main thread can deliver a whole drag between two ticks of the
+    /// link. The drag takes the offset over as it moves it; the next tick
+    /// used to find the finger lifted and put the offset back where the
+    /// spring had it — the reader's scroll undone in one frame. The tick
+    /// here stands for one already on its way when the link went.
+    @Test
+    func aDragBetweenTwoTicksTakesOverTheScroll() {
+        let scrollView = makeHandledScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 1_600), preserveVelocity: false)
+        tick(scrollView, at: 2_000)
+        tick(scrollView, at: 2_000 + 1.0 / 120)
+        let springing = scrollView.contentOffset.y
+
+        scrollView.finger = true
+        scrollView.contentOffset = CGPoint(x: 0, y: springing - 400)
+        scrollView.finger = false
+        tick(scrollView, at: 2_000 + 2.0 / 120)
+
+        #expect(scrollView.contentOffset.y == springing - 400)
+        #expect(scrollView.scrollingDisplayLink == nil)
+    }
+
+    /// The momentum a drag leaves behind is the reader's too.
+    @Test
+    func momentumTakesOverAScrollStartedUnderIt() {
+        let scrollView = makeHandledScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 1_600), preserveVelocity: false)
+        tick(scrollView, at: 3_000)
+
+        scrollView.momentum = true
+        scrollView.contentOffset = CGPoint(x: 0, y: 900)
+        scrollView.momentum = false
+        tick(scrollView, at: 3_000 + 1.0 / 120)
+
+        #expect(scrollView.contentOffset.y == 900)
+        #expect(scrollView.scrollingDisplayLink == nil)
+    }
+
+    /// Writes nobody's hand made — the list's own clamps and jumps — leave a
+    /// scroll in flight alone; the link moves it on.
+    @Test
+    func anOffsetWrittenWithoutAHandLeavesTheScrollRunning() {
+        let scrollView = makeHandledScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_000)
+        scrollView.scroll(to: CGPoint(x: 0, y: 1_600), preserveVelocity: false)
+        tick(scrollView, at: 4_000)
+
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_010)
+
+        #expect(scrollView.scrollingDisplayLink != nil)
+        scrollView.cancelCurrentScrolling()
+    }
+
     // MARK: - Destinations on estimated rows
 
     private struct Item: Identifiable, Hashable {
