@@ -397,30 +397,26 @@ struct ListScrollViewUIKitTests {
     }
 
     #if !targetEnvironment(macCatalyst)
-        /// Leaving the window mid scroll back lands inside the content in one
-        /// write.
+        /// Leaving the window mid scroll back lands where the scroll was
+        /// going — inside the content — not where it stood. (UIKit pulls an
+        /// offset past an edge to the edge as the view leaves its window,
+        /// before the list lands it, so a stop of the list's own at the edge
+        /// cannot be told apart here; ``anOffsetSetMidScrollBackLandsThereInOneWrite()``
+        /// holds that for the cancel both paths share.)
         @Test
-        func leavingTheWindowMidScrollBackLandsInsideInOneWrite() {
-            final class Counter: NSObject, UIScrollViewDelegate {
-                var offsets: [CGFloat] = []
-                func scrollViewDidScroll(_ scrollView: UIScrollView) {
-                    offsets.append(scrollView.contentOffset.y)
-                }
-            }
+        func leavingTheWindowMidScrollBackLandsWhereItWasGoing() {
             let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
             let scrollView = makeHandledScrollView()
             window.addSubview(scrollView)
             startScrollBackFromPastTheEnd(scrollView)
+            scrollView.scroll(to: CGPoint(x: 0, y: 500), preserveVelocity: false)
             tick(scrollView, at: 12_000)
             #expect(scrollView.contentOffset.y > 1_764)
-            let counter = Counter()
-            scrollView.delegate = counter
 
             scrollView.removeFromSuperview()
 
-            #expect(counter.offsets == [1_764])
+            #expect(scrollView.contentOffset.y == 500)
             #expect(scrollView.scrollingDisplayLink == nil)
-            scrollView.delegate = nil
         }
     #endif
 
