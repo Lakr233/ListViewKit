@@ -228,6 +228,29 @@ struct ListViewAmbientAnimationTests {
         #expect(entering.frame == listView.rectForRow(at: 5))
     }
 
+    #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+        /// A row's slide holds where the row started until it begins. Its
+        /// begin time is stamped when the transaction commits, and a frame
+        /// the window server drew just before that showed the row at its end
+        /// place for one frame, then back at its start (AirBuild 2026-11-25).
+        @Test
+        func aRowSlideHoldsItsStartUntilItBegins() throws {
+            let listView = makeListView(count: 40)
+            var reordered = listView.content
+            reordered.swapAt(0, 1)
+            listView.apply(reordered, animated: true)
+            let slid = try #require(listView.rowView(for: 0))
+            let layer = try #require(slid.layer)
+            let slides = animationKeys(of: slid)
+                .filter { $0.hasPrefix("listRow") }
+                .compactMap { layer.animation(forKey: $0) }
+            #expect(!slides.isEmpty)
+            for slide in slides {
+                #expect(slide.fillMode == .backwards || slide.fillMode == .both)
+            }
+        }
+    #endif
+
     /// Motion left on a row belongs to the item it used to show. Reusing the
     /// view without dropping it lets the old slide finish under new content.
     @Test
