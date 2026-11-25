@@ -331,6 +331,32 @@ struct ListViewSeamTests {
             listView.subviews.compactMap { $0 as? DisposalSnapshotView }
         }
 
+        /// A row's box opening at a seam, and a leaving row's picture closing
+        /// into one, hold their start until they begin: a frame drawn just
+        /// before the commit that stamps their begin time showed them at
+        /// their end (AirBuild 2026-11-25).
+        @Test
+        func aSeamsOpeningAndClosingHoldTheirStartUntilTheyBegin() throws {
+            let opening = makeListView([0, 1, 2])
+            opening.apply([0, 10, 1, 2].map(SeamItem.init), animated: true)
+            let row = try #require(opening.rowView(for: 10))
+            let rowLayer = try #require(row.layer)
+            let unfolds = (rowLayer.animationKeys() ?? []).filter { $0.hasPrefix("listRow") }
+            #expect(unfolds.contains { $0.hasPrefix("listRowUnfold") })
+            for key in unfolds {
+                let fill = rowLayer.animation(forKey: key)?.fillMode
+                #expect(fill == .backwards || fill == .both, "\(key)")
+            }
+
+            let closing = makeListView([0, 1, 2])
+            closing.apply([0, 2].map(SeamItem.init), animated: true)
+            let snapshot = try #require(snapshots(in: closing).first)
+            let snapshotLayer = try #require(snapshot.layer)
+            for key in ["listRowFoldPosition", "listRowFoldSize"] {
+                #expect(snapshotLayer.animation(forKey: key)?.fillMode == .both, "\(key)")
+            }
+        }
+
         /// The picture's box closes over it as it fades, and it is gone once
         /// the spring has landed.
         @Test

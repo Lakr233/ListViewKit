@@ -85,8 +85,12 @@ import DisplayLink
                     let currentOffset = contentOffset
                     // Shrinking the content makes UIScrollView pull the offset
                     // back in by itself. That is a clamp, not a scroll, and
-                    // inside a caller's block it would animate as one.
+                    // inside a caller's block it would animate as one. Nor is
+                    // it anyone's hand (``contentOffset``).
+                    let wasClamping = clampsForContentSize
+                    clampsForContentSize = true
                     withoutListAnimation { super.contentSize = newValue }
+                    clampsForContentSize = wasClamping
                     // Only when it moved: `setContentOffset(_:animated:)` stops
                     // a fling even when handed the offset it already has, and
                     // streaming content grows under one on every update.
@@ -112,11 +116,20 @@ import DisplayLink
                 // after the write, so the scroll stops where the hand put it:
                 // a tick already on its way finds nothing to move back.
                 super.contentOffset = newValue
-                if scrollingTarget != nil, isTracking || isDragging || isDecelerating {
+                // A finger resting on a list that is past an edge does not
+                // take it over: the scroll holds there and brings it back in
+                // once the finger lifts (``handleScrollingAnimation(_:)``).
+                if scrollingTarget != nil, !clampsForContentSize,
+                   isDragging || isDecelerating || (isTracking && isContentOffsetWithinBounds(offset: newValue))
+                {
                     cancelCurrentScrolling()
                 }
             }
         }
+
+        /// Set while UIScrollView pulls the offset in after the content
+        /// shrank: a clamp, not a hand on the list.
+        private final var clampsForContentSize = false
 
         final func isContentOffsetWithinBounds(offset: CGPoint) -> Bool {
             let min = minimumContentOffset
@@ -151,7 +164,17 @@ import DisplayLink
             // offset outside the content is wrong regardless of whether the
             // host is currently allowed to scroll, and this is the only thing
             // left running that would notice.
-            guard !isScrollOffsetOwnedByUser else { return }
+            // A scroll held under a resting finger, on its way back in from
+            // past an edge, is still the list's, and still retargeted: only
+            // a drag or momentum has the offset to itself. So is an animated
+            // correction asked for while a finger rests — a row leaving the
+            // end of a list the reader's finger is on: it waits under the
+            // finger and travels back once it lifts, rather than standing
+            // past the end until something lays the list out again.
+            let correctsUnderAFinger = scrollingTarget != nil || animatesContentSizeCorrection
+            if correctsUnderAFinger ? (isDragging || isDecelerating) : isScrollOffsetOwnedByUser {
+                return
+            }
             if let target = scrollingTarget {
                 // A programmatic scroll keeps running, retargeted onto the new
                 // edge so it lands there instead of short of it.
@@ -255,9 +278,35 @@ import DisplayLink
                 .init(x: currentContentOffset.x, y: currentContentOffset.y),
                 vel: .init(x: 0, y: 0)
             )
+            let wasScrolling = scrollingTarget != nil
             scrollingTarget = nil
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
             scrollingDisplayLink = nil
+            // A scroll stopped on its way back from past an edge would leave
+            // the offset out there, with blank space beyond the content,
+            // until something else laid the list out. Unless a drag or
+            // momentum holds it, or the caller is about to set the offset
+            // itself, it is put straight back in: not through
+            // ``reconcileOffsetWithContentSize()``, which inside an animated
+            // apply would start another scroll from here.
+            if wasScrolling, !placesOffsetAfterCancel, !isDragging, !isDecelerating,
+               !isContentOffsetWithinBounds(offset: currentContentOffset)
+            {
+                applyContentOffsetWithoutTravel(nearestScrollLocationInBounds(offset: currentContentOffset))
+            }
+        }
+
+        /// Set while the list cancels a scroll only to put the offset
+        /// somewhere itself, so the cancel does not move it first.
+        private final var placesOffsetAfterCancel = false
+
+        /// Cancels the scroll in flight without putting the offset back
+        /// inside the content: the caller places it next.
+        private final func cancelPlacingTheOffsetAfter() {
+            let wasPlacing = placesOffsetAfterCancel
+            placesOffsetAfterCancel = true
+            defer { placesOffsetAfterCancel = wasPlacing }
+            cancelCurrentScrolling()
         }
 
         /// Shifts the current offset and any in-flight programmatic scroll by
@@ -290,26 +339,73 @@ import DisplayLink
         }
 
         final func handleScrollingAnimation(_ frame: DisplayLinkFrame) {
-            if isTracking || scrollingContext.completed {
+            // A drag, or the momentum and the bounce it leaves, owns the
+            // offset, and UIKit brings one past an edge back itself.
+            if isDragging || isDecelerating || scrollingContext.completed {
                 cancelCurrentScrolling()
+                return
+            }
+            if isTracking {
+                let edge = nearestScrollLocationInBounds(offset: contentOffset)
+                guard edge != contentOffset else {
+                    cancelCurrentScrolling()
+                    return
+                }
+                // A finger resting on a list still on its way back from past
+                // an edge — a tap on a row, say — ends the scroll it came in
+                // on, as anywhere, but the offset still has to come back in:
+                // cancelled out there, it left blank space beyond the last
+                // row, since a touch that never drags gives UIKit nothing to
+                // bounce. It is held where it is, aimed at the nearest edge,
+                // and goes there once the finger lifts — or gives way to the
+                // drag the touch turns into.
+                if scrollingTarget != edge {
+                    scroll(to: edge, preserveVelocity: false)
+                }
+                scrollingContext.setCurrent(
+                    .init(x: contentOffset.x, y: contentOffset.y),
+                    vel: .init(x: 0, y: 0)
+                )
+                _ = scrollingClock.elapsed(at: frame)
                 return
             }
             // Timestamps rather than `frame.duration`, which UIKit quotes at
             // the display's fastest rate however fast the link really runs.
             let delta = min(1 / 30, scrollingClock.elapsed(at: frame))
             scrollingContext.update(withDeltaTime: delta)
-            let loc = nearestScrollLocationInBounds(offset: .init(
-                x: scrollingContext.x.value,
-                y: scrollingContext.y.value
-            ))
-            applyContentOffset(loc)
+            applyContentOffset(springFrameWithinBounds())
+        }
+
+        /// The spring's position, kept from going any further outside the
+        /// bounds than the offset already is — the AppKit rule.
+        ///
+        /// Content shrinking under an offset at its end, a row leaving the
+        /// bottom, leaves the offset past the new end, and the correction
+        /// is a scroll back from there (``reconcileOffsetWithContentSize()``).
+        /// A plain clamp made its first step the whole way: every row on
+        /// screen moved by the row's height in one frame (a chat's typing
+        /// row, 36 pt, AirBuild 2026-11-25).
+        private final func springFrameWithinBounds() -> CGPoint {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+            let current = contentOffset
+            return .init(
+                x: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.x.value, CGFloat.minimum(min.x, current.x)),
+                    CGFloat.maximum(max.x, current.x)
+                ),
+                y: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.y.value, CGFloat.minimum(min.y, current.y)),
+                    CGFloat.maximum(max.y, current.y)
+                )
+            )
         }
 
         override open func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
             if animated {
                 scroll(to: contentOffset)
             } else {
-                cancelCurrentScrolling()
+                cancelPlacingTheOffsetAfter()
                 applyContentOffsetWithoutTravel(contentOffset)
             }
         }
@@ -374,8 +470,10 @@ import DisplayLink
         /// trusted to finish. See the AppKit twin.
         private final func landScrollingOutsideTheDisplayLink() {
             guard let target = scrollingTarget else { return }
-            cancelCurrentScrolling()
-            applyContentOffsetWithoutTravel(target)
+            cancelPlacingTheOffsetAfter()
+            // Inside the content, where the list stands now: a target the
+            // content moved away from while a finger rested is not.
+            applyContentOffsetWithoutTravel(nearestScrollLocationInBounds(offset: target))
         }
 
         /// Where a subclass hears about the view changing windows, after the
@@ -1689,7 +1787,7 @@ import DisplayLink
         ///
         /// A scroll retargeted onto a nearer edge keeps its velocity, and with
         /// velocity to spare it runs past the target into blank space. Not a
-        /// plain clamp, as on UIKit: the wheel's clamp and an animated
+        /// plain clamp: the wheel's clamp and an animated
         /// content-size correction start outside the bounds on purpose, and
         /// have to travel back from there.
         private final func springFrameWithinBounds() -> CGPoint {

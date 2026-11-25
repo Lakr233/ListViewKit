@@ -160,6 +160,14 @@ let listAnimationDuration: TimeInterval = 0.5
     /// builds for a bounce of 0, spelt out because that initializer needs
     /// macOS 14: a unit mass, stiffness (2π / duration)², and the critical
     /// damping 2√stiffness.
+    ///
+    /// It holds its start until it begins. The begin time is stamped when
+    /// the transaction commits, and a frame the window server draws for a
+    /// moment before that — under load, while the commit was on its way —
+    /// showed the row where it was going, the spring not yet applied, and
+    /// the next frame put it back where it started: a row, or a whole
+    /// screen of them, at its end place for one frame (AirBuild 2026-11-25,
+    /// filmed at every composited frame).
     private func makeRowSlide(keyPath: String = "position") -> CASpringAnimation {
         let slide = CASpringAnimation(keyPath: keyPath)
         let angularFrequency = 2 * Double.pi / listAnimationDuration
@@ -167,6 +175,7 @@ let listAnimationDuration: TimeInterval = 0.5
         slide.stiffness = angularFrequency * angularFrequency
         slide.damping = 2 * angularFrequency
         slide.duration = slide.settlingDuration
+        slide.fillMode = .backwards
         return slide
     }
 
@@ -385,7 +394,7 @@ let listAnimationDuration: TimeInterval = 0.5
         fold.fromValue = size
         fold.toValue = closedSize
         for animation in [slide, fold] {
-            animation.fillMode = .forwards
+            animation.fillMode = .both
             animation.isRemovedOnCompletion = false
         }
         layer.add(slide, forKey: "listRowFoldPosition")
