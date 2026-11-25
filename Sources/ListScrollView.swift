@@ -87,9 +87,10 @@ import DisplayLink
                     // back in by itself. That is a clamp, not a scroll, and
                     // inside a caller's block it would animate as one. Nor is
                     // it anyone's hand (``contentOffset``).
+                    let wasClamping = clampsForContentSize
                     clampsForContentSize = true
                     withoutListAnimation { super.contentSize = newValue }
-                    clampsForContentSize = false
+                    clampsForContentSize = wasClamping
                     // Only when it moved: `setContentOffset(_:animated:)` stops
                     // a fling even when handed the offset it already has, and
                     // streaming content grows under one on every update.
@@ -165,8 +166,13 @@ import DisplayLink
             // left running that would notice.
             // A scroll held under a resting finger, on its way back in from
             // past an edge, is still the list's, and still retargeted: only
-            // a drag or momentum has the offset to itself.
-            if scrollingTarget != nil ? (isDragging || isDecelerating) : isScrollOffsetOwnedByUser {
+            // a drag or momentum has the offset to itself. So is an animated
+            // correction asked for while a finger rests — a row leaving the
+            // end of a list the reader's finger is on: it waits under the
+            // finger and travels back once it lifts, rather than standing
+            // past the end until something lays the list out again.
+            let correctsUnderAFinger = scrollingTarget != nil || animatesContentSizeCorrection
+            if correctsUnderAFinger ? (isDragging || isDecelerating) : isScrollOffsetOwnedByUser {
                 return
             }
             if let target = scrollingTarget {
@@ -294,6 +300,15 @@ import DisplayLink
         /// somewhere itself, so the cancel does not move it first.
         private final var placesOffsetAfterCancel = false
 
+        /// Cancels the scroll in flight without putting the offset back
+        /// inside the content: the caller places it next.
+        private final func cancelPlacingTheOffsetAfter() {
+            let wasPlacing = placesOffsetAfterCancel
+            placesOffsetAfterCancel = true
+            defer { placesOffsetAfterCancel = wasPlacing }
+            cancelCurrentScrolling()
+        }
+
         /// Shifts the current offset and any in-flight programmatic scroll by
         /// `dy` without cancelling it. Deferred height correction uses this so
         /// rows above the viewport can change size while visible rows stay
@@ -390,9 +405,7 @@ import DisplayLink
             if animated {
                 scroll(to: contentOffset)
             } else {
-                placesOffsetAfterCancel = true
-                cancelCurrentScrolling()
-                placesOffsetAfterCancel = false
+                cancelPlacingTheOffsetAfter()
                 applyContentOffsetWithoutTravel(contentOffset)
             }
         }
@@ -457,9 +470,7 @@ import DisplayLink
         /// trusted to finish. See the AppKit twin.
         private final func landScrollingOutsideTheDisplayLink() {
             guard let target = scrollingTarget else { return }
-            placesOffsetAfterCancel = true
-            cancelCurrentScrolling()
-            placesOffsetAfterCancel = false
+            cancelPlacingTheOffsetAfter()
             // Inside the content, where the list stands now: a target the
             // content moved away from while a finger rested is not.
             applyContentOffsetWithoutTravel(nearestScrollLocationInBounds(offset: target))

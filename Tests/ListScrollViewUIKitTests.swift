@@ -362,6 +362,68 @@ struct ListScrollViewUIKitTests {
         #expect(scrollView.contentOffset.y == 1_764)
     }
 
+    /// A row leaving the end of a list the reader's finger already rests on
+    /// travels back once the finger lifts, rather than standing past the end
+    /// until something lays the list out again.
+    @Test
+    func aRowLeavingTheEndUnderARestingFingerTravelsBackOnceItLifts() {
+        let scrollView = makeHandledScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_800)
+        scrollView.touch = true
+        scrollView.animatesContentSizeCorrection = true
+        scrollView.contentSize = CGSize(width: 200, height: 1_964)
+        scrollView.animatesContentSizeCorrection = false
+        #expect(scrollView.contentOffset.y == 1_800)
+        #expect(scrollView.scrollingDisplayLink != nil)
+
+        var time: TimeInterval = 11_000
+        for _ in 0 ..< 10 {
+            time += 1.0 / 120
+            tick(scrollView, at: time)
+        }
+        #expect(scrollView.contentOffset.y == 1_800)
+
+        scrollView.touch = false
+        var previous = scrollView.contentOffset.y
+        var largest: CGFloat = 0
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120
+            tick(scrollView, at: time)
+            largest = max(largest, previous - scrollView.contentOffset.y)
+            previous = scrollView.contentOffset.y
+        }
+        #expect(scrollView.contentOffset.y == 1_764)
+        #expect(largest < 20)
+    }
+
+    #if !targetEnvironment(macCatalyst)
+        /// Leaving the window mid scroll back lands inside the content in one
+        /// write.
+        @Test
+        func leavingTheWindowMidScrollBackLandsInsideInOneWrite() {
+            final class Counter: NSObject, UIScrollViewDelegate {
+                var offsets: [CGFloat] = []
+                func scrollViewDidScroll(_ scrollView: UIScrollView) {
+                    offsets.append(scrollView.contentOffset.y)
+                }
+            }
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 200, height: 200))
+            let scrollView = makeHandledScrollView()
+            window.addSubview(scrollView)
+            startScrollBackFromPastTheEnd(scrollView)
+            tick(scrollView, at: 12_000)
+            #expect(scrollView.contentOffset.y > 1_764)
+            let counter = Counter()
+            scrollView.delegate = counter
+
+            scrollView.removeFromSuperview()
+
+            #expect(counter.offsets == [1_764])
+            #expect(scrollView.scrollingDisplayLink == nil)
+            scrollView.delegate = nil
+        }
+    #endif
+
     /// A busy main thread can deliver a whole drag between two ticks of the
     /// link. The drag takes the offset over as it moves it; the next tick
     /// used to find the finger lifted and put the offset back where the
