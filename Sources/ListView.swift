@@ -553,6 +553,12 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             }
             return
         }
+        // A pass still owed — a slice measured in the background moved the
+        // offset, an inset changed — runs first: the rows then stand where
+        // the offset says, which is where they are read from below.
+        if layoutContentDepth == 0 {
+            layoutNow()
+        }
         // Where every mounted row stood. Only these, not the whole layout:
         // a copy of that would copy every row's height the moment the
         // measurement below edits it.
@@ -603,17 +609,17 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // it throughout. Only across rows mounted one after another: past a
         // gap its place before is not known, and it appears where it belongs.
         let showing = rows.map { $0.from != nil }
-        var carriedBy: [(entering: ListRowView, neighbour: ListRowView)] = []
+        var carriedBy: [(entering: ListRowView, neighbour: ListRowView, lowerEdge: Bool)] = []
         for position in rows.indices where !showing[position] {
             let target = rows[position].target
-            var best: (move: CGFloat, distance: Int, onScreen: Bool, view: ListRowView)?
+            var best: (move: CGFloat, distance: Int, onScreen: Bool, view: ListRowView, lowerEdge: Bool)?
             func consider(_ candidate: Int, move: CGFloat) {
                 let distance = abs(candidate - position)
                 let onScreen = rows[candidate].onScreen
                 if let current = best, onScreen == current.onScreen ? distance >= current.distance : !onScreen {
                     return
                 }
-                best = (move, distance, onScreen, rows[candidate].view)
+                best = (move, distance, onScreen, rows[candidate].view, candidate < position)
             }
             var above = position - 1
             while above >= 0, rows[above].index == rows[above + 1].index - 1 {
@@ -632,8 +638,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                 below += 1
             }
             rows[position].from = target.offsetBy(dx: 0, dy: best?.move ?? 0)
-            if let neighbour = best?.view {
-                carriedBy.append((rows[position].view, neighbour))
+            if let best {
+                carriedBy.append((rows[position].view, best.view, best.lowerEdge))
             }
         }
 
@@ -652,7 +658,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             }
         }
         for pair in carriedBy {
-            copyRowSlides(from: pair.neighbour, to: pair.entering)
+            copyRowSlides(from: pair.neighbour, to: pair.entering, alongLowerEdge: pair.lowerEdge)
         }
         guard moves else {
             updateVisibleRowFrames(animated: false)
@@ -682,6 +688,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                 self.requestLayout()
             }
         }
+        // A row mounted now takes the displacement its neighbours carry, now
+        // rather than on a pass that may not come before the slide ends.
+        applyRowAnimator()
         if !resized.isEmpty {
             afterRowSlide { [weak self] in
                 for row in resized {
@@ -691,23 +700,56 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         }
     }
 
-    /// Puts on `entering` the slides still carrying `neighbour`, on the same
-    /// clock: a row coming on screen beside a row mid-slide is drawn where
-    /// that row's edge is drawn, all the way.
-    private final func copyRowSlides(from neighbour: ListRowView, to entering: ListRowView) {
+    /// Puts on `entering` the slides still carrying the edge of `neighbour` it
+    /// lies along — its lower edge, or its upper one — on the same clock: a
+    /// row coming on screen beside a row mid-slide is drawn against that edge
+    /// all the way. The neighbour's box opening or closing moves that edge as
+    /// well as its slide does, by the share of the size change on that side
+    /// of the layer's anchor.
+    private final func copyRowSlides(from neighbour: ListRowView, to entering: ListRowView, alongLowerEdge: Bool) {
         #if canImport(UIKit)
             let source: CALayer = neighbour.layer
             let target: CALayer = entering.layer
         #else
             guard let source = neighbour.layer, let target = entering.layer else { return }
         #endif
+        let share = alongLowerEdge ? 1 - source.anchorPoint.y : -source.anchorPoint.y
         for key in source.animationKeys() ?? [] {
-            guard let slide = source.animation(forKey: key) as? CAPropertyAnimation,
-                  slide.keyPath == "position", slide.isAdditive,
-                  let copy = slide.copy() as? CAAnimation
+            guard let slide = source.animation(forKey: key) as? CABasicAnimation, slide.isAdditive,
+                  let copy = slide.copy() as? CABasicAnimation
             else { continue }
-            target.add(copy, forKey: "carried." + key)
+            switch slide.keyPath {
+            case "position":
+                target.add(copy, forKey: "carried." + key)
+            case "bounds.size", "bounds":
+                guard share != 0, let height = Self.height(of: slide.fromValue), height != 0 else { continue }
+                copy.keyPath = "position"
+                copy.fromValue = Self.pointValue(y: height * share)
+                copy.toValue = Self.pointValue(y: 0)
+                target.add(copy, forKey: "carried." + key)
+            default:
+                continue
+            }
         }
+    }
+
+    /// The height a size or rect animation value carries.
+    private static func height(of value: Any?) -> CGFloat? {
+        guard let value = value as? NSValue else { return nil }
+        let type = String(cString: value.objCType)
+        #if canImport(UIKit)
+            return type.contains("CGRect") ? value.cgRectValue.height : value.cgSizeValue.height
+        #else
+            return type.contains("Rect") ? value.rectValue.height : value.sizeValue.height
+        #endif
+    }
+
+    private static func pointValue(y: CGFloat) -> NSValue {
+        #if canImport(UIKit)
+            NSValue(cgPoint: CGPoint(x: 0, y: y))
+        #else
+            NSValue(point: CGPoint(x: 0, y: y))
+        #endif
     }
 
     // MARK: - Scrolling

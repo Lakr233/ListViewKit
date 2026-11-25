@@ -359,13 +359,16 @@ struct ListViewRemeasureSlideTests {
         listView.invalidateLayout(forRowsWith: [1], animated: true)
         advanceOneFrame()
         advanceOneFrame()
+        let above = try #require(listView.rowView(for: 5))
+        // Still on its way when the second remeasure comes.
+        guard let midway = presentationY(of: above), abs(midway - above.placedFrame.minY) > 1 else { return nil }
 
         heights.values[1] = 20
         listView.invalidateLayout(forRowsWith: [1], animated: true)
 
         let entering = try #require(listView.rowView(for: 6))
-        let above = try #require(listView.rowView(for: 5))
         var gaps: [CGFloat] = []
+        var moved = false
         for _ in 0 ..< 20 {
             let start = Date()
             advanceOneFrame()
@@ -373,8 +376,72 @@ struct ListViewRemeasureSlideTests {
             let box = try #require(presentationFrame(of: above))
             let shown = try #require(presentationY(of: entering))
             gaps.append(abs(box.maxY - shown))
+            if abs(shown - entering.placedFrame.minY) > 1 { moved = true }
+        }
+        #expect(moved)
+        return gaps
+    }
+
+    /// A second remeasure while the first one's box is still closing: the
+    /// row that comes on under it starts against its lower edge as drawn,
+    /// mid-close, and stays on it.
+    @Test
+    func aRowComingOnUnderAClosingBoxStaysOnItsEdge() throws {
+        for _ in 0 ..< 10 {
+            guard let gaps = try gapsUnderAClosingBox() else { continue }
+            #expect(gaps.allSatisfy { $0 < 2 }, "largest gap \(gaps.max() ?? 0)")
+            return
+        }
+        withKnownIssue("Every run overran its frames; the machine was too busy to measure on.", isIntermittent: true) {
+            Issue.record("No run kept its frames on time.")
+        }
+    }
+
+    private func gapsUnderAClosingBox() throws -> [CGFloat]? {
+        let heights = Heights()
+        heights.values[1] = 700
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let closing = try #require(listView.rowView(for: 1))
+        heights.values[1] = 500
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        advanceOneFrame()
+        advanceOneFrame()
+        #expect(listView.rowView(for: 2) == nil)
+
+        heights.values[1] = 200
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+
+        let entering = try #require(listView.rowView(for: 2))
+        var gaps: [CGFloat] = []
+        for _ in 0 ..< 20 {
+            let start = Date()
+            advanceOneFrame()
+            guard Date().timeIntervalSince(start) < 0.04 else { return nil }
+            let box = try #require(presentationFrame(of: closing))
+            let shown = try #require(presentationY(of: entering))
+            gaps.append(abs(box.maxY - shown))
         }
         return gaps
+    }
+
+    /// A pass still owed when the remeasure comes — the top inset changed —
+    /// runs first: the rows above the change, which do not move, do not
+    /// slide from where the owed pass would have put them.
+    @Test
+    func aPassOwedRunsBeforeTheRemeasure() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let row0 = try #require(listView.rowView(for: 0))
+        listView.topInset = 50
+
+        heights.values[2] = 160
+        listView.invalidateLayout(forRowsWith: [2], animated: true)
+
+        #expect(animationCount(on: row0) == 0)
+        advanceOneFrame()
+        #expect(abs((presentationY(of: row0) ?? -1) - row0.placedFrame.minY) < 0.5)
     }
 
     /// A row whose box changes size lays its contents out at the new one.
@@ -387,9 +454,9 @@ struct ListViewRemeasureSlideTests {
 
         heights.values[1] = 160
         listView.invalidateLayout(forRowsWith: [1], animated: true)
-        settleSlides()
-        settleLayout(listView)
+        advanceOneFrame()
 
+        // Laid out at the new size by the row, on the next pass, unforced.
         #expect(abs(row.fill.frame.height - 160) < 0.5)
     }
 
