@@ -85,8 +85,11 @@ import DisplayLink
                     let currentOffset = contentOffset
                     // Shrinking the content makes UIScrollView pull the offset
                     // back in by itself. That is a clamp, not a scroll, and
-                    // inside a caller's block it would animate as one.
+                    // inside a caller's block it would animate as one. Nor is
+                    // it anyone's hand (``contentOffset``).
+                    clampsForContentSize = true
                     withoutListAnimation { super.contentSize = newValue }
+                    clampsForContentSize = false
                     // Only when it moved: `setContentOffset(_:animated:)` stops
                     // a fling even when handed the offset it already has, and
                     // streaming content grows under one on every update.
@@ -112,11 +115,20 @@ import DisplayLink
                 // after the write, so the scroll stops where the hand put it:
                 // a tick already on its way finds nothing to move back.
                 super.contentOffset = newValue
-                if scrollingTarget != nil, isTracking || isDragging || isDecelerating {
+                // A finger resting on a list that is past an edge does not
+                // take it over: the scroll holds there and brings it back in
+                // once the finger lifts (``handleScrollingAnimation(_:)``).
+                if scrollingTarget != nil, !clampsForContentSize,
+                   isDragging || isDecelerating || (isTracking && isContentOffsetWithinBounds(offset: newValue))
+                {
                     cancelCurrentScrolling()
                 }
             }
         }
+
+        /// Set while UIScrollView pulls the offset in after the content
+        /// shrank: a clamp, not a hand on the list.
+        private final var clampsForContentSize = false
 
         final func isContentOffsetWithinBounds(offset: CGPoint) -> Bool {
             let min = minimumContentOffset
@@ -151,7 +163,12 @@ import DisplayLink
             // offset outside the content is wrong regardless of whether the
             // host is currently allowed to scroll, and this is the only thing
             // left running that would notice.
-            guard !isScrollOffsetOwnedByUser else { return }
+            // A scroll held under a resting finger, on its way back in from
+            // past an edge, is still the list's, and still retargeted: only
+            // a drag or momentum has the offset to itself.
+            if scrollingTarget != nil ? (isDragging || isDecelerating) : isScrollOffsetOwnedByUser {
+                return
+            }
             if let target = scrollingTarget {
                 // A programmatic scroll keeps running, retargeted onto the new
                 // edge so it lands there instead of short of it.
@@ -255,17 +272,27 @@ import DisplayLink
                 .init(x: currentContentOffset.x, y: currentContentOffset.y),
                 vel: .init(x: 0, y: 0)
             )
+            let wasScrolling = scrollingTarget != nil
             scrollingTarget = nil
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
             scrollingDisplayLink = nil
             // A scroll stopped on its way back from past an edge would leave
             // the offset out there, with blank space beyond the content,
-            // until something else laid the list out. Nobody's hand holds
-            // it, so it is put back in now.
-            if !isContentOffsetWithinBounds(offset: currentContentOffset) {
-                reconcileOffsetWithContentSize()
+            // until something else laid the list out. Unless a drag or
+            // momentum holds it, or the caller is about to set the offset
+            // itself, it is put straight back in: not through
+            // ``reconcileOffsetWithContentSize()``, which inside an animated
+            // apply would start another scroll from here.
+            if wasScrolling, !placesOffsetAfterCancel, !isDragging, !isDecelerating,
+               !isContentOffsetWithinBounds(offset: currentContentOffset)
+            {
+                applyContentOffsetWithoutTravel(nearestScrollLocationInBounds(offset: currentContentOffset))
             }
         }
+
+        /// Set while the list cancels a scroll only to put the offset
+        /// somewhere itself, so the cancel does not move it first.
+        private final var placesOffsetAfterCancel = false
 
         /// Shifts the current offset and any in-flight programmatic scroll by
         /// `dy` without cancelling it. Deferred height correction uses this so
@@ -304,16 +331,22 @@ import DisplayLink
                 return
             }
             if isTracking {
-                guard !isContentOffsetWithinBounds(offset: contentOffset) else {
+                let edge = nearestScrollLocationInBounds(offset: contentOffset)
+                guard edge != contentOffset else {
                     cancelCurrentScrolling()
                     return
                 }
                 // A finger resting on a list still on its way back from past
-                // an edge — a tap on a row, say — holds it where it is.
-                // Cancelled, the offset stayed out there with blank space
-                // beyond the last row, since a touch that never drags leaves
-                // UIKit nothing to bounce. The scroll goes on once the finger
-                // lifts, or gives way to the drag it turns into.
+                // an edge — a tap on a row, say — ends the scroll it came in
+                // on, as anywhere, but the offset still has to come back in:
+                // cancelled out there, it left blank space beyond the last
+                // row, since a touch that never drags gives UIKit nothing to
+                // bounce. It is held where it is, aimed at the nearest edge,
+                // and goes there once the finger lifts — or gives way to the
+                // drag the touch turns into.
+                if scrollingTarget != edge {
+                    scroll(to: edge, preserveVelocity: false)
+                }
                 scrollingContext.setCurrent(
                     .init(x: contentOffset.x, y: contentOffset.y),
                     vel: .init(x: 0, y: 0)
@@ -357,7 +390,9 @@ import DisplayLink
             if animated {
                 scroll(to: contentOffset)
             } else {
+                placesOffsetAfterCancel = true
                 cancelCurrentScrolling()
+                placesOffsetAfterCancel = false
                 applyContentOffsetWithoutTravel(contentOffset)
             }
         }
@@ -422,8 +457,12 @@ import DisplayLink
         /// trusted to finish. See the AppKit twin.
         private final func landScrollingOutsideTheDisplayLink() {
             guard let target = scrollingTarget else { return }
+            placesOffsetAfterCancel = true
             cancelCurrentScrolling()
-            applyContentOffsetWithoutTravel(target)
+            placesOffsetAfterCancel = false
+            // Inside the content, where the list stands now: a target the
+            // content moved away from while a finger rested is not.
+            applyContentOffsetWithoutTravel(nearestScrollLocationInBounds(offset: target))
         }
 
         /// Where a subclass hears about the view changing windows, after the

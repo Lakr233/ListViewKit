@@ -254,6 +254,114 @@ struct ListScrollViewUIKitTests {
         #expect(scrollView.scrollingDisplayLink == nil)
     }
 
+    /// Cancelled inside an animated apply, the scroll back is put back in
+    /// at once and starts no other scroll from there.
+    @Test
+    func aCancelInsideAnAnimatedApplyStartsNoScroll() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        tick(scrollView, at: 6_000)
+        #expect(scrollView.contentOffset.y > 1_764)
+
+        scrollView.animatesContentSizeCorrection = true
+        scrollView.cancelCurrentScrolling()
+        scrollView.animatesContentSizeCorrection = false
+
+        #expect(scrollView.scrollingDisplayLink == nil)
+        #expect(scrollView.contentOffset.y == 1_764)
+    }
+
+    /// An offset set outright mid scroll back lands there in one write,
+    /// with no stop at the edge on the way.
+    @Test
+    func anOffsetSetMidScrollBackLandsThereInOneWrite() {
+        final class Counter: NSObject, UIScrollViewDelegate {
+            var offsets: [CGFloat] = []
+            func scrollViewDidScroll(_ scrollView: UIScrollView) {
+                offsets.append(scrollView.contentOffset.y)
+            }
+        }
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        tick(scrollView, at: 7_000)
+        let counter = Counter()
+        scrollView.delegate = counter
+
+        scrollView.setContentOffset(CGPoint(x: 0, y: 500), animated: false)
+
+        #expect(counter.offsets == [500])
+        #expect(scrollView.scrollingDisplayLink == nil)
+        scrollView.delegate = nil
+    }
+
+    /// A host cancelling the scroll back while a finger rests on the list
+    /// leaves no blank beyond the end either: a resting finger is not a
+    /// drag, and UIKit will not bounce it.
+    @Test
+    func aCancelUnderARestingFingerLeavesNoBlank() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        tick(scrollView, at: 8_000)
+        scrollView.touch = true
+        tick(scrollView, at: 8_000 + 1.0 / 120)
+
+        scrollView.cancelCurrentScrolling()
+
+        #expect(scrollView.contentOffset.y == 1_764)
+        scrollView.touch = false
+    }
+
+    /// The content shrinking again while a finger rests on a scroll back
+    /// moves its target to the new end: once the finger lifts it travels
+    /// there, never cutting the last of the way.
+    @Test
+    func theContentShrinkingUnderARestingFingerMovesTheScrollBacksEnd() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        var time: TimeInterval = 9_000
+        time += 1.0 / 120
+        tick(scrollView, at: time)
+        scrollView.touch = true
+        time += 1.0 / 120
+        tick(scrollView, at: time)
+
+        scrollView.contentSize = CGSize(width: 200, height: 1_914)
+        #expect(scrollView.maximumContentOffset.y == 1_714)
+        scrollView.touch = false
+
+        var previous = scrollView.contentOffset.y
+        var largest: CGFloat = 0
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120
+            tick(scrollView, at: time)
+            largest = max(largest, previous - scrollView.contentOffset.y)
+            previous = scrollView.contentOffset.y
+        }
+        #expect(scrollView.contentOffset.y == 1_714)
+        #expect(largest < 20)
+    }
+
+    /// A tap on a list carried past an edge by a long scroll ends that
+    /// scroll, as a tap does anywhere, and only brings the offset back to
+    /// the edge it is past.
+    @Test
+    func aTapOnALongScrollFromPastAnEdgeStopsAtTheEdge() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        scrollView.scroll(to: CGPoint(x: 0, y: 0), preserveVelocity: false)
+        scrollView.touch = true
+        var time: TimeInterval = 10_000
+        time += 1.0 / 120
+        tick(scrollView, at: time)
+        scrollView.touch = false
+
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120
+            tick(scrollView, at: time)
+        }
+        #expect(scrollView.contentOffset.y == 1_764)
+    }
+
     /// A busy main thread can deliver a whole drag between two ticks of the
     /// link. The drag takes the offset over as it moves it; the next tick
     /// used to find the finger lifted and put the offset back where the
