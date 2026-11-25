@@ -657,13 +657,13 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                 }
             }
         }
-        for pair in carriedBy {
-            copyRowSlides(from: pair.neighbour, to: pair.entering, alongLowerEdge: pair.lowerEdge)
-        }
         guard moves else {
             updateVisibleRowFrames(animated: false)
             settleNewlyPlacedRows()
             return
+        }
+        for pair in carriedBy {
+            copyRowSlides(from: pair.neighbour, to: pair.entering, alongLowerEdge: pair.lowerEdge)
         }
         for row in resized {
             beginUnfolding(row.view)
@@ -718,8 +718,17 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             guard let slide = source.animation(forKey: key) as? CABasicAnimation, slide.isAdditive,
                   let copy = slide.copy() as? CABasicAnimation
             else { continue }
+            // The copy is the entering row's own: the block that added the
+            // original (UIKit counts its animations to call its completion
+            // once) must not hear of it.
+            copy.delegate = nil
             switch slide.keyPath {
             case "position":
+                // Only the edge's travel along the list; a sideways move is
+                // the neighbour's own.
+                guard let delta = Self.yValue(of: slide.fromValue), delta != 0 else { continue }
+                copy.fromValue = Self.pointValue(y: delta)
+                copy.toValue = Self.pointValue(y: 0)
                 target.add(copy, forKey: "carried." + key)
             case "bounds.size", "bounds":
                 guard share != 0, let height = Self.height(of: slide.fromValue), height != 0 else { continue }
@@ -741,6 +750,15 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             return type.contains("CGRect") ? value.cgRectValue.height : value.cgSizeValue.height
         #else
             return type.contains("Rect") ? value.rectValue.height : value.sizeValue.height
+        #endif
+    }
+
+    private static func yValue(of value: Any?) -> CGFloat? {
+        guard let value = value as? NSValue else { return nil }
+        #if canImport(UIKit)
+            return value.cgPointValue.y
+        #else
+            return value.pointValue.y
         #endif
     }
 

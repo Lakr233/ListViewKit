@@ -411,6 +411,8 @@ struct ListViewRemeasureSlideTests {
         advanceOneFrame()
         advanceOneFrame()
         #expect(listView.rowView(for: 2) == nil)
+        // Still closing when the second remeasure comes.
+        guard let midway = presentationFrame(of: closing), midway.height > 501 else { return nil }
 
         heights.values[1] = 200
         listView.invalidateLayout(forRowsWith: [1], animated: true)
