@@ -529,6 +529,81 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         requestLayout()
     }
 
+    /// Invalidates the measured heights of `identifiers` and measures them
+    /// again now — animated, sliding every row the new heights move on screen
+    /// from where it stood, as an animated ``apply(_:animated:)`` slides the
+    /// rows a change moves, instead of putting it there at once.
+    ///
+    /// What moves is what moves on screen. A row that keeps its place there —
+    /// the list holding its anchor, the offset taking up a change above it —
+    /// does not slide; a changed row grows or shrinks from where it stands;
+    /// the rows under it slide by what it gained or lost. A row that only
+    /// comes on screen because of the change travels in from where it was, as
+    /// in an apply.
+    ///
+    /// Not animated, or with the list out of a window, this is
+    /// ``invalidateLayout(forRowWith:)`` for each, measured on the next pass.
+    /// An override must call `super`.
+    open func invalidateLayout(forRowsWith identifiers: [Item.ID], animated: Bool) {
+        guard animated, window != nil, !identifiers.isEmpty else {
+            for identifier in identifiers {
+                invalidateLayout(forRowWith: identifier)
+            }
+            return
+        }
+        // Where every mounted row stands on screen, and every row's frame.
+        let offsetBefore = contentOffset.y
+        var stood: [Item.ID: CGRect] = [:]
+        for (identifier, entry) in visibleRows {
+            stood[identifier] = entry.view.placedFrame.offsetBy(dx: 0, dy: -offsetBefore)
+        }
+        let previousGeometry = rowLayout.geometry
+        rowLayout.invalidateHeights(for: identifiers)
+        measureViewport()
+        prepareVisibleRows()
+        let shift = contentOffset.y - offsetBefore
+        var moves = false
+        for (identifier, entry) in visibleRows {
+            guard let index = indexByID[identifier] else { continue }
+            let target = rectForRow(at: index)
+            let from: CGRect
+            if let onScreen = stood[identifier] {
+                // Where it stood on screen, at the size it had: the slide
+                // carries it on, and its size, to the new frame.
+                from = onScreen.offsetBy(dx: 0, dy: contentOffset.y)
+            } else if let previousFrame = previousGeometry.frame(for: index) {
+                from = entryFrame(from: previousFrame.offsetBy(dx: 0, dy: shift), of: entry.view)
+            } else {
+                continue
+            }
+            // Every row set where it stands on screen, without animating — a
+            // row the offset carried along, unmoved there, is placed at its
+            // new frame now rather than slid to it from its old one.
+            setRowFrame(from, on: entry.view, animated: false)
+            if abs(from.minY - target.minY) > 0.5 || abs(from.height - target.height) > 0.5 {
+                moves = true
+            }
+        }
+        guard moves else {
+            updateVisibleRowFrames(animated: false)
+            return
+        }
+        holdMountedRows(for: listRowSlideDuration)
+        // As in an apply: a shorter content pulling the offset off an edge
+        // travels with the rows instead of cutting to the destination.
+        animatesContentSizeCorrection = true
+        defer { animatesContentSizeCorrection = false }
+        withListAnimation {
+            self.updateVisibleRowFrames(animated: true)
+        } completion: { _ in
+            MainActor.assumeIsolated {
+                // Only ask for a layout. Forcing one here would run inside a
+                // later animation if these overlap, moving its rows early.
+                self.requestLayout()
+            }
+        }
+    }
+
     // MARK: - Scrolling
 
     /// Scrolls until the row at `index` sits at `position`.
