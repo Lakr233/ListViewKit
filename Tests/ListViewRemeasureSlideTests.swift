@@ -23,6 +23,34 @@ private struct RemeasureItem: Identifiable, Hashable {
     let id: Int
 }
 
+/// A row whose one subview fills it, laid out by the row: what a row's
+/// contents do when its box changes size.
+@MainActor
+private final class FillRow: ListRowView {
+    #if canImport(UIKit)
+        let fill = UIView()
+    #else
+        let fill = NSView()
+    #endif
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        addSubview(fill)
+    }
+
+    #if canImport(UIKit)
+        override func layoutSubviews() {
+            super.layoutSubviews()
+            fill.frame = bounds
+        }
+    #else
+        override func layout() {
+            super.layout()
+            fill.frame = bounds
+        }
+    #endif
+}
+
 /// The heights the rows measure at, changed under the list as content would be.
 @MainActor
 private final class Heights {
@@ -60,7 +88,7 @@ struct ListViewRemeasureSlideTests {
             window.contentView?.addSubview(listView)
         #endif
         listView.rows {
-            ListRow(ListRowView.self)
+            ListRow(FillRow.self)
                 .height { item, _ in heights.height(of: item.id) }
                 .configure { _, _, _ in }
         }
@@ -261,11 +289,15 @@ struct ListViewRemeasureSlideTests {
         listView.invalidateLayout(forRowsWith: [1], animated: true)
 
         let entering = try #require(listView.rowView(for: 3))
+        var moving = false
         for _ in 0 ..< 20 {
             advanceOneFrame()
-            guard let box = presentationFrame(of: straddler), let shown = presentationY(of: entering) else { continue }
+            let box = try #require(presentationFrame(of: straddler))
+            let shown = try #require(presentationY(of: entering))
             #expect(abs(box.maxY - shown) < 2)
+            if shown > entering.placedFrame.minY + 1 { moving = true }
         }
+        #expect(moving)
     }
 
     /// With a top inset, a row straddling the upper edge closes: the offset
@@ -286,11 +318,57 @@ struct ListViewRemeasureSlideTests {
         listView.invalidateLayout(forRowsWith: [2], animated: true)
 
         let entering = try #require(listView.rowView(for: 1))
+        var moving = false
         for _ in 0 ..< 20 {
             advanceOneFrame()
-            guard let box = presentationFrame(of: straddler), let shown = presentationFrame(of: entering) else { continue }
+            let box = try #require(presentationFrame(of: straddler))
+            let shown = try #require(presentationFrame(of: entering))
             #expect(abs(shown.maxY - box.minY) < 2)
+            if shown.minY < entering.placedFrame.minY - 1 { moving = true }
         }
+        #expect(moving)
+    }
+
+    /// A second remeasure while the first one's slide is still running:
+    /// the row that comes on screen starts against its neighbour as the
+    /// reader sees it, mid-slide, not where the list already has it.
+    @Test
+    func aRowComingOnMidSlideStartsAgainstItsDrawnNeighbour() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights, count: 12)
+        defer { withExtendedLifetime(window) {} }
+        heights.values[1] = 160
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        advanceOneFrame()
+        advanceOneFrame()
+
+        heights.values[1] = 20
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+
+        let entering = try #require(listView.rowView(for: 6))
+        let above = try #require(listView.rowView(for: 5))
+        for _ in 0 ..< 20 {
+            advanceOneFrame()
+            let box = try #require(presentationFrame(of: above))
+            let shown = try #require(presentationY(of: entering))
+            #expect(abs(box.maxY - shown) < 2)
+        }
+    }
+
+    /// A row whose box changes size lays its contents out at the new one.
+    @Test
+    func aResizedRowLaysOutItsContents() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let row = try #require(listView.rowView(for: 1) as? FillRow)
+
+        heights.values[1] = 160
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        settleSlides()
+        settleLayout(listView)
+
+        #expect(abs(row.fill.frame.height - 160) < 0.5)
     }
 
     /// A list with a top inset, a row shrinking: the row that comes on

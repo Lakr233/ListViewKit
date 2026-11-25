@@ -557,6 +557,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // a copy of that would copy every row's height the moment the
         // measurement below edits it.
         let offsetBefore = contentOffset.y
+        let shownBefore = viewportRect.offsetBy(dx: 0, dy: topInset)
         var placedBefore: [Item.ID: CGRect] = [:]
         placedBefore.reserveCapacity(visibleRows.count)
         for (identifier, entry) in visibleRows {
@@ -578,7 +579,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
 
         // In row order, each mounted row with the move the change made it on
         // screen: where it stood there, in the content as it is now.
-        var rows: [(index: Int, view: ListRowView, from: CGRect?, target: CGRect)] = []
+        var rows: [(index: Int, view: ListRowView, from: CGRect?, onScreen: Bool, target: CGRect)] = []
         rows.reserveCapacity(visibleRows.count)
         for (identifier, entry) in visibleRows {
             guard let index = indexByID[identifier] else { continue }
@@ -589,38 +590,51 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             {
                 from = target
             }
-            rows.append((index, entry.view, from, target))
+            let onScreen = placedBefore[identifier].map { $0.intersects(shownBefore) } ?? false
+            rows.append((index, entry.view, from, onScreen, target))
         }
         rows.sort { $0.index < $1.index }
         // A row that came on screen with the change moved with the rows next
-        // to it — every row between two changes moves alike — so it takes the
-        // move of the edge it lies against: the lower edge of the nearest row
-        // above that was showing, or the upper edge of the nearest below. Only
-        // across rows mounted now, one after another: past a gap its place
-        // before is not known, and it appears where it belongs.
+        // to it — every row between two changes moves alike — so it moves as
+        // the edge it lies along does: the lower edge of the nearest showing
+        // row above, the upper edge of the nearest below, a row on screen
+        // before one only held mounted past it. It takes that row's move and
+        // whatever slide is still carrying that row, so it is drawn against
+        // it throughout. Only across rows mounted one after another: past a
+        // gap its place before is not known, and it appears where it belongs.
         let showing = rows.map { $0.from != nil }
+        var carriedBy: [(entering: ListRowView, neighbour: ListRowView)] = []
         for position in rows.indices where !showing[position] {
             let target = rows[position].target
-            var move: CGFloat?
-            var distance = Int.max
+            var best: (move: CGFloat, distance: Int, onScreen: Bool, view: ListRowView)?
+            func consider(_ candidate: Int, move: CGFloat) {
+                let distance = abs(candidate - position)
+                let onScreen = rows[candidate].onScreen
+                if let current = best, onScreen == current.onScreen ? distance >= current.distance : !onScreen {
+                    return
+                }
+                best = (move, distance, onScreen, rows[candidate].view)
+            }
             var above = position - 1
             while above >= 0, rows[above].index == rows[above + 1].index - 1 {
                 if showing[above], let from = rows[above].from {
-                    move = from.maxY - rows[above].target.maxY
-                    distance = position - above
+                    consider(above, move: from.maxY - rows[above].target.maxY)
                     break
                 }
                 above -= 1
             }
             var below = position + 1
-            while below < rows.count, rows[below].index == rows[below - 1].index + 1, below - position < distance {
+            while below < rows.count, rows[below].index == rows[below - 1].index + 1 {
                 if showing[below], let from = rows[below].from {
-                    move = from.minY - rows[below].target.minY
+                    consider(below, move: from.minY - rows[below].target.minY)
                     break
                 }
                 below += 1
             }
-            rows[position].from = target.offsetBy(dx: 0, dy: move ?? 0)
+            rows[position].from = target.offsetBy(dx: 0, dy: best?.move ?? 0)
+            if let neighbour = best?.view {
+                carriedBy.append((rows[position].view, neighbour))
+            }
         }
 
         var moves = false
@@ -636,6 +650,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                     resized.append((row.view, row.view.mountID, row.target))
                 }
             }
+        }
+        for pair in carriedBy {
+            copyRowSlides(from: pair.neighbour, to: pair.entering)
         }
         guard moves else {
             updateVisibleRowFrames(animated: false)
@@ -671,6 +688,25 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
                     self?.endUnfolding(row.view, mountID: row.mountID)
                 }
             }
+        }
+    }
+
+    /// Puts on `entering` the slides still carrying `neighbour`, on the same
+    /// clock: a row coming on screen beside a row mid-slide is drawn where
+    /// that row's edge is drawn, all the way.
+    private final func copyRowSlides(from neighbour: ListRowView, to entering: ListRowView) {
+        #if canImport(UIKit)
+            let source: CALayer = neighbour.layer
+            let target: CALayer = entering.layer
+        #else
+            guard let source = neighbour.layer, let target = entering.layer else { return }
+        #endif
+        for key in source.animationKeys() ?? [] {
+            guard let slide = source.animation(forKey: key) as? CAPropertyAnimation,
+                  slide.keyPath == "position", slide.isAdditive,
+                  let copy = slide.copy() as? CAAnimation
+            else { continue }
+            target.add(copy, forKey: "carried." + key)
         }
     }
 
