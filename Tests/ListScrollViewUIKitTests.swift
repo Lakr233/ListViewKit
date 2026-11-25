@@ -62,20 +62,36 @@ struct ListScrollViewUIKitTests {
         #expect(offsets.allSatisfy { $0 <= 1_800 && $0 >= 1_764 })
     }
 
-    /// A scroll that starts inside the content stays inside it.
+    /// A scroll retargeted onto a nearer edge keeps its velocity, and one
+    /// with velocity to spare runs past the target. Past an edge that is
+    /// blank space: the frames stop at it, as on AppKit.
     @Test
-    func aScrollFromInsideTheContentStaysInside() {
+    func aRetargetedScrollDoesNotOvershootTheContentEdge() {
         let scrollView = makeScrollView()
-        scrollView.contentOffset = CGPoint(x: 0, y: 1_700)
         scrollView.scroll(to: CGPoint(x: 0, y: 1_800), preserveVelocity: false)
-
         var time: TimeInterval = 1_000
+        for _ in 0 ..< 8 {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+        }
+        #expect(scrollView.scrollingContext.y.velocity > 3_000)
+
+        // The content shrinks to end just ahead of the scroll.
+        scrollView.contentSize = CGSize(
+            width: 200,
+            height: scrollView.contentOffset.y + 50 + scrollView.bounds.height
+        )
+        let edge = scrollView.maximumContentOffset.y
+        #expect(scrollView.scrollingContext.y.target == edge)
+
+        var furthest = scrollView.contentOffset.y
         for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
             time += 1.0 / 120.0
             tick(scrollView, at: time)
-            #expect(scrollView.contentOffset.y <= scrollView.maximumContentOffset.y)
+            furthest = max(furthest, scrollView.contentOffset.y)
         }
-        #expect(scrollView.contentOffset.y == 1_800)
+        #expect(furthest <= edge)
+        #expect(scrollView.contentOffset.y == edge)
     }
 
     /// The link holds the view weakly. A `CADisplayLink` retains its target,
@@ -144,7 +160,9 @@ struct ListScrollViewUIKitTests {
     private final class HandledScrollView: ListScrollView {
         var finger = false
         var momentum = false
-        override var isTracking: Bool { finger || super.isTracking }
+        /// A finger down that has not dragged: a tap on a row.
+        var touch = false
+        override var isTracking: Bool { finger || touch || super.isTracking }
         override var isDragging: Bool { finger || super.isDragging }
         override var isDecelerating: Bool { momentum || super.isDecelerating }
     }
@@ -154,6 +172,86 @@ struct ListScrollViewUIKitTests {
         scrollView.contentSize = CGSize(width: 200, height: 2_000)
         scrollView.contentInsetAdjustmentBehavior = .never
         return scrollView
+    }
+
+    /// Starts the scroll back a row leaving the end of the content asks
+    /// for: offset 1 800 past a new end at 1 764.
+    private func startScrollBackFromPastTheEnd(_ scrollView: HandledScrollView) {
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_800)
+        scrollView.animatesContentSizeCorrection = true
+        scrollView.contentSize = CGSize(width: 200, height: 1_964)
+        scrollView.animatesContentSizeCorrection = false
+    }
+
+    /// A finger resting on the list while it scrolls back from past the
+    /// end — a tap on a row — holds it where it is, and the scroll goes on
+    /// once the finger lifts. Cancelled, it stayed past the end, blank
+    /// beyond the last row: a touch that never drags gives UIKit nothing
+    /// to bounce.
+    @Test
+    func aRestingFingerHoldsAScrollBackUntilItLifts() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        var time: TimeInterval = 3_000
+        for _ in 0 ..< 3 {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+        }
+        let held = scrollView.contentOffset.y
+        #expect(held > 1_764 && held < 1_800)
+
+        scrollView.touch = true
+        for _ in 0 ..< 30 {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+        }
+        #expect(scrollView.contentOffset.y == held)
+        #expect(scrollView.scrollingDisplayLink != nil)
+
+        scrollView.touch = false
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+        }
+        #expect(scrollView.contentOffset.y == 1_764)
+    }
+
+    /// A drag, or the momentum it leaves, takes a scroll back over: UIKit
+    /// brings an offset past an edge back itself.
+    @Test
+    func aDragOrMomentumTakesAScrollBackOver() {
+        for hand in 0 ..< 2 {
+            let scrollView = makeHandledScrollView()
+            startScrollBackFromPastTheEnd(scrollView)
+            tick(scrollView, at: 4_000)
+            if hand == 0 {
+                scrollView.finger = true
+            } else {
+                scrollView.momentum = true
+            }
+            let offset = scrollView.contentOffset.y
+
+            tick(scrollView, at: 4_000 + 1.0 / 120)
+
+            #expect(scrollView.scrollingDisplayLink == nil)
+            #expect(scrollView.contentOffset.y == offset)
+        }
+    }
+
+    /// A scroll back stopped by the host leaves no blank beyond the end:
+    /// nobody's hand holds the offset, so it is put back in.
+    @Test
+    func aCancelledScrollBackLeavesNoBlankBeyondTheEnd() {
+        let scrollView = makeHandledScrollView()
+        startScrollBackFromPastTheEnd(scrollView)
+        tick(scrollView, at: 5_000)
+        tick(scrollView, at: 5_000 + 1.0 / 120)
+        #expect(scrollView.contentOffset.y > 1_764)
+
+        scrollView.cancelCurrentScrolling()
+
+        #expect(scrollView.contentOffset.y == 1_764)
+        #expect(scrollView.scrollingDisplayLink == nil)
     }
 
     /// A busy main thread can deliver a whole drag between two ticks of the

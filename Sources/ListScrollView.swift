@@ -258,6 +258,13 @@ import DisplayLink
             scrollingTarget = nil
             scrollingContext.setTarget(.init(x: currentContentOffset.x, y: currentContentOffset.y))
             scrollingDisplayLink = nil
+            // A scroll stopped on its way back from past an edge would leave
+            // the offset out there, with blank space beyond the content,
+            // until something else laid the list out. Nobody's hand holds
+            // it, so it is put back in now.
+            if !isContentOffsetWithinBounds(offset: currentContentOffset) {
+                reconcileOffsetWithContentSize()
+            }
         }
 
         /// Shifts the current offset and any in-flight programmatic scroll by
@@ -290,8 +297,28 @@ import DisplayLink
         }
 
         final func handleScrollingAnimation(_ frame: DisplayLinkFrame) {
-            if isTracking || scrollingContext.completed {
+            // A drag, or the momentum and the bounce it leaves, owns the
+            // offset, and UIKit brings one past an edge back itself.
+            if isDragging || isDecelerating || scrollingContext.completed {
                 cancelCurrentScrolling()
+                return
+            }
+            if isTracking {
+                guard !isContentOffsetWithinBounds(offset: contentOffset) else {
+                    cancelCurrentScrolling()
+                    return
+                }
+                // A finger resting on a list still on its way back from past
+                // an edge — a tap on a row, say — holds it where it is.
+                // Cancelled, the offset stayed out there with blank space
+                // beyond the last row, since a touch that never drags leaves
+                // UIKit nothing to bounce. The scroll goes on once the finger
+                // lifts, or gives way to the drag it turns into.
+                scrollingContext.setCurrent(
+                    .init(x: contentOffset.x, y: contentOffset.y),
+                    vel: .init(x: 0, y: 0)
+                )
+                _ = scrollingClock.elapsed(at: frame)
                 return
             }
             // Timestamps rather than `frame.duration`, which UIKit quotes at
@@ -1710,7 +1737,7 @@ import DisplayLink
         ///
         /// A scroll retargeted onto a nearer edge keeps its velocity, and with
         /// velocity to spare it runs past the target into blank space. Not a
-        /// plain clamp, as on UIKit: the wheel's clamp and an animated
+        /// plain clamp: the wheel's clamp and an animated
         /// content-size correction start outside the bounds on purpose, and
         /// have to travel back from there.
         private final func springFrameWithinBounds() -> CGPoint {
