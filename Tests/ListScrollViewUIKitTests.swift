@@ -27,6 +27,57 @@ struct ListScrollViewUIKitTests {
         scrollView.handleScrollingAnimation(.init(timestamp: time, targetTimestamp: time + period))
     }
 
+    /// Content shrinking under an offset at its end leaves the offset past
+    /// the new end, and the correction scrolls back to it over frames. Each
+    /// step used to be held to the bounds, so the first step was the whole
+    /// way: a chat's typing row leaving the bottom moved every row 36 pt at
+    /// once. From out there the scroll only ever heads in.
+    @Test
+    func aScrollBackFromPastTheEndTravelsInsteadOfCutting() {
+        let scrollView = makeScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_800)
+        #expect(scrollView.maximumContentOffset.y == 1_800)
+
+        // A row leaving the end, inside the list's animated apply.
+        scrollView.animatesContentSizeCorrection = true
+        scrollView.contentSize = CGSize(width: 200, height: 1_964)
+        scrollView.animatesContentSizeCorrection = false
+        #expect(scrollView.maximumContentOffset.y == 1_764)
+        #expect(scrollView.contentOffset.y == 1_800)
+        #expect(scrollView.scrollingDisplayLink != nil)
+
+        var offsets: [CGFloat] = []
+        var time: TimeInterval = 1_000
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+            offsets.append(scrollView.contentOffset.y)
+        }
+
+        #expect(scrollView.contentOffset.y == 1_764)
+        #expect(scrollView.scrollingDisplayLink == nil)
+        // Over frames, every one of them heading in.
+        #expect(offsets.filter { $0 > 1_764 }.count >= 5)
+        #expect(zip(offsets, offsets.dropFirst()).allSatisfy { $1 <= $0 })
+        #expect(offsets.allSatisfy { $0 <= 1_800 && $0 >= 1_764 })
+    }
+
+    /// A scroll that starts inside the content stays inside it.
+    @Test
+    func aScrollFromInsideTheContentStaysInside() {
+        let scrollView = makeScrollView()
+        scrollView.contentOffset = CGPoint(x: 0, y: 1_700)
+        scrollView.scroll(to: CGPoint(x: 0, y: 1_800), preserveVelocity: false)
+
+        var time: TimeInterval = 1_000
+        for _ in 0 ..< 600 where scrollView.scrollingDisplayLink != nil {
+            time += 1.0 / 120.0
+            tick(scrollView, at: time)
+            #expect(scrollView.contentOffset.y <= scrollView.maximumContentOffset.y)
+        }
+        #expect(scrollView.contentOffset.y == 1_800)
+    }
+
     /// The link holds the view weakly. A `CADisplayLink` retains its target,
     /// so a list dismissed mid-scroll used to live on until the scroll landed.
     @Test

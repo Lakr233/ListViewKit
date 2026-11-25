@@ -298,11 +298,32 @@ import DisplayLink
             // the display's fastest rate however fast the link really runs.
             let delta = min(1 / 30, scrollingClock.elapsed(at: frame))
             scrollingContext.update(withDeltaTime: delta)
-            let loc = nearestScrollLocationInBounds(offset: .init(
-                x: scrollingContext.x.value,
-                y: scrollingContext.y.value
-            ))
-            applyContentOffset(loc)
+            applyContentOffset(springFrameWithinBounds())
+        }
+
+        /// The spring's position, kept from going any further outside the
+        /// bounds than the offset already is — the AppKit rule.
+        ///
+        /// Content shrinking under an offset at its end, a row leaving the
+        /// bottom, leaves the offset past the new end, and the correction
+        /// is a scroll back from there (``reconcileOffsetWithContentSize()``).
+        /// A plain clamp made its first step the whole way: every row on
+        /// screen moved by the row's height in one frame (a chat's typing
+        /// row, 36 pt, AirBuild 2026-11-25).
+        private final func springFrameWithinBounds() -> CGPoint {
+            let min = minimumContentOffset
+            let max = maximumContentOffset
+            let current = contentOffset
+            return .init(
+                x: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.x.value, CGFloat.minimum(min.x, current.x)),
+                    CGFloat.maximum(max.x, current.x)
+                ),
+                y: CGFloat.minimum(
+                    CGFloat.maximum(scrollingContext.y.value, CGFloat.minimum(min.y, current.y)),
+                    CGFloat.maximum(max.y, current.y)
+                )
+            )
         }
 
         override open func setContentOffset(_ contentOffset: CGPoint, animated: Bool) {
