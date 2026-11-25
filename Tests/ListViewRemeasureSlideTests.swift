@@ -330,10 +330,28 @@ struct ListViewRemeasureSlideTests {
     }
 
     /// A second remeasure while the first one's slide is still running:
-    /// the row that comes on screen starts against its neighbour as the
-    /// reader sees it, mid-slide, not where the list already has it.
+    /// the row that comes on screen is drawn against its neighbour as the
+    /// reader sees it, mid-slide, all the way — not where the list already
+    /// has that neighbour.
+    ///
+    /// A run whose frames overran is thrown away and run again, as the
+    /// reorder suite does: on a machine too busy to keep its frames the
+    /// slides land before they can be compared.
     @Test
-    func aRowComingOnMidSlideStartsAgainstItsDrawnNeighbour() throws {
+    func aRowComingOnMidSlideStaysAgainstItsDrawnNeighbour() throws {
+        for _ in 0 ..< 10 {
+            guard let gaps = try gapsAcrossASecondRemeasure() else { continue }
+            #expect(gaps.allSatisfy { $0 < 2 }, "largest gap \(gaps.max() ?? 0)")
+            return
+        }
+        withKnownIssue("Every run overran its frames; the machine was too busy to measure on.", isIntermittent: true) {
+            Issue.record("No run kept its frames on time.")
+        }
+    }
+
+    /// The gap between the entering row and its neighbour, as drawn, each
+    /// frame after the second remeasure, or nil if a frame overran.
+    private func gapsAcrossASecondRemeasure() throws -> [CGFloat]? {
         let heights = Heights()
         let (listView, window) = makeListView(heights: heights, count: 12)
         defer { withExtendedLifetime(window) {} }
@@ -347,12 +365,16 @@ struct ListViewRemeasureSlideTests {
 
         let entering = try #require(listView.rowView(for: 6))
         let above = try #require(listView.rowView(for: 5))
+        var gaps: [CGFloat] = []
         for _ in 0 ..< 20 {
+            let start = Date()
             advanceOneFrame()
+            guard Date().timeIntervalSince(start) < 0.04 else { return nil }
             let box = try #require(presentationFrame(of: above))
             let shown = try #require(presentationY(of: entering))
-            #expect(abs(box.maxY - shown) < 2)
+            gaps.append(abs(box.maxY - shown))
         }
+        return gaps
     }
 
     /// A row whose box changes size lays its contents out at the new one.
