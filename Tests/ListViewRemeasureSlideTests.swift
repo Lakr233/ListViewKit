@@ -202,14 +202,94 @@ struct ListViewRemeasureSlideTests {
 
         #expect(abs(row3.placedFrame.minY - listView.contentOffset.y - onScreen3) < 0.5)
         #expect(abs(row4.placedFrame.minY - listView.contentOffset.y - onScreen4) < 0.5)
+        #expect(animationCount(on: row3) == 0)
+        #expect(animationCount(on: row4) == 0)
+        var growing = false
         for _ in 0 ..< 10 {
             advanceOneFrame()
             let shown3 = try #require(presentationY(of: row3))
             #expect(abs(shown3 - row3.placedFrame.minY) < 0.5)
             #expect(abs((presentationY(of: row4) ?? -1) - row4.placedFrame.minY) < 0.5)
-            if let box = presentationFrame(of: row2) {
-                #expect(abs(box.maxY - shown3) < 2)
-            }
+            let box = try #require(presentationFrame(of: row2))
+            #expect(abs(box.maxY - shown3) < 2)
+            if box.height > 101, box.height < 159 { growing = true }
+        }
+        // Its box opened over the frames, not at once.
+        #expect(growing)
+    }
+
+    /// The last row in sight closes from 500 pt to 200: the rows under it
+    /// come on screen and rise with its lower edge, flush with it, rather
+    /// than standing at their places over the box still closing.
+    @Test
+    func rowsUnderAClosingLastRowRiseWithItsEdge() throws {
+        let heights = Heights()
+        heights.values[1] = 500
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let closing = try #require(listView.rowView(for: 1))
+        #expect(listView.rowView(for: 2) == nil)
+
+        heights.values[1] = 200
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+
+        let entering = try #require(listView.rowView(for: 2))
+        var under = false
+        for _ in 0 ..< 20 {
+            advanceOneFrame()
+            guard let box = presentationFrame(of: closing), let shown = presentationY(of: entering) else { continue }
+            #expect(abs(box.maxY - shown) < 2)
+            if shown > entering.placedFrame.minY + 1 { under = true }
+        }
+        #expect(under)
+    }
+
+    /// A row closes while the row under it straddles the lower edge: the row
+    /// that comes on screen under that one moves with it, flush, from where
+    /// it was — not held at the edge, inside it.
+    @Test
+    func aRowComingOnUnderAStraddlerMovesWithIt() throws {
+        let heights = Heights()
+        heights.values[1] = 300
+        heights.values[2] = 300
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let straddler = try #require(listView.rowView(for: 2))
+        #expect(listView.rowView(for: 3) == nil)
+
+        heights.values[1] = 100
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+
+        let entering = try #require(listView.rowView(for: 3))
+        for _ in 0 ..< 20 {
+            advanceOneFrame()
+            guard let box = presentationFrame(of: straddler), let shown = presentationY(of: entering) else { continue }
+            #expect(abs(box.maxY - shown) < 2)
+        }
+    }
+
+    /// With a top inset, a row straddling the upper edge closes: the offset
+    /// takes it up, and the row that comes on screen above it moves down
+    /// with its upper edge, flush, rather than starting inside it.
+    @Test
+    func aRowComingOnAboveAClosingStraddlerMovesWithIt() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights, count: 20, topInset: 100)
+        defer { withExtendedLifetime(window) {} }
+        listView.setContentOffset(CGPoint(x: 0, y: 350), animated: false)
+        settleLayout(listView)
+        // Row 2 stands at 300...400 in the list's space, cut by the edge.
+        let straddler = try #require(listView.rowView(for: 2))
+        #expect(listView.rowView(for: 1) == nil)
+
+        heights.values[2] = 20
+        listView.invalidateLayout(forRowsWith: [2], animated: true)
+
+        let entering = try #require(listView.rowView(for: 1))
+        for _ in 0 ..< 20 {
+            advanceOneFrame()
+            guard let box = presentationFrame(of: straddler), let shown = presentationFrame(of: entering) else { continue }
+            #expect(abs(shown.maxY - box.minY) < 2)
         }
     }
 
@@ -227,13 +307,16 @@ struct ListViewRemeasureSlideTests {
         listView.invalidateLayout(forRowsWith: [1], animated: true)
 
         let entering = try #require(listView.rowView(for: 5))
+        let above = try #require(listView.rowView(for: 4))
         let target = entering.placedFrame.minY
         var rose = false
         for _ in 0 ..< 20 {
             advanceOneFrame()
             guard let shown = presentationY(of: entering) else { continue }
-            // Never above where it is headed: it comes up from below.
+            // Never above where it is headed: it comes up from below, on the
+            // row above it.
             #expect(shown > target - 1)
+            #expect(abs((presentationFrame(of: above)?.maxY ?? -1) - shown) < 2)
             if shown > target + 1 { rose = true }
         }
         #expect(rose)

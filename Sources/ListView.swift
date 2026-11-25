@@ -558,6 +558,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // measurement below edits it.
         let offsetBefore = contentOffset.y
         var placedBefore: [Item.ID: CGRect] = [:]
+        placedBefore.reserveCapacity(visibleRows.count)
         for (identifier, entry) in visibleRows {
             placedBefore[identifier] = entry.view.placedFrame
         }
@@ -578,32 +579,48 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // In row order, each mounted row with the move the change made it on
         // screen: where it stood there, in the content as it is now.
         var rows: [(index: Int, view: ListRowView, from: CGRect?, target: CGRect)] = []
+        rows.reserveCapacity(visibleRows.count)
         for (identifier, entry) in visibleRows {
             guard let index = indexByID[identifier] else { continue }
             let target = rectForRow(at: index)
             var from = placedBefore[identifier]?.offsetBy(dx: 0, dy: shift)
-            if let stood = from, abs(stood.minY - target.minY) <= 0.5, abs(stood.height - target.height) <= 0.5 {
+            if let stood = from, abs(stood.minY - target.minY) <= 0.5,
+               abs(stood.height - target.height) <= 0.5, abs(stood.width - target.width) <= 0.5
+            {
                 from = target
             }
             rows.append((index, entry.view, from, target))
         }
         rows.sort { $0.index < $1.index }
         // A row that came on screen with the change moved with the rows next
-        // to it: every row between two changes moves alike.
-        let edge = mountRect.offsetBy(dx: 0, dy: topInset)
-        for position in rows.indices where rows[position].from == nil {
+        // to it — every row between two changes moves alike — so it takes the
+        // move of the edge it lies against: the lower edge of the nearest row
+        // above that was showing, or the upper edge of the nearest below. Only
+        // across rows mounted now, one after another: past a gap its place
+        // before is not known, and it appears where it belongs.
+        let showing = rows.map { $0.from != nil }
+        for position in rows.indices where !showing[position] {
             let target = rows[position].target
-            let neighbour = rows[..<position].last { $0.from != nil } ?? rows[position...].first { $0.from != nil }
-            let move = neighbour.flatMap { row in row.from.map { $0.minY - row.target.minY } } ?? 0
-            var from = target.offsetBy(dx: 0, dy: move)
-            // No further out than just past the edge it crosses, so it keeps
-            // its neighbours' pace rather than crossing the screen.
-            if from.maxY <= edge.minY {
-                from.origin.y = max(from.minY, edge.minY - target.height)
-            } else if from.minY >= edge.maxY {
-                from.origin.y = min(from.minY, edge.maxY)
+            var move: CGFloat?
+            var distance = Int.max
+            var above = position - 1
+            while above >= 0, rows[above].index == rows[above + 1].index - 1 {
+                if showing[above], let from = rows[above].from {
+                    move = from.maxY - rows[above].target.maxY
+                    distance = position - above
+                    break
+                }
+                above -= 1
             }
-            rows[position].from = from
+            var below = position + 1
+            while below < rows.count, rows[below].index == rows[below - 1].index + 1, below - position < distance {
+                if showing[below], let from = rows[below].from {
+                    move = from.minY - rows[below].target.minY
+                    break
+                }
+                below += 1
+            }
+            rows[position].from = target.offsetBy(dx: 0, dy: move ?? 0)
         }
 
         var moves = false
@@ -615,7 +632,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             }
             if from != row.target {
                 moves = true
-                if abs(from.height - row.target.height) > 0.5 {
+                if abs(from.height - row.target.height) > 0.5 || abs(from.width - row.target.width) > 0.5 {
                     resized.append((row.view, row.view.mountID, row.target))
                 }
             }
