@@ -529,6 +529,239 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         requestLayout()
     }
 
+    /// Invalidates the measured heights of `identifiers` and measures them
+    /// again now — animated, sliding every row the new heights move on screen
+    /// from where it stood, as an animated ``apply(_:animated:)`` slides the
+    /// rows a change moves, instead of putting it there at once.
+    ///
+    /// What moves is what moves on screen. A row that keeps its place there —
+    /// the list holding its anchor, the offset taking up a change above it —
+    /// does not slide. A changed row's box grows or closes from where it
+    /// stands on the same spring as the rows sliding beside it, so its edge
+    /// stays on theirs; its contents are laid out at their new size and are
+    /// the row's — they are cut off at the box only if the row clips them,
+    /// and a row that wants them to move with the box animates them itself.
+    /// A row that only comes on screen because of the change travels in from
+    /// where it was, with the row beside it.
+    ///
+    /// Not animated, or with the list out of a window, this is
+    /// ``invalidateLayout(forRowWith:)`` for each, measured on the next pass.
+    /// An override must call `super`; a subclass watching every remeasure
+    /// overrides both.
+    open func invalidateLayout(forRowsWith identifiers: [Item.ID], animated: Bool) {
+        guard animated, window != nil, !identifiers.isEmpty else {
+            for identifier in identifiers {
+                invalidateLayout(forRowWith: identifier)
+            }
+            return
+        }
+        // A pass still owed — a slice measured in the background moved the
+        // offset, an inset changed — runs first: the rows then stand where
+        // the offset says, which is where they are read from below.
+        if layoutContentDepth == 0 {
+            layoutNow()
+        }
+        // Where every mounted row stood. Only these, not the whole layout:
+        // a copy of that would copy every row's height the moment the
+        // measurement below edits it.
+        let offsetBefore = contentOffset.y
+        let shownBefore = viewportRect.offsetBy(dx: 0, dy: topInset)
+        var placedBefore: [Item.ID: CGRect] = [:]
+        placedBefore.reserveCapacity(visibleRows.count)
+        for (identifier, entry) in visibleRows {
+            placedBefore[identifier] = entry.view.placedFrame
+        }
+        rowLayout.invalidateHeights(for: identifiers)
+        measureViewport()
+        // The offset taking up a change above the anchor moves the mounted
+        // area over rows not measured yet: measured before they are placed,
+        // or they would be placed at an estimate and corrected a pass later.
+        var passes = 0
+        while passes < 8, rowLayout.hasPendingRows(intersecting: mountRect) {
+            measureViewport()
+            passes += 1
+        }
+        prepareVisibleRows()
+        settleNewlyPlacedRows()
+        let shift = contentOffset.y - offsetBefore
+
+        // In row order, each mounted row with the move the change made it on
+        // screen: where it stood there, in the content as it is now.
+        var rows: [(index: Int, view: ListRowView, from: CGRect?, onScreen: Bool, target: CGRect)] = []
+        rows.reserveCapacity(visibleRows.count)
+        for (identifier, entry) in visibleRows {
+            guard let index = indexByID[identifier] else { continue }
+            let target = rectForRow(at: index)
+            var from = placedBefore[identifier]?.offsetBy(dx: 0, dy: shift)
+            if let stood = from, abs(stood.minY - target.minY) <= 0.5,
+               abs(stood.height - target.height) <= 0.5, abs(stood.width - target.width) <= 0.5
+            {
+                from = target
+            }
+            let onScreen = placedBefore[identifier].map { $0.intersects(shownBefore) } ?? false
+            rows.append((index, entry.view, from, onScreen, target))
+        }
+        rows.sort { $0.index < $1.index }
+        // A row that came on screen with the change moved with the rows next
+        // to it — every row between two changes moves alike — so it moves as
+        // the edge it lies along does: the lower edge of the nearest showing
+        // row above, the upper edge of the nearest below, a row on screen
+        // before one only held mounted past it. It takes that row's move and
+        // whatever slide is still carrying that row, so it is drawn against
+        // it throughout. Only across rows mounted one after another: past a
+        // gap its place before is not known, and it appears where it belongs.
+        let showing = rows.map { $0.from != nil }
+        var carriedBy: [(entering: ListRowView, neighbour: ListRowView, lowerEdge: Bool)] = []
+        for position in rows.indices where !showing[position] {
+            let target = rows[position].target
+            var best: (move: CGFloat, distance: Int, onScreen: Bool, view: ListRowView, lowerEdge: Bool)?
+            func consider(_ candidate: Int, move: CGFloat) {
+                let distance = abs(candidate - position)
+                let onScreen = rows[candidate].onScreen
+                if let current = best, onScreen == current.onScreen ? distance >= current.distance : !onScreen {
+                    return
+                }
+                best = (move, distance, onScreen, rows[candidate].view, candidate < position)
+            }
+            var above = position - 1
+            while above >= 0, rows[above].index == rows[above + 1].index - 1 {
+                if showing[above], let from = rows[above].from {
+                    consider(above, move: from.maxY - rows[above].target.maxY)
+                    break
+                }
+                above -= 1
+            }
+            var below = position + 1
+            while below < rows.count, rows[below].index == rows[below - 1].index + 1 {
+                if showing[below], let from = rows[below].from {
+                    consider(below, move: from.minY - rows[below].target.minY)
+                    break
+                }
+                below += 1
+            }
+            rows[position].from = target.offsetBy(dx: 0, dy: best?.move ?? 0)
+            if let best {
+                carriedBy.append((rows[position].view, best.view, best.lowerEdge))
+            }
+        }
+
+        var moves = false
+        var resized: [(view: ListRowView, target: CGRect)] = []
+        for row in rows {
+            guard let from = row.from else { continue }
+            if row.view.placedFrame != from {
+                setRowFrame(from, on: row.view, animated: false)
+            }
+            if from != row.target {
+                moves = true
+                if abs(from.height - row.target.height) > 0.5 || abs(from.width - row.target.width) > 0.5 {
+                    resized.append((row.view, row.target))
+                }
+            }
+        }
+        guard moves else {
+            updateVisibleRowFrames(animated: false)
+            settleNewlyPlacedRows()
+            return
+        }
+        for pair in carriedBy {
+            copyRowSlides(from: pair.neighbour, to: pair.entering, alongLowerEdge: pair.lowerEdge)
+        }
+        holdMountedRows(for: listRowSlideDuration)
+        // As in an apply: a shorter content pulling the offset off an edge
+        // travels with the rows instead of cutting to the destination.
+        animatesContentSizeCorrection = true
+        defer { animatesContentSizeCorrection = false }
+        withListAnimation {
+            // Before the pass over every row, which would slide these and let
+            // their boxes change size at once.
+            for row in resized {
+                unfoldRow(to: row.target, on: row.view)
+                row.view.requestLayout()
+            }
+            self.updateVisibleRowFrames(animated: true)
+        } completion: { _ in
+            MainActor.assumeIsolated {
+                // Only ask for a layout. Forcing one here would run inside a
+                // later animation if these overlap, moving its rows early.
+                self.requestLayout()
+            }
+        }
+        // A row mounted now takes the displacement its neighbours carry, now
+        // rather than on a pass that may not come before the slide ends.
+        applyRowAnimator()
+    }
+
+    /// Puts on `entering` the slides still carrying the edge of `neighbour` it
+    /// lies along — its lower edge, or its upper one — on the same clock: a
+    /// row coming on screen beside a row mid-slide is drawn against that edge
+    /// all the way. The neighbour's box opening or closing moves that edge as
+    /// well as its slide does, by the share of the size change on that side
+    /// of the layer's anchor.
+    private final func copyRowSlides(from neighbour: ListRowView, to entering: ListRowView, alongLowerEdge: Bool) {
+        #if canImport(UIKit)
+            let source: CALayer = neighbour.layer
+            let target: CALayer = entering.layer
+        #else
+            guard let source = neighbour.layer, let target = entering.layer else { return }
+        #endif
+        let share = alongLowerEdge ? 1 - source.anchorPoint.y : -source.anchorPoint.y
+        for key in source.animationKeys() ?? [] {
+            guard let slide = source.animation(forKey: key) as? CABasicAnimation, slide.isAdditive,
+                  let copy = slide.copy() as? CABasicAnimation
+            else { continue }
+            // The copy is the entering row's own: the block that added the
+            // original (UIKit counts its animations to call its completion
+            // once) must not hear of it.
+            copy.delegate = nil
+            switch slide.keyPath {
+            case "position":
+                // Only the edge's travel along the list; a sideways move is
+                // the neighbour's own.
+                guard let delta = Self.yValue(of: slide.fromValue), delta != 0 else { continue }
+                copy.fromValue = Self.pointValue(y: delta)
+                copy.toValue = Self.pointValue(y: 0)
+                target.add(copy, forKey: "carried." + key)
+            case "bounds.size", "bounds":
+                guard share != 0, let height = Self.height(of: slide.fromValue), height != 0 else { continue }
+                copy.keyPath = "position"
+                copy.fromValue = Self.pointValue(y: height * share)
+                copy.toValue = Self.pointValue(y: 0)
+                target.add(copy, forKey: "carried." + key)
+            default:
+                continue
+            }
+        }
+    }
+
+    /// The height a size or rect animation value carries.
+    private static func height(of value: Any?) -> CGFloat? {
+        guard let value = value as? NSValue else { return nil }
+        let type = String(cString: value.objCType)
+        #if canImport(UIKit)
+            return type.contains("CGRect") ? value.cgRectValue.height : value.cgSizeValue.height
+        #else
+            return type.contains("Rect") ? value.rectValue.height : value.sizeValue.height
+        #endif
+    }
+
+    private static func yValue(of value: Any?) -> CGFloat? {
+        guard let value = value as? NSValue else { return nil }
+        #if canImport(UIKit)
+            return value.cgPointValue.y
+        #else
+            return value.pointValue.y
+        #endif
+    }
+
+    private static func pointValue(y: CGFloat) -> NSValue {
+        #if canImport(UIKit)
+            NSValue(cgPoint: CGPoint(x: 0, y: y))
+        #else
+            NSValue(point: CGPoint(x: 0, y: y))
+        #endif
+    }
+
     // MARK: - Scrolling
 
     /// Scrolls until the row at `index` sits at `position`.
