@@ -537,10 +537,12 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// What moves is what moves on screen. A row that keeps its place there —
     /// the list holding its anchor, the offset taking up a change above it —
     /// does not slide. A changed row's box grows or closes from where it
-    /// stands over its contents, laid out at their new size, on the same
-    /// spring as the rows sliding beside it, so its edge stays on theirs. A
-    /// row that only comes on screen because of the change travels in from
-    /// where it was, past the edge it crosses.
+    /// stands on the same spring as the rows sliding beside it, so its edge
+    /// stays on theirs; its contents are laid out at their new size and are
+    /// the row's — they are cut off at the box only if the row clips them,
+    /// and a row that wants them to move with the box animates them itself.
+    /// A row that only comes on screen because of the change travels in from
+    /// where it was, with the row beside it.
     ///
     /// Not animated, or with the list out of a window, this is
     /// ``invalidateLayout(forRowWith:)`` for each, measured on the next pass.
@@ -644,7 +646,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         }
 
         var moves = false
-        var resized: [(view: ListRowView, mountID: Int, target: CGRect)] = []
+        var resized: [(view: ListRowView, target: CGRect)] = []
         for row in rows {
             guard let from = row.from else { continue }
             if row.view.placedFrame != from {
@@ -653,7 +655,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             if from != row.target {
                 moves = true
                 if abs(from.height - row.target.height) > 0.5 || abs(from.width - row.target.width) > 0.5 {
-                    resized.append((row.view, row.view.mountID, row.target))
+                    resized.append((row.view, row.target))
                 }
             }
         }
@@ -664,9 +666,6 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         }
         for pair in carriedBy {
             copyRowSlides(from: pair.neighbour, to: pair.entering, alongLowerEdge: pair.lowerEdge)
-        }
-        for row in resized {
-            beginUnfolding(row.view)
         }
         holdMountedRows(for: listRowSlideDuration)
         // As in an apply: a shorter content pulling the offset off an edge
@@ -691,13 +690,6 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // A row mounted now takes the displacement its neighbours carry, now
         // rather than on a pass that may not come before the slide ends.
         applyRowAnimator()
-        if !resized.isEmpty {
-            afterRowSlide { [weak self] in
-                for row in resized {
-                    self?.endUnfolding(row.view, mountID: row.mountID)
-                }
-            }
-        }
     }
 
     /// Puts on `entering` the slides still carrying the edge of `neighbour` it

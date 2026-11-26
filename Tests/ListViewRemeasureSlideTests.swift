@@ -449,6 +449,41 @@ struct ListViewRemeasureSlideTests {
         #expect(abs((presentationY(of: row0) ?? -1) - row0.placedFrame.minY) < 0.5)
     }
 
+    /// A row that clips — every row does unless it says otherwise — keeps
+    /// clipping while its box opens: what it lays out at its new size is cut
+    /// off at the box as it opens, on UIKit and AppKit alike.
+    @Test
+    func aRowThatClipsKeepsClippingWhileItsBoxOpens() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let row = try #require(listView.rowView(for: 1))
+        #expect(rowClipsToBounds(row))
+
+        heights.values[1] = 160
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        advanceOneFrame()
+
+        #expect(rowClipsToBounds(row))
+    }
+
+    /// A row that asked not to be clipped — a badge or a tail past its box —
+    /// is not clipped while its box opens: what it holds stays drawn.
+    @Test
+    func aRowThatDoesNotClipIsNotClippedWhileItsBoxOpens() throws {
+        let heights = Heights()
+        let (listView, window) = makeListView(heights: heights)
+        defer { withExtendedLifetime(window) {} }
+        let row = try #require(listView.rowView(for: 1))
+        setRowClipsToBounds(false, on: row)
+
+        heights.values[1] = 160
+        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        advanceOneFrame()
+
+        #expect(!rowClipsToBounds(row))
+    }
+
     /// A row whose box changes size lays its contents out at the new one.
     @Test
     func aResizedRowLaysOutItsContents() throws {
