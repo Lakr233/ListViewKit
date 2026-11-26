@@ -508,13 +508,18 @@ struct ListViewRemeasureSlideTests {
         let heights = Heights()
         let (listView, window) = makeListView(heights: heights, count: 12, topInset: 100)
         defer { withExtendedLifetime(window) {} }
-        #expect(listView.rowView(for: 5) == nil)
+        // The first row past the lower edge — wherever a window's safe area
+        // puts that edge (an iPhone's takes a home indicator's height).
+        let next = try #require((0 ..< 12).first { listView.rowView(for: $0) == nil })
+        #expect(next > 3)
 
+        // More than a row's height between them, so it comes on screen.
         heights.values[1] = 40
-        listView.invalidateLayout(forRowsWith: [1], animated: true)
+        heights.values[2] = 40
+        listView.invalidateLayout(forRowsWith: [1, 2], animated: true)
 
-        let entering = try #require(listView.rowView(for: 5))
-        let above = try #require(listView.rowView(for: 4))
+        let entering = try #require(listView.rowView(for: next))
+        let above = try #require(listView.rowView(for: next - 1))
         let target = entering.placedFrame.minY
         var rose = false
         for _ in 0 ..< 20 {
