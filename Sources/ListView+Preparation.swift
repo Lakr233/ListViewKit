@@ -68,25 +68,33 @@ extension ListView {
             return
         }
         preparationReach = preparationRange.reach(viewportHeight: bounds.height)
+        turnPreparationRoundAtAnEdge()
     }
 
-    /// How far rows are kept ready above the mounted area and below it.
+    /// Turns the heading round for a list standing at the edge it was
+    /// heading for: it has nowhere to go but back, and a conversation opened
+    /// at its end is read upwards.
     ///
-    /// The longer reach goes to the side the list is heading for, towards
-    /// the end until it has scrolled at all. A list standing at the edge it
-    /// was heading for has nowhere to go but back, so there the longer reach
-    /// turns round: a conversation opened at its end is read upwards.
+    /// The heading itself is turned, not only how it is read here. A list
+    /// that then leaves the edge by a few points is still heading back, and
+    /// the rows made ready that way are not let go for a waver.
+    private final func turnPreparationRoundAtAnEdge() {
+        let mounted = mountRect
+        let atStart = mounted.minY <= 0
+        let atEnd = mounted.maxY >= rowLayout.contentHeight
+        guard atStart != atEnd else { return }
+        let heading = atEnd ? -1 : 1
+        guard preparationHeading != heading else { return }
+        preparationHeading = heading
+        preparationReverseTravel = 0
+    }
+
+    /// How far rows are kept ready above the mounted area and below it: the
+    /// longer reach on the side the list is heading for, towards the end
+    /// until it has scrolled at all.
     private final var preparationReachBySide: (above: CGFloat, below: CGFloat) {
         let reach = preparationReach
-        guard reach.ahead != reach.behind else { return (reach.ahead, reach.ahead) }
-        let mounted = mountRect
-        var headsDown = preparationHeading >= 0
-        if headsDown, mounted.maxY >= rowLayout.contentHeight {
-            headsDown = false
-        } else if !headsDown, mounted.minY <= 0 {
-            headsDown = true
-        }
-        return headsDown ? (reach.behind, reach.ahead) : (reach.ahead, reach.behind)
+        return preparationHeading >= 0 ? (reach.behind, reach.ahead) : (reach.ahead, reach.behind)
     }
 
     private final func isWidthChanging(now: CFTimeInterval) -> Bool {
@@ -176,7 +184,13 @@ extension ListView {
     /// not made ready until it has held still.
     final func notePreparationChange(of identifier: Item.ID) {
         guard isPreparationEnabled, visibleRows[identifier] == nil else { return }
-        preparationChangedAt[identifier] = CACurrentMediaTime()
+        let now = CACurrentMediaTime()
+        // Normally emptied by the passes. A list with nothing to make ready
+        // runs none, so the notes of items long gone are dropped here.
+        if preparationChangedAt.count > 64 {
+            preparationChangedAt = preparationChangedAt.filter { now - $0.value < Self.preparationQuietPeriod }
+        }
+        preparationChangedAt[identifier] = now
     }
 
     /// The same for the changed items of an apply that lie within reach.

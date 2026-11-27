@@ -520,13 +520,19 @@ struct ListViewPreparationTests {
         // Opened at its end, as a conversation is.
         scroll(listView, to: listView.maximumContentOffset.y)
         settle(listView)
-        #expect(listView.preparationHeading == 1)
+        #expect(listView.preparationHeading == -1)
         #expect(mounted(listView) == Array(34 ... 39))
+
+        // Leaving the edge by a few points is not a change of mind: what
+        // was made ready above is kept.
+        scroll(listView, to: listView.maximumContentOffset.y - 20)
+        settle(listView)
+        #expect(mounted(listView) == Array(33 ... 39))
 
         // And back at the start, having come up.
         scroll(listView, to: 0)
         settle(listView)
-        #expect(listView.preparationHeading == -1)
+        #expect(listView.preparationHeading == 1)
         #expect(mounted(listView) == Array(0 ... 5))
     }
 
