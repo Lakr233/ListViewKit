@@ -476,6 +476,68 @@ struct ListViewPreparationTests {
         #expect(mounted(listView) == [0, 1, 2, 3, 4])
     }
 
+    // MARK: - Ahead and behind
+
+    @Test("the longer reach goes to the side the list is heading for", arguments: [false, true])
+    func theLongerReachGoesAhead(headingUp: Bool) {
+        let listView = makeListView(count: 200, range: .points(ahead: 300, behind: 100))
+        scroll(listView, to: headingUp ? 6000 : 4000)
+        scroll(listView, to: 5000)
+        settle(listView)
+        // The viewport shows 50, 51 and 52.
+        #expect(mounted(listView) == (headingUp ? Array(47 ... 53) : Array(49 ... 55)))
+    }
+
+    @Test("before the list has scrolled, ahead is towards the end")
+    func beforeAnyTravelAheadIsTowardsTheEnd() {
+        let listView = makeListView(count: 200, range: .none)
+        listView.contentOffset.y = 5000
+        layout(listView)
+        listView.preparationRange = .points(ahead: 300, behind: 100)
+        settle(listView)
+        #expect(listView.preparationHeading == 0)
+        #expect(mounted(listView) == Array(49 ... 55))
+    }
+
+    @Test("at the edge it was heading for, the list has only the other way to go")
+    func atTheEdgeAheadTurnsRound() {
+        let listView = makeListView(count: 40, range: .points(ahead: 300, behind: 100))
+        // Opened at its end, as a conversation is.
+        scroll(listView, to: listView.maximumContentOffset.y)
+        settle(listView)
+        #expect(listView.preparationHeading == 1)
+        #expect(mounted(listView) == Array(34 ... 39))
+
+        // And back at the start, having come up.
+        scroll(listView, to: 0)
+        settle(listView)
+        #expect(listView.preparationHeading == -1)
+        #expect(mounted(listView) == Array(0 ... 5))
+    }
+
+    @Test("a waver the other way does not turn the range round, a scroll does")
+    func aWaverDoesNotTurnTheRange() {
+        let listView = makeListView(count: 200, range: .points(ahead: 300, behind: 100))
+        scroll(listView, to: 4000)
+        scroll(listView, to: 5000)
+        settle(listView)
+        #expect(mounted(listView) == Array(49 ... 55))
+
+        // A rubber band settling, a finger wavering.
+        scroll(listView, to: 4990)
+        scroll(listView, to: 4970)
+        settle(listView)
+        #expect(listView.preparationHeading == 1)
+        #expect(listView.rowView(for: 55) != nil, "a waver let go of what was ready ahead")
+
+        scroll(listView, to: 4940)
+        settle(listView)
+        #expect(listView.preparationHeading == -1)
+        // 4940 to 5240 shows 49…52; 300 points above reaches 46, and the
+        // rows below are kept a quarter of a viewport past their 100.
+        #expect(mounted(listView) == Array(46 ... 54))
+    }
+
     // MARK: - Letting go
 
     @Test("a row is kept until it is a quarter of a viewport past the range")
@@ -625,6 +687,88 @@ struct ListViewPreparationTests {
         for (upper, lower) in zip(frames, frames.dropFirst()) {
             #expect(upper.maxY == lower.minY)
         }
+    }
+
+    @Test("a row is told whether its view is needed next")
+    func aMeasurementSaysWhetherTheRowWillMount() {
+        var willMount: [Int: Bool] = [:]
+        var displayed: [Bool] = []
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        listView.estimatedRowHeight = Self.rowHeight
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, context in
+                    willMount[item.id] = context.willMount
+                    return Self.rowHeight
+                }
+                .configure { _, _, context in displayed.append(context.willMount) }
+        }
+        listView.preparationRange = .points(200)
+        listView.apply((0 ..< 40).map { PreparedItem(id: $0) })
+        layout(listView)
+        #expect(willMount == [0: true, 1: true, 2: true], "the rows in view are mounted in the same pass")
+
+        settle(listView)
+        #expect(willMount[3] == true && willMount[4] == true, "the rows within the range are mounted a step later")
+        #expect(displayed.allSatisfy { $0 })
+
+        // Everything else is measured between frames, ahead of any need.
+        _ = listView.rowLayout.drainPendingRows(
+            intersecting: listView.mountRect,
+            anchoredAt: listView.viewportRect,
+            deadline: CACurrentMediaTime() + 5
+        )
+        #expect(!listView.rowLayout.hasPendingRows)
+        #expect(willMount.count == 40)
+        #expect((5 ..< 40).allSatisfy { willMount[$0] == false })
+    }
+
+    @Test("rows that turn out far taller than their estimate are not all measured for one viewport")
+    func aViewportOfEstimatesIsNotMeasuredWhole() {
+        let probe = PreparationProbe()
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        // Ten estimates to the viewport, three real rows.
+        listView.estimatedRowHeight = 30
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, _ in
+                    probe.events.append(.measure(item.id))
+                    return Self.rowHeight
+                }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< 200).map { PreparedItem(id: $0) })
+        layout(listView)
+        #expect(probe.measured == [0, 1, 2], "rows pushed out of view by the ones before them were measured anyway")
+        #expect(mounted(listView) == [0, 1, 2])
+    }
+
+    @Test("scrolling to the end without animation lands on the end, measuring only what it shows there")
+    func scrollingToTheEndLandsOnTheEnd() {
+        let probe = PreparationProbe()
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        listView.estimatedRowHeight = 30
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, _ in
+                    probe.events.append(.measure(item.id))
+                    return Self.rowHeight
+                }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< 200).map { PreparedItem(id: $0) })
+        layout(listView)
+        probe.events.removeAll()
+
+        listView.scrollToBottom(animated: false)
+        layout(listView)
+
+        #expect(listView.isScrolledToBottom())
+        #expect(listView.indicesForVisibleRows == [197, 198, 199])
+        #expect(probe.measured == [199, 198, 197])
+        // And it stays there: nothing in view was left at an estimate.
+        layout(listView)
+        #expect(listView.isScrolledToBottom())
     }
 
     // MARK: - Width

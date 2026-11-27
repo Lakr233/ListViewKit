@@ -54,11 +54,14 @@ extension ListView {
 
     /// Height the row at `index` should have, or nil when no registration
     /// claims its item.
-    func measuredHeight(at index: Int) -> CGFloat? {
+    ///
+    /// `willMount` says the row is measured because it is about to be
+    /// mounted, see ``ListRowContext/willMount``.
+    func measuredHeight(at index: Int, willMount: Bool) -> CGFloat? {
         let item = content[index]
         guard let registrationIndex = registrationIndex(for: item) else { return nil }
         let registration = registration(registrationIndex)
-        let context = context(at: index, purpose: .measurement)
+        let context = context(at: index, purpose: .measurement, willMount: willMount)
         if let height = registration.height {
             return height(item, context)
         }

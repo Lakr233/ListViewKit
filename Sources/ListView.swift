@@ -157,17 +157,22 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// reaches them. ``ListPreparationRange/none`` is the default.
     ///
     /// ```swift
-    /// list.preparationRange = .viewports(1.5)
+    /// list.preparationRange = .viewports(ahead: 3, behind: 1)
     /// ```
     ///
     /// Without a range a row is measured, built, filled in and laid out in
     /// the layout pass that brings it into view, and that frame pays for all
     /// of it. With one, the rows within the range are taken through the same
-    /// steps beforehand, between frames and nearest the viewport first: a
-    /// row's measurement is one step and its mount another, the list takes
-    /// one step per frame while it travels and a few milliseconds' worth at
-    /// a time while it is still. A scroll that outruns it falls back to the
-    /// layout pass, exactly as without a range.
+    /// steps beforehand, between frames, nearest the viewport first and the
+    /// side the list is heading for first: a row's measurement is one step
+    /// and its mount another, the list takes a step in the frames of a
+    /// scroll that have room for one and a few milliseconds' worth at a time
+    /// while it is still. A scroll that outruns it falls back to the layout
+    /// pass, exactly as without a range.
+    ///
+    /// A step is as long as the row makes it, so the range does not shorten
+    /// the work, it chooses where it lands: mostly while the list stands
+    /// still between one scroll and the next.
     ///
     /// Rows made ready are mounted: ``rowView(for:)`` and
     /// ``visibleRowViews`` return them, and they stay mounted until they are
@@ -183,7 +188,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             guard preparationRange != oldValue else { return }
             if !isPreparationEnabled {
                 endPreparation()
-            } else if oldValue == .none {
+            } else if oldValue.isEmpty {
                 // Where the offset went while nothing was watching is not
                 // travel.
                 preparationReferenceOffsetY = contentOffset.y
@@ -196,7 +201,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     ///
     /// Cached for the same reason ``mountOverscan`` is: the pass that makes
     /// rows ready and the one that recycles them must not read two answers.
-    final var preparationReach: CGFloat = 0
+    final var preparationReach: (ahead: CGFloat, behind: CGFloat) = (0, 0)
     /// Main-thread time one pass may spend making rows ready, which it may
     /// overrun by the one step it always takes.
     ///
@@ -227,6 +232,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// Which way the offset last travelled: 1 towards the end, -1 towards
     /// the start, 0 before any travel has been seen.
     final var preparationHeading: Int = 0
+    /// How far the offset has travelled against the heading since it last
+    /// travelled with it.
+    final var preparationReverseTravel: CGFloat = 0
     final var lastPreparationTravelAt: CFTimeInterval = 0
 
     /// Layout passes currently on the stack, and the deepest that has ever
@@ -874,9 +882,19 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// Scrolls to the end of the content.
     ///
     /// Animated, the scroll follows the end as rows on the way are measured.
+    /// Not animated, the rows the end will show are measured first, last row
+    /// first, so the list lands on its end and not on where the estimates
+    /// put it: a row there that turns out taller than its estimate would
+    /// otherwise leave the list standing short of the end it was sent to.
     /// An override must call `super`.
     open func scrollToBottom(animated: Bool = true) {
         guard animated else {
+            rowLayout.prepareForLayout()
+            let dy = rowLayout.measureTail(filling: bounds.height + mountOverscan, anchoredAt: viewportRect)
+            if dy != 0 {
+                compensateScrollOffset(by: dy)
+            }
+            contentSize = supposedContentSize
             setContentOffset(maximumContentOffset, animated: false)
             return
         }
@@ -1175,8 +1193,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         registrations[index]
     }
 
-    final func context(at index: Int, purpose: ListRowPurpose) -> ListRowContext {
-        .init(index: index, width: bounds.width, purpose: purpose)
+    final func context(at index: Int, purpose: ListRowPurpose, willMount: Bool) -> ListRowContext {
+        .init(index: index, width: bounds.width, purpose: purpose, willMount: willMount)
     }
 
     /// A hidden row kept for measuring registrations that have no height
@@ -1323,7 +1341,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         registrations[registrationIndex].configure(
             view,
             item,
-            context(at: index, purpose: .display)
+            context(at: index, purpose: .display, willMount: true)
         )
     }
 

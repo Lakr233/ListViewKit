@@ -43,7 +43,10 @@ extension ListView {
     /// the same wait the deferred measurement keeps.
     private static var preparationWidthHoldOff: CFTimeInterval { 0.15 }
 
-    final var isPreparationEnabled: Bool { preparationRange != .none }
+    final var isPreparationEnabled: Bool { !preparationRange.isEmpty }
+
+    /// Whether rows are kept ready past the mounted area right now.
+    final var isPreparing: Bool { preparationReach.ahead > 0 || preparationReach.behind > 0 }
 
     // MARK: - Geometry
 
@@ -55,10 +58,29 @@ extension ListView {
     /// go for its length and made ready again once the width holds.
     final func refreshPreparationReach(now: CFTimeInterval = CACurrentMediaTime()) {
         guard isPreparationEnabled, bounds.width > 0, bounds.height > 0, !isWidthChanging(now: now) else {
-            preparationReach = 0
+            preparationReach = (0, 0)
             return
         }
-        preparationReach = preparationRange.distance(viewportHeight: bounds.height)
+        preparationReach = preparationRange.reach(viewportHeight: bounds.height)
+    }
+
+    /// How far rows are kept ready above the mounted area and below it.
+    ///
+    /// The longer reach goes to the side the list is heading for, towards
+    /// the end until it has scrolled at all. A list standing at the edge it
+    /// was heading for has nowhere to go but back, so there the longer reach
+    /// turns round: a conversation opened at its end is read upwards.
+    private final var preparationReachBySide: (above: CGFloat, below: CGFloat) {
+        let reach = preparationReach
+        guard reach.ahead != reach.behind else { return (reach.ahead, reach.ahead) }
+        let mounted = mountRect
+        var headsDown = preparationHeading >= 0
+        if headsDown, mounted.maxY >= rowLayout.contentHeight {
+            headsDown = false
+        } else if !headsDown, mounted.minY <= 0 {
+            headsDown = true
+        }
+        return headsDown ? (reach.behind, reach.ahead) : (reach.ahead, reach.behind)
     }
 
     private final func isWidthChanging(now: CFTimeInterval) -> Bool {
@@ -72,7 +94,9 @@ extension ListView {
     /// ``viewportRect``: the mounted area and the range either side of it,
     /// no further than the content goes.
     final var preparationRect: CGRect {
-        widened(mountRect, by: preparationReach)
+        guard isPreparing else { return mountRect }
+        let reach = preparationReachBySide
+        return widened(mountRect, above: reach.above, below: reach.below)
     }
 
     /// The rectangle a mounted row has to leave before it is recycled.
@@ -81,14 +105,15 @@ extension ListView {
     /// of the range is not let go and made ready again each time the reader
     /// reverses over it. Equal to ``mountRect`` without a range.
     final var retentionRect: CGRect {
-        guard preparationReach > 0 else { return mountRect }
-        return widened(mountRect, by: preparationReach + bounds.height / 4)
+        guard isPreparing else { return mountRect }
+        let reach = preparationReachBySide
+        let margin = bounds.height / 4
+        return widened(mountRect, above: reach.above + margin, below: reach.below + margin)
     }
 
-    private final func widened(_ rect: CGRect, by distance: CGFloat) -> CGRect {
-        guard distance > 0 else { return rect }
-        let minY = min(rect.minY, max(0, rect.minY - distance))
-        let maxY = max(rect.maxY, min(rowLayout.contentHeight, rect.maxY + distance))
+    private final func widened(_ rect: CGRect, above: CGFloat, below: CGFloat) -> CGRect {
+        let minY = min(rect.minY, max(0, rect.minY - above))
+        let maxY = max(rect.maxY, min(rowLayout.contentHeight, rect.maxY + below))
         return CGRect(x: rect.minX, y: minY, width: rect.width, height: maxY - minY)
     }
 
@@ -96,7 +121,7 @@ extension ListView {
     /// it stands outside the mounted area, it will after this layout, and no
     /// animation is still showing it.
     final func isKeptOnlyForPreparation(_ view: ListRowView, at index: Int, identifier: Item.ID) -> Bool {
-        guard preparationReach > 0, heldRows[identifier] == nil else { return false }
+        guard isPreparing, heldRows[identifier] == nil else { return false }
         let mounted = mountRect
         guard let frame = rowLayout.frame(for: index), !frame.intersects(mounted) else { return false }
         return !view.placedFrame.offsetBy(dx: 0, dy: -topInset).intersects(mounted)
@@ -114,9 +139,26 @@ extension ListView {
         preparationReferenceOffsetY = contentOffset.y
         // Under a device pixel is rounding in a compensation, not a scroll.
         guard abs(travel) > 0.1 else { return }
-        preparationHeading = travel > 0 ? 1 : -1
         lastPreparationTravelAt = CACurrentMediaTime()
+        let direction = travel > 0 ? 1 : -1
+        guard direction != preparationHeading, preparationHeading != 0 else {
+            preparationHeading = direction
+            preparationReverseTravel = 0
+            return
+        }
+        // The other way, but not yet a change of mind: a rubber band
+        // settling, a finger wavering. The sides trade reach, and the rows
+        // past the shorter one are let go, only once it has gone somewhere.
+        preparationReverseTravel += abs(travel)
+        if preparationReverseTravel >= Self.preparationTurnDistance {
+            preparationHeading = direction
+            preparationReverseTravel = 0
+        }
     }
+
+    /// How far the list has to travel the other way before the side ahead
+    /// changes.
+    private static var preparationTurnDistance: CGFloat { 48 }
 
     private final func isTravelling(now: CFTimeInterval) -> Bool {
         now - lastPreparationTravelAt < Self.preparationTravelWindow
@@ -216,7 +258,7 @@ extension ListView {
         preparationWake?.invalidate()
         preparationWake = nil
         preparationChangedAt.removeAll()
-        preparationReach = 0
+        preparationReach = (0, 0)
     }
 
     // MARK: - The pass
@@ -301,7 +343,7 @@ extension ListView {
     /// first.
     private final func preparationOutlook(now: CFTimeInterval) -> Outlook {
         var outlook = Outlook()
-        guard preparationReach > 0 else {
+        guard isPreparing else {
             if isPreparationEnabled, isWidthChanging(now: now) {
                 outlook.retry(after: Self.preparationWidthHoldOff)
             }

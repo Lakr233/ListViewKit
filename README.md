@@ -238,7 +238,8 @@ list.scrollToBottom()
 
 An animated scroll heads for the row or the end, not for an offset worked out
 when it started, so it lands there even when the rows on the way are still at
-their estimates. Scrolls animate only while the list is in a window: one still
+their estimates. `scrollToBottom(animated: false)` measures the rows the end
+will show before it moves, last row first, and lands on the end as well. Scrolls animate only while the list is in a window: one still
 running when the list leaves its window, or asked for before the list has one,
 jumps to where it was going as the window changes.
 
@@ -250,7 +251,7 @@ cheap rows that is the right trade. For a row that typesets a document it is a
 dropped frame, every time one comes into view.
 
 ```swift
-list.preparationRange = .viewports(1.5)   // or .points(1200); .none is the default
+list.preparationRange = .viewports(ahead: 3, behind: 1)   // .none is the default
 ```
 
 With a range, the rows within that distance of the viewport, above and below,
@@ -263,17 +264,32 @@ to one only uncovers it:
   range is ready. While it scrolls, they run in what is left of a frame after
   its commit: one step, or several while they stay cheap, and none in a frame
   whose own layout pass already had to measure or mount a row.
-- The side the list is heading for comes first.
+- The side the list is heading for comes first, and can be given the longer
+  reach: `ahead` is the way the list last scrolled, towards the end before it
+  has scrolled at all, and the other way for a list standing at the edge it
+  was heading for. `.viewports(1.5)` and `.points(1200)` reach the same
+  distance both ways.
 
-The work is not made smaller, only moved to where there is room for it. A
-scroll fast enough to need a row in every frame leaves no such room, falls
-back to the layout pass, and costs what it cost without a range.
+The work is not made smaller, only moved to where there is room for it, and a
+step is as long as the row makes it: a row that takes fifteen milliseconds to
+build still takes them, between two frames rather than inside one. What a
+range buys is where they land. A reader scrolls, stops to read, and scrolls
+on; with a few viewports ahead, the rows the next scroll will cross are built
+while the list stands still. A scroll that outruns the range falls back to
+the layout pass and costs what it cost without one.
+
+A height closure is told when the row it measures is about to be mounted, in
+`context.willMount`: true for a row that has come into view or into the
+range, false for the measurements the list makes in the background for every
+row. A height that has to build something to answer, the row's own view
+included, can keep it then and hand it to the row instead of building it
+twice.
 
 Rows made ready are mounted: `rowView(for:)` and `visibleRowViews` return them,
 while `indicesForVisibleRows` still reports the viewport. They stay mounted
 until they are a quarter of a viewport past the range, so the range is also
-how much the list keeps: `.viewports(1.5)` holds four screens of rows where
-the default holds one. Three things are left out on purpose:
+how much the list keeps: `.viewports(ahead: 3, behind: 1)` holds five screens
+of rows where the default holds one. Three things are left out on purpose:
 
 - A row that changes while it is kept past the viewport is recycled, and made
   ready again once it has held still for a quarter of a second. A reply being
