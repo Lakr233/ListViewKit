@@ -41,6 +41,13 @@ extension ListView {
         var leaving: [LeavingRow] = []
         for identifier in removed {
             guard let entry = visibleRows[identifier] else { continue }
+            // A row kept ready past the viewport leaves unseen, as one that
+            // was never mounted does: no picture to take, nothing to show.
+            if let index = indexByID[identifier],
+               isKeptOnlyForPreparation(entry.view, at: index, identifier: identifier)
+            {
+                continue
+            }
             let frame = entry.view.convert(entry.view.bounds, to: self)
             #if canImport(UIKit)
                 guard let picture = disposalPicture(of: entry.view) else { continue }

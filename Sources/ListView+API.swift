@@ -26,9 +26,10 @@ public extension ListView {
     ///
     /// Mounted is not quite the same as visible. A ``rowAnimator`` that
     /// displaces rows makes the list keep a margin of them mounted past the
-    /// viewport, so that a row displaced into view is already there; this
-    /// returns those too, while ``indicesForVisibleRows`` does not. Without an
-    /// animator the two agree, which is the default.
+    /// viewport, so that a row displaced into view is already there, and a
+    /// ``preparationRange`` keeps the rows within it mounted and ready; this
+    /// returns those too, while ``indicesForVisibleRows`` does not. Without
+    /// either the two agree, which is the default.
     func rowView(for identifier: Item.ID) -> ListRowView? {
         visibleRows[identifier]?.view
     }
@@ -53,11 +54,14 @@ extension ListView {
 
     /// Height the row at `index` should have, or nil when no registration
     /// claims its item.
-    func measuredHeight(at index: Int) -> CGFloat? {
+    ///
+    /// `willMount` says the row is measured because it is about to be
+    /// mounted, see ``ListRowContext/willMount``.
+    func measuredHeight(at index: Int, willMount: Bool) -> CGFloat? {
         let item = content[index]
         guard let registrationIndex = registrationIndex(for: item) else { return nil }
         let registration = registration(registrationIndex)
-        let context = context(at: index, purpose: .measurement)
+        let context = context(at: index, purpose: .measurement, willMount: willMount)
         if let height = registration.height {
             return height(item, context)
         }

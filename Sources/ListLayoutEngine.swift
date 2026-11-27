@@ -182,6 +182,22 @@ struct ListLayoutEngine {
         add(height: 0, pending: 1, at: index)
     }
 
+    /// Marks every row as needing measurement again, each keeping its
+    /// current height as the estimate.
+    ///
+    /// What a new content width does, on every step of a resize. Heights do
+    /// not move, so the height sums stand, and with every row pending a
+    /// node's count is the length of its span: nothing is allocated and
+    /// nothing is summed.
+    mutating func invalidateAll() {
+        for index in rows.indices {
+            rows[index].isPending = true
+        }
+        for node in tree.indices.dropFirst() {
+            tree[node].pending = lowbit(node)
+        }
+    }
+
     // MARK: - Fenwick
 
     private func lowbit(_ value: Int) -> Int { value & -value }

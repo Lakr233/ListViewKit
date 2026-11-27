@@ -92,7 +92,7 @@ extension ListView {
         }
 
         let offsetDelta = rowLayout.drainPendingRows(
-            intersecting: mountRect,
+            intersecting: preparationRect,
             anchoredAt: viewportRect,
             deadline: CACurrentMediaTime() + Self.sliceBudget
         )

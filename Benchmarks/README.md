@@ -27,6 +27,17 @@ can be attributed to a single subsystem:
 The executable performs an unreported warm-up and prints the median of three
 samples for each measurement.
 
+A second table follows, about frames rather than totals:
+
+- **Scrolling onto rows nobody has measured** — 400 rows that take 3 ms to
+  measure and 4 ms to fill in, scrolled through at four speeds with a hand on
+  the list, once without a preparation range and once with one. Each frame is
+  the offset write and the layout pass, then one turn of the run loop, which
+  is where the range does its work. The columns are the mean and the worst
+  frame, how many ran over 8.3 ms, and how many rows a layout pass still had
+  to fill in. Unlike the totals this one spins the clock, so run it on a quiet
+  machine.
+
 Run an optimized build from the repository root:
 
 ```bash
@@ -35,8 +46,9 @@ swift run -c release ListViewKitBenchmarks
 
 `LVK_ITEMS` and `LVK_BENCH` narrow a run while iterating on one path.
 `LVK_BENCH` takes a comma-separated list of `query`, `offset`, `layout`,
-`update`, `append`, `reapply` and `reflow`, in the order of the columns above;
-an unknown key stops the run and lists the known ones.
+`update`, `append`, `reapply` and `reflow`, in the order of the columns above,
+and `frames` for the second table; an unknown key stops the run and lists the
+known ones.
 
 ```bash
 LVK_ITEMS=10000 LVK_BENCH=append,reflow swift run -c release ListViewKitBenchmarks

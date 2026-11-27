@@ -14,7 +14,7 @@
 #endif
 
 /// Where a row should end up when the list scrolls to it.
-public enum ListRowPosition {
+public enum ListRowPosition: Sendable {
     /// Fully visible, with as little movement as possible.
     case nearest
     case top

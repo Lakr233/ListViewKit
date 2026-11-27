@@ -153,6 +153,90 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// finger was, not jump to a default mid-flight.
     final var rowAnimatorGripViewportY: CGFloat?
 
+    /// How far past the viewport rows are made ready before the scroll
+    /// reaches them. ``ListPreparationRange/none`` is the default.
+    ///
+    /// ```swift
+    /// list.preparationRange = .viewports(ahead: 3, behind: 1)
+    /// ```
+    ///
+    /// Without a range a row is measured, built, filled in and laid out in
+    /// the layout pass that brings it into view, and that frame pays for all
+    /// of it. With one, the rows within the range are taken through the same
+    /// steps beforehand, between frames, nearest the viewport first and the
+    /// side the list is heading for first: a row's measurement is one step
+    /// and its mount another, the list takes a step in the frames of a
+    /// scroll that have room for one and a few milliseconds' worth at a time
+    /// while it is still. A scroll that outruns it falls back to the layout
+    /// pass, exactly as without a range.
+    ///
+    /// A step is as long as the row makes it, so the range does not shorten
+    /// the work, it chooses where it lands: mostly while the list stands
+    /// still between one scroll and the next.
+    ///
+    /// Rows made ready are mounted: ``rowView(for:)`` and
+    /// ``visibleRowViews`` return them, and they stay mounted until they are
+    /// a quarter of a viewport past the range. Three things are left out on
+    /// purpose. A row that changes while it is kept past the viewport is let
+    /// go and made ready again once it has held still, so a reply being
+    /// written is not typeset where nobody is looking. A removed one leaves
+    /// without an animation. And while the width changes the range is
+    /// dropped altogether, since every mounted row is laid out again on each
+    /// step of a resize; it comes back once the width holds.
+    public final var preparationRange: ListPreparationRange = .none {
+        didSet {
+            guard preparationRange != oldValue else { return }
+            if !isPreparationEnabled {
+                endPreparation()
+            } else if oldValue.isEmpty {
+                // Where the offset went while nothing was watching is not
+                // travel.
+                preparationReferenceOffsetY = contentOffset.y
+            }
+            requestLayout()
+        }
+    }
+
+    /// How far past the mounted area rows are kept ready right now.
+    ///
+    /// Cached for the same reason ``mountOverscan`` is: the pass that makes
+    /// rows ready and the one that recycles them must not read two answers.
+    final var preparationReach: (ahead: CGFloat, behind: CGFloat) = (0, 0)
+    /// Main-thread time one pass may spend making rows ready, which it may
+    /// overrun by the one step it always takes.
+    ///
+    /// While the list is still nothing is being drawn, so a pass may take
+    /// about half a 120Hz frame and the next one starts as soon as the run
+    /// loop comes round. While it travels a pass has what the frame's own
+    /// layout and commit left over, and what a mounted row costs to draw
+    /// comes on top of the time counted here: cheap rows go several to a
+    /// frame, an expensive one alone.
+    final var preparationBudget: (resting: CFTimeInterval, travelling: CFTimeInterval) = (0.004, 0.0015)
+    /// Whether the layout pass that just ran measured or mounted a row.
+    final var layoutPassWorkedOnRows = false
+    private final var layoutPassMountedRows = false
+    final var isPreparationScheduled = false
+    /// Looks at the range again when rows in it are waiting on the clock.
+    final var preparationWake: Timer?
+    /// How many passes have started, so a test can show an idle list takes
+    /// none.
+    final var preparationPassCount: Int = 0
+    /// How many rows have been mounted ahead of the layout pass.
+    final var preparedRowCount: Int = 0
+    /// When each item last changed with no row mounted for it. See
+    /// ``ListView/preparationQuietPeriod``.
+    final var preparationChangedAt: [Item.ID: CFTimeInterval] = [:]
+    /// Where the offset stood at the last layout pass, moved along by every
+    /// compensation so that only travel is left in the difference.
+    final var preparationReferenceOffsetY: CGFloat = 0
+    /// Which way the offset last travelled: 1 towards the end, -1 towards
+    /// the start, 0 before any travel has been seen.
+    final var preparationHeading: Int = 0
+    /// How far the offset has travelled against the heading since it last
+    /// travelled with it.
+    final var preparationReverseTravel: CGFloat = 0
+    final var lastPreparationTravelAt: CFTimeInterval = 0
+
     /// Layout passes currently on the stack, and the deepest that has ever
     /// been.
     ///
@@ -160,7 +244,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// layout inside a layout. It is measured so that the invariant an
     /// animator relies on — that the mounted set is not rearranged underneath
     /// `update` — is asserted rather than assumed to be inherited.
-    private final var layoutContentDepth = 0
+    private(set) final var layoutContentDepth = 0
     final var deepestLayoutContentDepth = 0
 
     /// Where the animated scroll in flight was asked to go, if it was asked
@@ -301,6 +385,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         for identifier in difference.changed {
             reconfigureRow(with: identifier)
         }
+        notePreparationChanges(of: difference.changed)
         // A row that only moved was configured with the index it had before.
         // Only the mounted ones show that index, so only they are filled in
         // again; the rest pick up the new one when they are next mounted.
@@ -479,6 +564,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         items[index] = item
         rowLayout.invalidateHeights(for: CollectionOfOne(item.id))
         reconfigureRow(with: item.id)
+        notePreparationChange(of: item.id)
         requestLayout()
         layoutNow()
         return true
@@ -768,12 +854,17 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     ///
     /// Animated, the scroll keeps heading for the row as rows on the way are
     /// measured, so it lands on the row rather than on where the estimates
-    /// placed it.
+    /// placed it. Not animated, the rows the viewport will show there are
+    /// measured before it moves, outwards from the row, for the same reason:
+    /// a jump worked out from estimates lands wherever they were wrong by.
     ///
     /// ``scrollToRow(with:at:animated:)`` funnels through here. An override
     /// must call `super`.
     open func scrollToRow(at index: Int, at position: ListRowPosition, animated: Bool = true) {
         guard index >= 0, index < content.count else { return }
+        if !animated, let placement = resolvedPlacement(ofRowAt: index, at: position) {
+            measureDestination(around: index, at: placement)
+        }
 
         let placement = resolvedPlacement(ofRowAt: index, at: position)
         let targetOffset = placement.map { offset(showingRowAt: index, at: $0) } ?? contentOffset
@@ -796,14 +887,35 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// Scrolls to the end of the content.
     ///
     /// Animated, the scroll follows the end as rows on the way are measured.
+    /// Not animated, the rows the end will show are measured first, last row
+    /// first, so the list lands on its end and not on where the estimates
+    /// put it: a row there that turns out taller than its estimate would
+    /// otherwise leave the list standing short of the end it was sent to.
     /// An override must call `super`.
     open func scrollToBottom(animated: Bool = true) {
         guard animated else {
+            measureDestination(around: content.count - 1, at: .bottom)
             setContentOffset(maximumContentOffset, animated: false)
             return
         }
         scroll(to: maximumContentOffset)
         scrollDestination = .init(place: .bottom, serial: scrollingSerial)
+    }
+
+    /// Measures what the viewport will show with the row at `index` at
+    /// `position`, ahead of a jump there.
+    private final func measureDestination(around index: Int, at position: ListRowPosition) {
+        rowLayout.prepareForLayout()
+        let dy = rowLayout.measureRows(
+            around: index,
+            at: position,
+            filling: bounds.height + mountOverscan,
+            anchoredAt: viewportRect
+        )
+        if dy != 0 {
+            compensateScrollOffset(by: dy)
+        }
+        contentSize = supposedContentSize
     }
 
     // MARK: - Layout
@@ -880,6 +992,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         layoutContentDepth += 1
         deepestLayoutContentDepth = max(deepestLayoutContentDepth, layoutContentDepth)
         defer { layoutContentDepth -= 1 }
+        let measurementsBefore = rowLayout.measurementCount
+        layoutPassMountedRows = false
         refreshMountOverscan()
         measureViewport()
         contentSize = supposedContentSize
@@ -898,6 +1012,11 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         // say — moves the viewport on screen over the length of that
         // animation, while this pass only sees where it ends up.
         holdMountedRows(for: ambientAnimationDuration)
+        // After the measurement, which is where a new width is noticed.
+        if isPreparationEnabled {
+            refreshPreparationReach()
+            notePreparationTravel()
+        }
         if contentOffset.y >= minimumContentOffset.y, contentOffset.y <= maximumContentOffset.y {
             recycleRowsOutsideViewport()
         }
@@ -921,6 +1040,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         removeUnusedRowsFromSuperview()
         settleNewlyPlacedRows()
         applyRowAnimator()
+        layoutPassWorkedOnRows = layoutPassMountedRows || rowLayout.measurementCount != measurementsBefore
+        schedulePreparation()
     }
 
     /// Returns the rows to rest whenever the list changes windows.
@@ -948,7 +1069,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// The end of the pass is the one safe place to force it: the list has
     /// already cleared its own layout flag, so asking a row to lay out cannot
     /// climb back into `layoutContent`.
-    private final func settleNewlyPlacedRows() {
+    final func settleNewlyPlacedRows() {
         guard !rowsPendingSettle.isEmpty else { return }
         let pending = rowsPendingSettle
         rowsPendingSettle.removeAll(keepingCapacity: true)
@@ -974,6 +1095,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// coordinate space that has just moved underneath it.
     override open func compensateScrollOffset(by dy: CGFloat) {
         super.compensateScrollOffset(by: dy)
+        // Not travel: the reader saw nothing move.
+        preparationReferenceOffsetY += dy
         guard dy != 0, rowAnimator != nil else { return }
         // Saved and restored rather than cleared. Compensation can be reached
         // from inside the animator — measurement runs during a layout an
@@ -1086,8 +1209,8 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         registrations[index]
     }
 
-    final func context(at index: Int, purpose: ListRowPurpose) -> ListRowContext {
-        .init(index: index, width: bounds.width, purpose: purpose)
+    final func context(at index: Int, purpose: ListRowPurpose, willMount: Bool) -> ListRowContext {
+        .init(index: index, width: bounds.width, purpose: purpose, willMount: willMount)
     }
 
     /// A hidden row kept for measuring registrations that have no height
@@ -1130,6 +1253,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         guard index >= 0, index < items.count,
               visibleRows[items[index].id] == nil
         else { return }
+        if layoutContentDepth > 0 {
+            layoutPassMountedRows = true
+        }
         mountRowView(at: index)
     }
 
@@ -1204,6 +1330,13 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
             ensureRowView(at: index)
             return
         }
+        // A row kept ready past the viewport is let go rather than filled in
+        // again for a change nobody can see, and made ready again once the
+        // item has held still. See ``preparationRange``.
+        if isKeptOnlyForPreparation(entry.view, at: index, identifier: identifier) {
+            recycleRow(with: identifier)
+            return
+        }
         configureRowView(entry.view, with: item, at: index, registrationIndex: entry.registration)
         entry.view.requestLayout()
     }
@@ -1224,7 +1357,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         registrations[registrationIndex].configure(
             view,
             item,
-            context(at: index, purpose: .display)
+            context(at: index, purpose: .display, willMount: true)
         )
     }
 
@@ -1292,7 +1425,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// Runs once per layout pass, so it is not overridable; every row it
     /// unmounts goes through the overridable ``recycleRow(with:)``.
     private final func recycleRowsOutsideViewport() {
-        let visibleRect = mountRect
+        // Wider than the mounted area while rows are kept ready past it, and
+        // the same rectangle otherwise.
+        let visibleRect = retentionRect
         let now = CACurrentMediaTime()
         heldRows = heldRows.filter { $0.value > now }
         let stale = visibleRows.compactMap { identifier, _ -> Item.ID? in

@@ -31,6 +31,19 @@ public struct ListRowContext: Sendable {
     /// layout inside a row belongs to its own `bounds`, not to this value.
     public let width: CGFloat
     public let purpose: ListRowPurpose
+    /// Whether the row's view is needed next.
+    ///
+    /// True when the row is being filled in for display, and when it is
+    /// measured because it has come into view or into the
+    /// ``ListView/preparationRange``: the list mounts it as soon as it knows
+    /// the height. False for a measurement made ahead of any need, as the
+    /// list makes them between frames for every row it holds.
+    ///
+    /// A height that has to build something to answer — a document typeset,
+    /// the row's own view filled in — can keep what it built when this is
+    /// true and hand it to the row, instead of building it twice. Kept for
+    /// every row of a long list it would be the whole list in memory.
+    public let willMount: Bool
 }
 
 /// One row type, and how to size and fill it.

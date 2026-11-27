@@ -36,6 +36,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// Heights already measured at ``contentWidth``, by item identity.
     private var measured: [Item.ID: CGFloat] = [:]
     private var contentWidth: CGFloat = 0
+    /// How many rows have been measured, so the list can tell whether a
+    /// layout pass measured any.
+    private(set) var measurementCount = 0
 
     init(_ listView: ListView<Item>) {
         self.listView = listView
@@ -205,9 +208,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// content the moment anything is invalidated, throwing away the reader's
     /// place before a single new height has been measured.
     private func reestimateRows() {
-        engine.reset((0 ..< engine.count).map {
-            .init(height: engine.height(at: $0), isPending: true)
-        })
+        engine.invalidateAll()
     }
 
     // MARK: - Measurement
@@ -261,13 +262,84 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
             guard engine.pendingCount(in: indices) > 0 else { return offsetDelta }
             let anchor = anchor(in: viewport)
             for index in indices where engine.isPending(at: index) {
-                offsetDelta += measure(at: index, anchor: anchor)
+                // A row measured taller than its estimate pushes the rows
+                // after it down, and with estimates far below the truth
+                // most of the span leaves the rect that way: one viewport
+                // of estimates is many viewports of rows. Those are not
+                // needed here any more, and measuring one may cost as much
+                // as building it.
+                guard engine.offset(at: index) < rect.maxY else { break }
+                offsetDelta += measure(at: index, anchor: anchor, willMount: true)
             }
         }
     }
 
+    /// Measures what a viewport of `height` will show once the row at
+    /// `index` stands at `position` in it: that row, then its neighbours
+    /// outwards from it until the measured ones fill the viewport. Returns
+    /// the same offset delta as ``measureRows``.
+    ///
+    /// Outwards from the row, because that is the order in which a height
+    /// that turns out different pushes the others out of the picture. From
+    /// the top of where the estimates put the viewport, one row measured
+    /// taller than its estimate moves the destination itself.
+    func measureRows(
+        around index: Int,
+        at position: ListRowPosition,
+        filling height: CGFloat,
+        anchoredAt viewport: CGRect
+    ) -> CGFloat {
+        guard index >= 0, index < engine.count else { return 0 }
+        let anchor = anchor(in: viewport)
+        var offsetDelta: CGFloat = 0
+        func settle(_ index: Int) -> CGFloat {
+            if engine.isPending(at: index) {
+                offsetDelta += measure(at: index, anchor: anchor, willMount: true)
+            }
+            return engine.height(at: index)
+        }
+        let room = height - settle(index)
+        var above: CGFloat = 0
+        var below: CGFloat = 0
+        switch position {
+        case .bottom: above = room
+        case .top, .nearest: below = room
+        case .middle:
+            above = room / 2
+            below = room / 2
+        }
+        var neighbour = index - 1
+        while neighbour >= 0, above > 0 {
+            above -= settle(neighbour)
+            neighbour -= 1
+        }
+        neighbour = index + 1
+        while neighbour < engine.count, below > 0 {
+            below -= settle(neighbour)
+            neighbour += 1
+        }
+        return offsetDelta
+    }
+
+    /// Whether the row at `index` is still at its estimate.
+    func isPending(at index: Int) -> Bool {
+        engine.isPending(at: index)
+    }
+
+    /// Measures the row at `index` if it is still at its estimate, and
+    /// returns the same offset delta as ``measureRows``.
+    func measureRow(at index: Int, anchoredAt viewport: CGRect) -> CGFloat {
+        guard index >= 0, index < engine.count, engine.isPending(at: index) else { return 0 }
+        return measure(at: index, anchor: anchor(in: viewport), willMount: true)
+    }
+
     /// Measures pending rows nearest the anchor, closest first, until
     /// `deadline`. Returns the same offset delta as ``measureRows``.
+    ///
+    /// `rect` is where rows are mounted or about to be: a row measured
+    /// inside it is told so, see ``ListRowContext/willMount``. Nearest first
+    /// means those are the rows this reaches first, and a height that
+    /// builds the row's view to answer builds the one the mount will use.
     func drainPendingRows(
         intersecting rect: CGRect,
         anchoredAt viewport: CGRect,
@@ -277,7 +349,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         var offsetDelta: CGFloat = 0
         var now = CACurrentMediaTime()
         while now < deadline, let next = engine.nextPending(near: anchor.index) {
-            offsetDelta += measure(at: next, anchor: anchor)
+            let top = engine.offset(at: next)
+            let willMount = top < rect.maxY && top + engine.height(at: next) > rect.minY
+            offsetDelta += measure(at: next, anchor: anchor, willMount: willMount)
             let finished = CACurrentMediaTime()
             if finished - now > Self.slowRowThreshold {
                 Self.log.warning(
@@ -295,11 +369,12 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
     /// Measures one row and reports how much of its height change happened
     /// above the anchor.
-    private func measure(at index: Int, anchor: Anchor) -> CGFloat {
+    private func measure(at index: Int, anchor: Anchor, willMount: Bool) -> CGFloat {
         let previousHeight = engine.height(at: index)
+        measurementCount &+= 1
 
         guard index < listView.items.count,
-              let height = listView.measuredHeight(at: index)
+              let height = listView.measuredHeight(at: index, willMount: willMount)
         else {
             // Nobody can answer for this row. Settle for the estimate rather
             // than leaving it pending, which would spin every caller that
