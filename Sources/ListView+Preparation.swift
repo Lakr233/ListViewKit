@@ -307,6 +307,14 @@ extension ListView {
             }
             return outlook
         }
+        // Rows are sliding: an apply, a remeasure, or a host's animation
+        // around a pass. A row mounted now would stand at its place at once
+        // beside rows still on their way, and its step would land in the
+        // frames of that animation.
+        if let lastRelease = heldRows.values.max(), lastRelease > now {
+            outlook.retry(after: lastRelease - now)
+            return outlook
+        }
         let mounted = mountRect
         let target = preparationRect
 

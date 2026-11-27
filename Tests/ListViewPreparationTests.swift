@@ -577,6 +577,20 @@ struct ListViewPreparationTests {
         #endif
     }
 
+    @Test("while rows are still sliding nothing is made ready")
+    func nothingIsMadeReadyWhileRowsSlide() {
+        let listView = makeListView()
+        // As an animated apply leaves them: mounted rows held for the slide.
+        listView.holdMountedRows(for: 60)
+        settle(listView)
+        #expect(mounted(listView) == [0, 1, 2])
+        #expect(listView.preparationWake != nil, "nothing would look again once the slide ends")
+
+        listView.heldRows.removeAll()
+        settle(listView)
+        #expect(mounted(listView) == [0, 1, 2, 3, 4])
+    }
+
     // MARK: - Measurement
 
     @Test("measuring a row above the viewport ahead of time leaves the viewport where it was")
