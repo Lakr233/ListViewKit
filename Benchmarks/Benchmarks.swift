@@ -110,11 +110,17 @@ private enum ListViewKitBenchmarks {
 
     static func main() {
         let itemCounts = environmentList("LVK_ITEMS").map { $0.compactMap(Int.init) } ?? [1_000, 10_000, 100_000]
-        let selectedKeys = environmentList("LVK_BENCH").map(Set.init)
+        var selectedKeys = environmentList("LVK_BENCH").map(Set.init)
+        // Not a column: a table of its own, printed after the others.
+        let reportsFrames = selectedKeys?.remove(framesKey) != nil || selectedKeys == nil
+        if reportsFrames, selectedKeys?.isEmpty == true {
+            reportFrames()
+            return
+        }
         let selected = benchmarks.filter { selectedKeys?.contains($0.key) ?? true }
         let unknownKeys = (selectedKeys ?? []).subtracting(benchmarks.map(\.key))
         guard unknownKeys.isEmpty, !selected.isEmpty else {
-            let known = benchmarks.map(\.key).joined(separator: ", ")
+            let known = (benchmarks.map(\.key) + [framesKey]).joined(separator: ", ")
             let unknown = unknownKeys.sorted().joined(separator: ", ")
             FileHandle.standardError.write(Data("Unknown LVK_BENCH key: \(unknown). Known keys: \(known).\n".utf8))
             exit(1)
@@ -143,6 +149,104 @@ private enum ListViewKitBenchmarks {
             }
             print("| \(itemCount) | \(format(median(setupSamples))) ms | " + columns.joined(separator: " ms | ") + " ms |")
         }
+        if reportsFrames {
+            reportFrames()
+        }
+    }
+
+    // MARK: - Frames
+
+    private static let framesKey = "frames"
+
+    /// What a scroll onto rows that are expensive to measure and to build
+    /// costs frame by frame, with and without a preparation range.
+    ///
+    /// The other columns are totals. This one is about the worst frame: a
+    /// row that takes a few milliseconds to measure and a few more to fill
+    /// in pays for both in the frame that uncovers it, and two of them
+    /// arriving together are a dropped frame however fast the list is.
+    private static func reportFrames() {
+        print("")
+        print("Scrolling onto rows nobody has measured; 3 ms to measure, 4 ms to fill in; 120pt rows, 800×600 viewport")
+        print("")
+        print("| Scroll | Range | Frames | Mean | Worst | Over 8.3 ms | Rows filled in during layout |")
+        print("| ---: | ---: | ---: | ---: | ---: | ---: | ---: |")
+        for step in [30, 60, 120, 240] as [CGFloat] {
+            for range in [ListPreparationRange.none, .viewports(1.5)] {
+                let report = frames(step: step, range: range)
+                let name = range == .none ? "none" : "1.5 viewports"
+                print(
+                    "| \(Int(step)) pt/frame | \(name) | \(report.frames.count) "
+                        + "| \(format(report.frames.reduce(0, +) / Double(report.frames.count))) ms "
+                        + "| \(format(report.frames.max() ?? 0)) ms "
+                        + "| \(report.frames.count(where: { $0 > 8.3 })) | \(report.filledInLayout) |"
+                )
+            }
+        }
+    }
+
+    private static func frames(step: CGFloat, range: ListPreparationRange) -> (frames: [Double], filledInLayout: Int) {
+        var isInLayout = false
+        var filledInLayout = 0
+        let listView = ListView<BenchmarkItem>(frame: CGRect(x: 0, y: 0, width: 800, height: 600))
+        listView.estimatedRowHeight = 120
+        listView.rows {
+            ListRow(ListRowView.self)
+                .height { _, _ in
+                    spin(milliseconds: 3)
+                    return 120
+                }
+                .configure { _, _, _ in
+                    spin(milliseconds: 4)
+                    if isInLayout { filledInLayout += 1 }
+                }
+        }
+        listView.preparationRange = range
+        listView.apply((0 ..< 400).map { BenchmarkItem(id: $0) })
+        listView.needsLayout = true
+        listView.layoutSubtreeIfNeeded()
+        // A hand on the list from the start, as there is through any real
+        // scroll: deferred measurement waits for it to lift, so every row is
+        // still to be measured and what is compared is the layout pass and
+        // the range.
+        sendWheel(.began, to: listView)
+        defer { sendWheel(.ended, to: listView) }
+        // It rests there for a moment before the first swipe.
+        let rested = Date().addingTimeInterval(0.5)
+        while Date() < rested {
+            RunLoop.main.run(mode: .default, before: rested)
+        }
+
+        filledInLayout = 0
+        var frames: [Double] = []
+        var offset: CGFloat = 0
+        while offset < 24_000 {
+            offset += step
+            frames.append(measure {
+                // The frame: the offset moves and the list lays out.
+                isInLayout = true
+                listView.contentOffset.y = offset
+                listView.layoutSubtreeIfNeeded()
+                isInLayout = false
+                // What is left of it: the run loop comes round once.
+                RunLoop.main.run(mode: .default, before: Date())
+            }.1)
+        }
+        return (frames, filledInLayout)
+    }
+
+    private static func sendWheel(_ phase: CGScrollPhase, to listView: ListView<BenchmarkItem>) {
+        guard let event = CGEvent(
+            scrollWheelEvent2Source: nil, units: .pixel, wheelCount: 1, wheel1: 0, wheel2: 0, wheel3: 0
+        ) else { return }
+        event.setIntegerValueField(.scrollWheelEventScrollPhase, value: Int64(phase.rawValue))
+        guard let wheel = NSEvent(cgEvent: event) else { return }
+        listView.scrollWheel(with: wheel)
+    }
+
+    private static func spin(milliseconds: Double) {
+        let end = DispatchTime.now().uptimeNanoseconds + UInt64(milliseconds * 1_000_000)
+        while DispatchTime.now().uptimeNanoseconds < end {}
     }
 
     private static func warmUp() {

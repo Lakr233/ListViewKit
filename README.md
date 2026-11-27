@@ -242,6 +242,48 @@ their estimates. Scrolls animate only while the list is in a window: one still
 running when the list leaves its window, or asked for before the list has one,
 jumps to where it was going as the window changes.
 
+### Making rows ready ahead of a scroll
+
+A row is measured, built, filled in and laid out in the layout pass that
+brings it into view, so the frame that uncovers it pays for all of it. For
+cheap rows that is the right trade. For a row that typesets a document it is a
+dropped frame, every time one comes into view.
+
+```swift
+list.preparationRange = .viewports(1.5)   // or .points(1200); .none is the default
+```
+
+With a range, the rows within that distance of the viewport, above and below,
+are taken through the same steps before the scroll reaches them, and scrolling
+to one only uncovers it:
+
+- A row's measurement is one step and its mount another, so a row that is
+  expensive both ways costs two short frames rather than one long one.
+- While the list is still, the steps run a few milliseconds at a time until the
+  range is ready. While it scrolls, they run in what is left of a frame after
+  its commit: one step, or several while they stay cheap, and none in a frame
+  whose own layout pass already had to measure or mount a row.
+- The side the list is heading for comes first.
+
+The work is not made smaller, only moved to where there is room for it. A
+scroll fast enough to need a row in every frame leaves no such room, falls
+back to the layout pass, and costs what it cost without a range.
+
+Rows made ready are mounted: `rowView(for:)` and `visibleRowViews` return them,
+while `indicesForVisibleRows` still reports the viewport. They stay mounted
+until they are a quarter of a viewport past the range, so the range is also
+how much the list keeps: `.viewports(1.5)` holds four screens of rows where
+the default holds one. Three things are left out on purpose:
+
+- A row that changes while it is kept past the viewport is recycled, and made
+  ready again once it has held still for a quarter of a second. A reply being
+  written is not typeset where nobody is looking.
+- A row removed there leaves without an animation, as one that was never
+  mounted does.
+- While the width changes the range is dropped: every mounted row is laid out
+  again on each step of a resize, and rows kept past the viewport would
+  multiply exactly that. It comes back once the width has held still.
+
 ### The scroller
 
 A list whose content outgrows its viewport draws an overlay scroller. Hosts
