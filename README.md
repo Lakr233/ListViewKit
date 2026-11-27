@@ -261,9 +261,11 @@ to one only uncovers it:
 - A row's measurement is one step and its mount another, so a row that is
   expensive both ways costs two short frames rather than one long one.
 - While the list is still, the steps run a few milliseconds at a time until the
-  range is ready. While it scrolls, they run in what is left of a frame after
-  its commit: one step, or several while they stay cheap, and none in a frame
-  whose own layout pass already had to measure or mount a row.
+  range is ready. While it scrolls, only the rows about to come into view,
+  half a viewport on, are worked on, in what is left of a frame after its
+  commit: one step, or several while they stay cheap, and none in a frame
+  whose own layout pass already had to measure or mount a row. The rest of
+  the range waits for the list to stop.
 - The side the list is heading for comes first, and can be given the longer
   reach: `ahead` is the way the list last scrolled, towards the end before it
   has scrolled at all, and the other way for a list standing at the edge it

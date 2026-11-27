@@ -34,6 +34,12 @@ extension ListView {
     /// travelling, and a pass keeps to the smaller of its two budgets.
     static var preparationTravelWindow: CFTimeInterval { 0.1 }
 
+    /// How far past the mounted area rows are made ready while the list
+    /// travels, in viewport heights. Far enough for a row's steps to come
+    /// before the row does; the rest of the range waits for the list to
+    /// stop.
+    static var preparationTravelBand: CGFloat { 0.5 }
+
     /// How long a row must hold still before it is made ready again. A reply
     /// being written changes many times a second; readying it past the
     /// viewport after every change would typeset text nobody is looking at.
@@ -358,7 +364,23 @@ extension ListView {
             return outlook
         }
         let mounted = mountRect
-        let target = preparationRect
+        var target = preparationRect
+        let travelling = isTravelling(now: now)
+        if travelling {
+            // A step taken while the list travels lands between two frames
+            // of the scroll, and a row far ahead costs as long there as it
+            // would in view. Only the rows about to come into view are
+            // worth that; the rest of the range is for when the list stops,
+            // which is when a reader does, between one scroll and the next.
+            let band = bounds.height * Self.preparationTravelBand
+            let near = CGRect(
+                x: target.minX, y: mounted.minY - band, width: target.width, height: mounted.height + band * 2
+            )
+            if !near.contains(target) {
+                target = target.intersection(near)
+                outlook.retry(after: Self.preparationTravelWindow)
+            }
+        }
 
         func nearest(in indices: some Sequence<Int>) -> Int? {
             for index in indices {
@@ -389,7 +411,6 @@ extension ListView {
             )).reversed())
             : nil
 
-        let travelling = isTravelling(now: now)
         let chosen: Int?
         switch (below, above) {
         case (nil, nil):

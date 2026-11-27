@@ -431,6 +431,21 @@ struct ListViewPreparationTests {
         #expect(mounted(listView) == [48, 49, 50, 51, 52, 53, 54])
     }
 
+    @Test("while the list travels only the rows about to come into view are worked on")
+    func theRestOfTheRangeWaitsForTheListToStop() {
+        let listView = makeListView(count: 200, range: .points(ahead: 600, behind: 0))
+        scroll(listView, to: 900)
+        scroll(listView, to: 1000)
+        settle(listView, travelling: true)
+        // Half a viewport ahead of 1000…1300 reaches into row 14.
+        #expect(mounted(listView).filter { $0 > 12 } == [13, 14])
+        #expect(listView.preparationWake != nil, "nothing would look again once the scroll ends")
+
+        // It stops: the whole reach, to 1900.
+        settle(listView)
+        #expect(mounted(listView).filter { $0 > 12 } == Array(13 ... 18))
+    }
+
     @Test("before any travel the nearer row comes first")
     func beforeAnyTravelTheNearerRowComesFirst() {
         let probe = PreparationProbe()
@@ -714,12 +729,39 @@ struct ListViewPreparationTests {
 
         // Everything else is measured between frames, ahead of any need.
         _ = listView.rowLayout.drainPendingRows(
-            intersecting: listView.mountRect,
+            intersecting: listView.preparationRect,
             anchoredAt: listView.viewportRect,
             deadline: CACurrentMediaTime() + 5
         )
         #expect(!listView.rowLayout.hasPendingRows)
         #expect(willMount.count == 40)
+        #expect((5 ..< 40).allSatisfy { willMount[$0] == false })
+    }
+
+    @Test("the background measurement tells a row within the range that it will mount")
+    func theBackgroundMeasurementKnowsTheRange() {
+        var willMount: [Int: Bool] = [:]
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        listView.estimatedRowHeight = Self.rowHeight
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, context in
+                    willMount[item.id] = context.willMount
+                    return Self.rowHeight
+                }
+                .configure { _, _, _ in }
+        }
+        listView.preparationRange = .points(200)
+        listView.apply((0 ..< 40).map { PreparedItem(id: $0) })
+        layout(listView)
+        // Before any pass of the range has run: the background measurement
+        // reaches the rows nearest the viewport first.
+        _ = listView.rowLayout.drainPendingRows(
+            intersecting: listView.preparationRect,
+            anchoredAt: listView.viewportRect,
+            deadline: CACurrentMediaTime() + 5
+        )
+        #expect(willMount[3] == true && willMount[4] == true)
         #expect((5 ..< 40).allSatisfy { willMount[$0] == false })
     }
 

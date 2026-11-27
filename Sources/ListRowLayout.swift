@@ -335,6 +335,11 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
 
     /// Measures pending rows nearest the anchor, closest first, until
     /// `deadline`. Returns the same offset delta as ``measureRows``.
+    ///
+    /// `rect` is where rows are mounted or about to be: a row measured
+    /// inside it is told so, see ``ListRowContext/willMount``. Nearest first
+    /// means those are the rows this reaches first, and a height that
+    /// builds the row's view to answer builds the one the mount will use.
     func drainPendingRows(
         intersecting rect: CGRect,
         anchoredAt viewport: CGRect,
@@ -344,7 +349,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         var offsetDelta: CGFloat = 0
         var now = CACurrentMediaTime()
         while now < deadline, let next = engine.nextPending(near: anchor.index) {
-            offsetDelta += measure(at: next, anchor: anchor, willMount: false)
+            let top = engine.offset(at: next)
+            let willMount = top < rect.maxY && top + engine.height(at: next) > rect.minY
+            offsetDelta += measure(at: next, anchor: anchor, willMount: willMount)
             let finished = CACurrentMediaTime()
             if finished - now > Self.slowRowThreshold {
                 Self.log.warning(
