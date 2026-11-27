@@ -194,6 +194,42 @@ struct ListLayoutEngineTests {
         }
     }
 
+    /// Marking every row pending in place has to leave the tree exactly as
+    /// rebuilding it with every row pending would: every prefix reads every
+    /// node, and the measurements after it build on those nodes.
+    @Test
+    func invalidatingEverythingMatchesRebuildingEveryRowPending() {
+        var random = SplitMix64(state: 0x1A7A11)
+        for count in 0 ..< 70 {
+            let rows = (0 ..< count).map { _ in
+                ListLayoutEngine.Row(height: random.height(), isPending: random.int(below: 2) == 0)
+            }
+            var engine = ListLayoutEngine()
+            engine.reset(rows)
+            engine.invalidateAll()
+
+            var naive = NaiveLayout()
+            naive.rows = rows.map { .init(height: $0.height, isPending: true) }
+            var offset: CGFloat = 0
+            for index in 0 ... count {
+                #expect(engine.offset(at: index) == offset)
+                #expect(engine.pendingCount(in: 0 ..< index) == index)
+                guard index < count else { break }
+                #expect(engine.isPending(at: index))
+                offset += naive.rows[index].height
+            }
+            for _ in 0 ..< min(count, 8) {
+                let index = random.int(below: count)
+                engine.setHeight(13, at: index)
+                naive.rows[index] = .init(height: 13, isPending: false)
+                expectMatches(engine, naive, &random)
+            }
+            engine.append(.init(height: 7, isPending: true))
+            naive.rows.append(.init(height: 7, isPending: true))
+            expectMatches(engine, naive, &random)
+        }
+    }
+
     /// Zero-height rows share a prefix sum with their neighbours, which is
     /// exactly where a descent's tie-breaking can disagree with a linear scan.
     @Test

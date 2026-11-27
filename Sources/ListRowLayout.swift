@@ -205,9 +205,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// content the moment anything is invalidated, throwing away the reader's
     /// place before a single new height has been measured.
     private func reestimateRows() {
-        engine.reset((0 ..< engine.count).map {
-            .init(height: engine.height(at: $0), isPending: true)
-        })
+        engine.invalidateAll()
     }
 
     // MARK: - Measurement
