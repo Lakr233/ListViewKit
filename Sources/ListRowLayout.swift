@@ -274,21 +274,49 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         }
     }
 
-    /// Measures the rows at the end still at their estimates, last first,
-    /// until the measured ones fill `height`: what the list will show once
-    /// it stands at its end. Returns the same offset delta as
-    /// ``measureRows``.
-    func measureTail(filling height: CGFloat, anchoredAt viewport: CGRect) -> CGFloat {
+    /// Measures what a viewport of `height` will show once the row at
+    /// `index` stands at `position` in it: that row, then its neighbours
+    /// outwards from it until the measured ones fill the viewport. Returns
+    /// the same offset delta as ``measureRows``.
+    ///
+    /// Outwards from the row, because that is the order in which a height
+    /// that turns out different pushes the others out of the picture. From
+    /// the top of where the estimates put the viewport, one row measured
+    /// taller than its estimate moves the destination itself.
+    func measureRows(
+        around index: Int,
+        at position: ListRowPosition,
+        filling height: CGFloat,
+        anchoredAt viewport: CGRect
+    ) -> CGFloat {
+        guard index >= 0, index < engine.count else { return 0 }
         let anchor = anchor(in: viewport)
         var offsetDelta: CGFloat = 0
-        var filled: CGFloat = 0
-        var index = engine.count - 1
-        while index >= 0, filled < height {
+        func settle(_ index: Int) -> CGFloat {
             if engine.isPending(at: index) {
                 offsetDelta += measure(at: index, anchor: anchor, willMount: true)
             }
-            filled += engine.height(at: index)
-            index -= 1
+            return engine.height(at: index)
+        }
+        let room = height - settle(index)
+        var above: CGFloat = 0
+        var below: CGFloat = 0
+        switch position {
+        case .bottom: above = room
+        case .top, .nearest: below = room
+        case .middle:
+            above = room / 2
+            below = room / 2
+        }
+        var neighbour = index - 1
+        while neighbour >= 0, above > 0 {
+            above -= settle(neighbour)
+            neighbour -= 1
+        }
+        neighbour = index + 1
+        while neighbour < engine.count, below > 0 {
+            below -= settle(neighbour)
+            neighbour += 1
         }
         return offsetDelta
     }

@@ -854,12 +854,17 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     ///
     /// Animated, the scroll keeps heading for the row as rows on the way are
     /// measured, so it lands on the row rather than on where the estimates
-    /// placed it.
+    /// placed it. Not animated, the rows the viewport will show there are
+    /// measured before it moves, outwards from the row, for the same reason:
+    /// a jump worked out from estimates lands wherever they were wrong by.
     ///
     /// ``scrollToRow(with:at:animated:)`` funnels through here. An override
     /// must call `super`.
     open func scrollToRow(at index: Int, at position: ListRowPosition, animated: Bool = true) {
         guard index >= 0, index < content.count else { return }
+        if !animated, let placement = resolvedPlacement(ofRowAt: index, at: position) {
+            measureDestination(around: index, at: placement)
+        }
 
         let placement = resolvedPlacement(ofRowAt: index, at: position)
         let targetOffset = placement.map { offset(showingRowAt: index, at: $0) } ?? contentOffset
@@ -889,17 +894,28 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// An override must call `super`.
     open func scrollToBottom(animated: Bool = true) {
         guard animated else {
-            rowLayout.prepareForLayout()
-            let dy = rowLayout.measureTail(filling: bounds.height + mountOverscan, anchoredAt: viewportRect)
-            if dy != 0 {
-                compensateScrollOffset(by: dy)
-            }
-            contentSize = supposedContentSize
+            measureDestination(around: content.count - 1, at: .bottom)
             setContentOffset(maximumContentOffset, animated: false)
             return
         }
         scroll(to: maximumContentOffset)
         scrollDestination = .init(place: .bottom, serial: scrollingSerial)
+    }
+
+    /// Measures what the viewport will show with the row at `index` at
+    /// `position`, ahead of a jump there.
+    private final func measureDestination(around index: Int, at position: ListRowPosition) {
+        rowLayout.prepareForLayout()
+        let dy = rowLayout.measureRows(
+            around: index,
+            at: position,
+            filling: bounds.height + mountOverscan,
+            anchoredAt: viewportRect
+        )
+        if dy != 0 {
+            compensateScrollOffset(by: dy)
+        }
+        contentSize = supposedContentSize
     }
 
     // MARK: - Layout

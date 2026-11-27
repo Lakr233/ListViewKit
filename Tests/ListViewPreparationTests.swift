@@ -771,6 +771,40 @@ struct ListViewPreparationTests {
         #expect(listView.isScrolledToBottom())
     }
 
+    @Test("jumping to a row measures what it will show there, outwards from the row", arguments: [
+        (ListRowPosition.top, [100, 101, 102]),
+        (ListRowPosition.bottom, [100, 99, 98]),
+        (ListRowPosition.middle, [100, 99, 101]),
+    ])
+    func jumpingToARowLandsOnIt(position: ListRowPosition, measured: [Int]) {
+        let probe = PreparationProbe()
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        listView.estimatedRowHeight = 30
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, _ in
+                    probe.events.append(.measure(item.id))
+                    return Self.rowHeight
+                }
+                .configure { _, _, _ in }
+        }
+        listView.apply((0 ..< 200).map { PreparedItem(id: $0) })
+        layout(listView)
+        probe.events.removeAll()
+
+        listView.scrollToRow(at: 100, at: position, animated: false)
+        layout(listView)
+
+        #expect(probe.measured == measured)
+        let row = listView.rectForRow(at: 100)
+        let viewport = CGRect(origin: listView.contentOffset, size: listView.bounds.size)
+        switch position {
+        case .top: #expect(row.minY == viewport.minY)
+        case .bottom: #expect(row.maxY == viewport.maxY)
+        default: #expect(row.midY == viewport.midY)
+        }
+    }
+
     // MARK: - Width
 
     @Test("while the width changes the range is dropped, and comes back once it holds")
