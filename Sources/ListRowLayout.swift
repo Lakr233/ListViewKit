@@ -36,6 +36,9 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// Heights already measured at ``contentWidth``, by item identity.
     private var measured: [Item.ID: CGFloat] = [:]
     private var contentWidth: CGFloat = 0
+    /// How many rows have been measured, so the list can tell whether a
+    /// layout pass measured any.
+    private(set) var measurementCount = 0
 
     init(_ listView: ListView<Item>) {
         self.listView = listView
@@ -264,6 +267,18 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
         }
     }
 
+    /// Whether the row at `index` is still at its estimate.
+    func isPending(at index: Int) -> Bool {
+        engine.isPending(at: index)
+    }
+
+    /// Measures the row at `index` if it is still at its estimate, and
+    /// returns the same offset delta as ``measureRows``.
+    func measureRow(at index: Int, anchoredAt viewport: CGRect) -> CGFloat {
+        guard index >= 0, index < engine.count, engine.isPending(at: index) else { return 0 }
+        return measure(at: index, anchor: anchor(in: viewport))
+    }
+
     /// Measures pending rows nearest the anchor, closest first, until
     /// `deadline`. Returns the same offset delta as ``measureRows``.
     func drainPendingRows(
@@ -295,6 +310,7 @@ final class ListRowLayout<Item: Identifiable & Hashable & SendableMetatype> {
     /// above the anchor.
     private func measure(at index: Int, anchor: Anchor) -> CGFloat {
         let previousHeight = engine.height(at: index)
+        measurementCount &+= 1
 
         guard index < listView.items.count,
               let height = listView.measuredHeight(at: index)

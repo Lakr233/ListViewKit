@@ -26,9 +26,10 @@ public extension ListView {
     ///
     /// Mounted is not quite the same as visible. A ``rowAnimator`` that
     /// displaces rows makes the list keep a margin of them mounted past the
-    /// viewport, so that a row displaced into view is already there; this
-    /// returns those too, while ``indicesForVisibleRows`` does not. Without an
-    /// animator the two agree, which is the default.
+    /// viewport, so that a row displaced into view is already there, and a
+    /// ``preparationRange`` keeps the rows within it mounted and ready; this
+    /// returns those too, while ``indicesForVisibleRows`` does not. Without
+    /// either the two agree, which is the default.
     func rowView(for identifier: Item.ID) -> ListRowView? {
         visibleRows[identifier]?.view
     }

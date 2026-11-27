@@ -1,0 +1,370 @@
+//
+//  ListView+Preparation.swift
+//  ListViewKit
+//
+//  Rows made ready before the scroll reaches them.
+//
+//  A row coming into view costs its measurement, its view, its
+//  configuration, its layout and its drawing, and without a range all of
+//  that lands in the frame that uncovers it. With one, the rows within the
+//  range are taken through the same steps beforehand, one step at a time
+//  between frames, nearest the viewport first. The layout pass is unchanged:
+//  it still measures and mounts whatever the viewport needs and finds nothing
+//  left to do for a row that was ready.
+//
+//  The work is not made smaller, only moved to where there is room for it:
+//  into the frames of a scroll that had nothing else to do, a step each, and
+//  into the time the list stands still. A scroll fast enough to need a row
+//  in every frame leaves no such room, and costs what it cost before.
+//
+
+import Foundation
+import QuartzCore
+
+#if canImport(UIKit)
+    import UIKit
+#elseif canImport(AppKit)
+    import AppKit
+#else
+    #error("ListViewKit requires UIKit or AppKit")
+#endif
+
+extension ListView {
+    /// How long after the offset last moved the list still counts as
+    /// travelling, and a pass keeps to the smaller of its two budgets.
+    static var preparationTravelWindow: CFTimeInterval { 0.1 }
+
+    /// How long a row must hold still before it is made ready again. A reply
+    /// being written changes many times a second; readying it past the
+    /// viewport after every change would typeset text nobody is looking at.
+    static var preparationQuietPeriod: CFTimeInterval { 0.25 }
+
+    /// How long the width must hold still before rows are made ready again,
+    /// the same wait the deferred measurement keeps.
+    private static var preparationWidthHoldOff: CFTimeInterval { 0.15 }
+
+    final var isPreparationEnabled: Bool { preparationRange != .none }
+
+    // MARK: - Geometry
+
+    /// Re-reads how far past the mounted area rows are kept ready.
+    ///
+    /// Zero while the width is changing. Every mounted row is laid out again
+    /// on each step of a resize, so rows kept past the viewport would
+    /// multiply the cost of the one thing a resize is slow at. They are let
+    /// go for its length and made ready again once the width holds.
+    final func refreshPreparationReach(now: CFTimeInterval = CACurrentMediaTime()) {
+        guard isPreparationEnabled, bounds.width > 0, bounds.height > 0, !isWidthChanging(now: now) else {
+            preparationReach = 0
+            return
+        }
+        preparationReach = preparationRange.distance(viewportHeight: bounds.height)
+    }
+
+    private final func isWidthChanging(now: CFTimeInterval) -> Bool {
+        #if canImport(AppKit) && !targetEnvironment(macCatalyst)
+            if inLiveResize { return true }
+        #endif
+        return now - lastWidthChangeAt < Self.preparationWidthHoldOff
+    }
+
+    /// The rectangle rows are made ready over, in the same space as
+    /// ``viewportRect``: the mounted area and the range either side of it,
+    /// no further than the content goes.
+    final var preparationRect: CGRect {
+        widened(mountRect, by: preparationReach)
+    }
+
+    /// The rectangle a mounted row has to leave before it is recycled.
+    ///
+    /// A quarter of a viewport past ``preparationRect``, so a row at the edge
+    /// of the range is not let go and made ready again each time the reader
+    /// reverses over it. Equal to ``mountRect`` without a range.
+    final var retentionRect: CGRect {
+        guard preparationReach > 0 else { return mountRect }
+        return widened(mountRect, by: preparationReach + bounds.height / 4)
+    }
+
+    private final func widened(_ rect: CGRect, by distance: CGFloat) -> CGRect {
+        guard distance > 0 else { return rect }
+        let minY = min(rect.minY, max(0, rect.minY - distance))
+        let maxY = max(rect.maxY, min(rowLayout.contentHeight, rect.maxY + distance))
+        return CGRect(x: rect.minX, y: minY, width: rect.width, height: maxY - minY)
+    }
+
+    /// Whether the row at `index` is mounted only because it is kept ready:
+    /// it stands outside the mounted area, it will after this layout, and no
+    /// animation is still showing it.
+    final func isKeptOnlyForPreparation(_ view: ListRowView, at index: Int, identifier: Item.ID) -> Bool {
+        guard preparationReach > 0, heldRows[identifier] == nil else { return false }
+        let mounted = mountRect
+        guard let frame = rowLayout.frame(for: index), !frame.intersects(mounted) else { return false }
+        return !view.placedFrame.offsetBy(dx: 0, dy: -topInset).intersects(mounted)
+    }
+
+    // MARK: - Travel
+
+    /// Notes which way the offset moved since the last pass, and when.
+    ///
+    /// Read from the offset rather than from the scroll ledger, which leaves
+    /// out a stepped mouse wheel: that is travel a row effect should not
+    /// spring on, but it uncovers rows like any other.
+    final func notePreparationTravel() {
+        let travel = contentOffset.y - preparationReferenceOffsetY
+        preparationReferenceOffsetY = contentOffset.y
+        // Under a device pixel is rounding in a compensation, not a scroll.
+        guard abs(travel) > 0.1 else { return }
+        preparationHeading = travel > 0 ? 1 : -1
+        lastPreparationTravelAt = CACurrentMediaTime()
+    }
+
+    private final func isTravelling(now: CFTimeInterval) -> Bool {
+        now - lastPreparationTravelAt < Self.preparationTravelWindow
+    }
+
+    // MARK: - Changes
+
+    /// Notes that an item changed while no row was mounted for it, so it is
+    /// not made ready until it has held still.
+    final func notePreparationChange(of identifier: Item.ID) {
+        guard isPreparationEnabled, visibleRows[identifier] == nil else { return }
+        preparationChangedAt[identifier] = CACurrentMediaTime()
+    }
+
+    /// The same for the changed items of an apply that lie within reach.
+    final func notePreparationChanges(of identifiers: [Item.ID]) {
+        guard isPreparationEnabled, !identifiers.isEmpty else { return }
+        let kept = rowLayout.indices(intersecting: retentionRect)
+        guard !kept.isEmpty else { return }
+        let now = CACurrentMediaTime()
+        for identifier in identifiers where visibleRows[identifier] == nil {
+            guard let index = indexByID[identifier], kept.contains(index) else { continue }
+            preparationChangedAt[identifier] = now
+        }
+    }
+
+    // MARK: - Scheduling
+
+    /// What a pass would do next, and when to look again if that is nothing
+    /// for now.
+    private struct Outlook {
+        enum Step {
+            case measure(Int)
+            case mount(Int)
+        }
+
+        var step: Step?
+        /// Set when rows are waiting on the clock: one that changed a moment
+        /// ago, the far side while the list travels, a width still settling.
+        var retryAfter: CFTimeInterval?
+
+        mutating func retry(after delay: CFTimeInterval) {
+            retryAfter = min(retryAfter ?? delay, delay)
+        }
+    }
+
+    /// Queues a pass if a row within the range is not ready.
+    ///
+    /// Called at the end of every layout pass, which is what paces the work
+    /// while the list travels: the block runs when the run loop comes round
+    /// after that pass's commit, in what is left of the frame.
+    ///
+    /// Unless that frame has already paid for a row. A scroll that outran
+    /// the range had its layout pass measure or mount what came into view,
+    /// and a step on top of that would make the frame longer than it was
+    /// without a range. The steps resume with the first frame that has room.
+    final func schedulePreparation() {
+        guard isPreparationEnabled, !isPreparationScheduled else { return }
+        let now = CACurrentMediaTime()
+        let outlook = preparationOutlook(now: now)
+        guard outlook.step != nil else {
+            if let delay = outlook.retryAfter {
+                wakePreparation(after: delay)
+            }
+            return
+        }
+        if layoutContentDepth > 0, layoutPassWorkedOnRows, isTravelling(now: now) {
+            // For the scroll that stops here, with no next frame to ask.
+            wakePreparation(after: Self.preparationTravelWindow)
+            return
+        }
+        isPreparationScheduled = true
+        RunLoop.main.perform(inModes: [.common]) { [weak self] in
+            MainActor.assumeIsolated {
+                self?.prepareRows()
+            }
+        }
+    }
+
+    /// Looks again after `delay`, unless something is already due sooner.
+    private final func wakePreparation(after delay: CFTimeInterval) {
+        let fireDate = Date(timeIntervalSinceNow: max(delay, 0.01))
+        if let pending = preparationWake, pending.isValid, pending.fireDate <= fireDate { return }
+        preparationWake?.invalidate()
+        let timer = Timer(fire: fireDate, interval: 0, repeats: false) { [weak self] _ in
+            MainActor.assumeIsolated {
+                self?.preparationWake = nil
+                self?.schedulePreparation()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        preparationWake = timer
+    }
+
+    /// Drops everything a range left behind, for when it is switched off.
+    final func endPreparation() {
+        preparationWake?.invalidate()
+        preparationWake = nil
+        preparationChangedAt.removeAll()
+        preparationReach = 0
+    }
+
+    // MARK: - The pass
+
+    /// Takes the rows within the range that are not ready a step nearer.
+    ///
+    /// A step is one row's measurement or one row's mount, and they are
+    /// separate steps on purpose: a row that costs a frame to measure and a
+    /// frame to build then costs two frames one at a time, not two at once.
+    /// A pass always takes one step and keeps stepping until its budget is
+    /// spent, see ``preparationBudget``.
+    final func prepareRows() {
+        isPreparationScheduled = false
+        preparationPassCount &+= 1
+        // A pass reached from inside a layout would mount under it.
+        guard isPreparationEnabled, layoutContentDepth == 0 else { return }
+
+        // The width has to be current first, as for any measurement.
+        rowLayout.prepareForLayout()
+        var now = CACurrentMediaTime()
+        refreshPreparationReach(now: now)
+        if !preparationChangedAt.isEmpty {
+            preparationChangedAt = preparationChangedAt.filter { now - $0.value < Self.preparationQuietPeriod }
+        }
+
+        let deadline = now + (isTravelling(now: now) ? preparationBudget.travelling : preparationBudget.resting)
+        var measuredAny = false
+        var mountedAny = false
+        var outlook = preparationOutlook(now: now)
+        while let step = outlook.step {
+            switch step {
+            case let .measure(index):
+                let dy = rowLayout.measureRow(at: index, anchoredAt: viewportRect)
+                if dy != 0 {
+                    compensateScrollOffset(by: dy)
+                }
+                measuredAny = true
+            case let .mount(index):
+                let identifier = items[index].id
+                ensureRowView(at: index)
+                // Laid out here rather than left to the commit, so what the
+                // row costs is spent, and counted, inside this step.
+                settleNewlyPlacedRows()
+                if visibleRows[identifier] == nil {
+                    // Nothing mounted it. Asked again later rather than at
+                    // once, or the pass would spin on it.
+                    preparationChangedAt[identifier] = CACurrentMediaTime()
+                } else {
+                    mountedAny = true
+                    preparedRowCount &+= 1
+                }
+            }
+            now = CACurrentMediaTime()
+            outlook = preparationOutlook(now: now)
+            if now >= deadline { break }
+        }
+
+        if measuredAny {
+            // Rows already mounted past the measured one have moved.
+            contentSize = supposedContentSize
+            requestLayout()
+        } else if mountedAny, rowAnimator != nil {
+            // A row mounted now takes the displacement its neighbours carry.
+            requestLayout()
+        }
+
+        if outlook.step != nil {
+            if isTravelling(now: now) {
+                // The next layout pass queues the next step. This is for the
+                // scroll that stops with rows still owed.
+                wakePreparation(after: Self.preparationTravelWindow)
+            } else {
+                schedulePreparation()
+            }
+        } else if let delay = outlook.retryAfter {
+            wakePreparation(after: delay)
+        }
+    }
+
+    /// The row a pass would take a step nearer next: the nearest one past the
+    /// mounted area that is not mounted, on the side the list is heading for
+    /// first.
+    private final func preparationOutlook(now: CFTimeInterval) -> Outlook {
+        var outlook = Outlook()
+        guard preparationReach > 0 else {
+            if isPreparationEnabled, isWidthChanging(now: now) {
+                outlook.retry(after: Self.preparationWidthHoldOff)
+            }
+            return outlook
+        }
+        let mounted = mountRect
+        let target = preparationRect
+
+        func nearest(in indices: some Sequence<Int>) -> Int? {
+            for index in indices {
+                let item = items[index]
+                if visibleRows[item.id] != nil { continue }
+                if let changedAt = preparationChangedAt[item.id] {
+                    let wait = Self.preparationQuietPeriod - (now - changedAt)
+                    if wait > 0 {
+                        outlook.retry(after: wait)
+                        continue
+                    }
+                }
+                // Last, because it runs the caller's conditions.
+                if registrationIndex(for: item) == nil { continue }
+                return index
+            }
+            return nil
+        }
+
+        let below = target.maxY > mounted.maxY
+            ? nearest(in: rowLayout.indices(intersecting: CGRect(
+                x: 0, y: mounted.maxY, width: 1, height: target.maxY - mounted.maxY
+            )))
+            : nil
+        let above = target.minY < mounted.minY
+            ? nearest(in: rowLayout.indices(intersecting: CGRect(
+                x: 0, y: target.minY, width: 1, height: mounted.minY - target.minY
+            )).reversed())
+            : nil
+
+        let travelling = isTravelling(now: now)
+        let chosen: Int?
+        switch (below, above) {
+        case (nil, nil):
+            chosen = nil
+        case let (below?, above?) where preparationHeading == 0:
+            // No travel seen yet: whichever is nearer.
+            let distanceBelow = (rowLayout.frame(for: below)?.minY ?? mounted.maxY) - mounted.maxY
+            let distanceAbove = mounted.minY - (rowLayout.frame(for: above)?.maxY ?? mounted.minY)
+            chosen = distanceBelow <= distanceAbove ? below : above
+        default:
+            let ahead = preparationHeading < 0 ? above : below
+            let behind = preparationHeading < 0 ? below : above
+            if let ahead {
+                chosen = ahead
+            } else if travelling, preparationHeading != 0 {
+                // The side being left can wait for the scroll to end.
+                chosen = nil
+                outlook.retry(after: Self.preparationTravelWindow)
+            } else {
+                chosen = behind
+            }
+        }
+        if let chosen {
+            outlook.step = rowLayout.isPending(at: chosen) ? .measure(chosen) : .mount(chosen)
+        }
+        return outlook
+    }
+}
