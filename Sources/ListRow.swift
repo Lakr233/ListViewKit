@@ -112,6 +112,27 @@ public struct ListRow<Item: Identifiable & Hashable & SendableMetatype, RowView:
         map { $0.heightDependsOnIndex = true }
     }
 
+    /// Does ahead of the mount, in slices, what the mount would otherwise do
+    /// in one piece.
+    ///
+    /// Called for a row within the list's ``ListView/preparationRange`` once
+    /// it is measured and before it is mounted, as a step of its own between
+    /// frames, and called again in a later step for as long as it returns
+    /// `true`. Each call is one slice of work the row's first appearance
+    /// would otherwise pay for at once, and that can be kept until then:
+    /// building the row's view, typesetting its text, decoding its image. A
+    /// row that takes twenty milliseconds to show, prepared in three slices,
+    /// is three short steps and a mount that finds the work done.
+    ///
+    /// It is not called for a row the scroll reaches first, which is mounted
+    /// in the layout pass as it always was, so the configuration must not
+    /// depend on it. It is called again from the start when the item changes
+    /// or the row has been mounted and recycled since, and at most sixteen
+    /// times a row.
+    public func prepare(_ prepare: @escaping @MainActor (Item, ListRowContext) -> Bool) -> Self {
+        map { $0.prepare = prepare }
+    }
+
     public func configure(
         _ configure: @escaping @MainActor (RowView, Item, ListRowContext) -> Void
     ) -> Self {
@@ -149,6 +170,7 @@ public struct ListRowRegistration<Item: Identifiable & Hashable & SendableMetaty
     var height: (@MainActor (Item, ListRowContext) -> CGFloat)?
     var estimatedHeight: CGFloat?
     var heightDependsOnIndex = false
+    var prepare: (@MainActor (Item, ListRowContext) -> Bool)?
     var configure: @MainActor (ListRowView, Item, ListRowContext) -> Void
 }
 

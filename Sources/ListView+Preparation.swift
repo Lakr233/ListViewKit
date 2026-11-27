@@ -183,7 +183,10 @@ extension ListView {
     /// Notes that an item changed while no row was mounted for it, so it is
     /// not made ready until it has held still.
     final func notePreparationChange(of identifier: Item.ID) {
-        guard isPreparationEnabled, visibleRows[identifier] == nil else { return }
+        guard isPreparationEnabled else { return }
+        // Whatever was prepared was prepared for the item as it was.
+        preparationSlices[identifier] = nil
+        guard visibleRows[identifier] == nil else { return }
         let now = CACurrentMediaTime()
         // Normally emptied by the passes. A list with nothing to make ready
         // runs none, so the notes of items long gone are dropped here.
@@ -196,6 +199,11 @@ extension ListView {
     /// The same for the changed items of an apply that lie within reach.
     final func notePreparationChanges(of identifiers: [Item.ID]) {
         guard isPreparationEnabled, !identifiers.isEmpty else { return }
+        if !preparationSlices.isEmpty {
+            for identifier in identifiers {
+                preparationSlices[identifier] = nil
+            }
+        }
         let kept = rowLayout.indices(intersecting: retentionRect)
         guard !kept.isEmpty else { return }
         let now = CACurrentMediaTime()
@@ -212,6 +220,8 @@ extension ListView {
     private struct Outlook {
         enum Step {
             case measure(Int)
+            /// One more call of the row's ``ListRow/prepare(_:)``.
+            case slice(Int, registration: Int)
             case mount(Int)
         }
 
@@ -278,14 +288,32 @@ extension ListView {
         preparationWake?.invalidate()
         preparationWake = nil
         preparationChangedAt.removeAll()
+        preparationSlices.removeAll()
         preparationReach = (0, 0)
+    }
+
+    /// The most slices a row is given before it is mounted regardless, so a
+    /// row that never says it is done still gets mounted, and a pass does
+    /// not spin on it.
+    static var mostPreparationSlices: Int { 16 }
+
+    /// The registration whose ``ListRow/prepare(_:)`` the row at `index` is
+    /// still owed a call of, or nil when it has none or is done.
+    private final func registrationOwedASlice(at index: Int) -> Int? {
+        let item = items[index]
+        guard (preparationSlices[item.id] ?? 0) < Self.mostPreparationSlices,
+              let registrationIndex = registrationIndex(for: item),
+              registration(registrationIndex).prepare != nil
+        else { return nil }
+        return registrationIndex
     }
 
     // MARK: - The pass
 
     /// Takes the rows within the range that are not ready a step nearer.
     ///
-    /// A step is one row's measurement or one row's mount, and they are
+    /// A step is one row's measurement, one slice of what its registration
+    /// prepares ahead (``ListRow/prepare(_:)``), or its mount, and they are
     /// separate steps on purpose: a row that costs a frame to measure and a
     /// frame to build then costs two frames one at a time, not two at once.
     /// A pass always takes one step and keeps stepping until its budget is
@@ -316,6 +344,17 @@ extension ListView {
                     compensateScrollOffset(by: dy)
                 }
                 measuredAny = true
+            case let .slice(index, registrationIndex):
+                let item = items[index]
+                let given = preparationSlices[item.id] ?? 0
+                let context = context(at: index, purpose: .display, willMount: true)
+                let wantsMore = registration(registrationIndex).prepare?(item, context) ?? false
+                preparationSlices[item.id] = wantsMore ? given + 1 : .max
+                if preparationSlices.count > 256 {
+                    // Items long gone, which no mount or change ever cleared.
+                    let indexByID = indexByID
+                    preparationSlices = preparationSlices.filter { indexByID[$0.key] != nil }
+                }
             case let .mount(index):
                 let identifier = items[index].id
                 ensureRowView(at: index)
@@ -448,7 +487,13 @@ extension ListView {
             }
         }
         if let chosen {
-            outlook.step = rowLayout.isPending(at: chosen) ? .measure(chosen) : .mount(chosen)
+            if rowLayout.isPending(at: chosen) {
+                outlook.step = .measure(chosen)
+            } else if let registrationIndex = registrationOwedASlice(at: chosen) {
+                outlook.step = .slice(chosen, registration: registrationIndex)
+            } else {
+                outlook.step = .mount(chosen)
+            }
         }
         return outlook
     }

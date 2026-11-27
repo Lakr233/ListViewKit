@@ -280,6 +280,22 @@ on; with a few viewports ahead, the rows the next scroll will cross are built
 while the list stands still. A scroll that outruns the range falls back to
 the layout pass and costs what it cost without one.
 
+A row can also split its own work. `prepare` is called for a row within the
+range once it is measured and before it is mounted, as a step of its own, and
+again in a later step for as long as it returns `true`:
+
+```swift
+ListRow(ArticleRow.self)
+    .prepare { article, context in
+        // One slice a call: build the view, then typeset it, then decode the image.
+        ArticleRow.prepareNextPart(of: article, width: context.width)   // true while more is left
+    }
+    .configure { row, article, _ in row.show(article) }   // finds the work done, or does it
+```
+
+It is not called for a row the scroll reaches first, so the configuration
+must still be able to do everything itself.
+
 A height closure is told when the row it measures is about to be mounted, in
 `context.willMount`: true for a row that has come into view or into the
 range, false for the measurements the list makes in the background for every
