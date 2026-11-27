@@ -226,6 +226,9 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     /// When each item last changed with no row mounted for it. See
     /// ``ListView/preparationQuietPeriod``.
     final var preparationChangedAt: [Item.ID: CFTimeInterval] = [:]
+    /// How many slices of ``ListRow/prepare(_:)`` each row waiting to be
+    /// mounted has been given, and `Int.max` once it has said it is done.
+    final var preparationSlices: [Item.ID: Int] = [:]
     /// Where the offset stood at the last layout pass, moved along by every
     /// compensation so that only travel is left in the difference.
     final var preparationReferenceOffsetY: CGFloat = 0
@@ -587,6 +590,7 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
         }
         visibleRows.removeAll()
         heldRows.removeAll()
+        preparationSlices.removeAll()
         rowsPendingSettle.removeAll()
         for index in reusePools.indices {
             reusePools[index].removeAll()
@@ -1479,6 +1483,10 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     @discardableResult
     open func recycleRow(with identifier: Item.ID) -> ListRowView? {
         guard let entry = visibleRows.removeValue(forKey: identifier) else { return nil }
+        // What was prepared for this mount went with it.
+        if !preparationSlices.isEmpty {
+            preparationSlices[identifier] = nil
+        }
         heldRows[identifier] = nil
         stopUnfolding(entry.view)
         // Whatever the animator was showing belonged to the item leaving, so

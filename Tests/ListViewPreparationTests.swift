@@ -28,6 +28,7 @@ private struct PreparedItem: Identifiable, Hashable {
 private final class PreparationProbe {
     enum Event: Equatable {
         case measure(Int)
+        case prepare(Int)
         case configure(Int)
     }
 
@@ -489,6 +490,105 @@ struct ListViewPreparationTests {
             RunLoop.main.run(until: Date().addingTimeInterval(0.01))
         }
         #expect(mounted(listView) == [0, 1, 2, 3, 4])
+    }
+
+    // MARK: - Slices
+
+    /// A list whose rows prepare in `slices` calls each, or for ever.
+    private func makeSlicedListView(slices: Int?, probe: PreparationProbe) -> ListView<PreparedItem> {
+        var given: [Int: Int] = [:]
+        let listView = ListView<PreparedItem>(frame: CGRect(origin: .zero, size: Self.viewport))
+        listView.estimatedRowHeight = Self.rowHeight
+        listView.rows {
+            ListRow(PreparedRow.self)
+                .height { item, _ in
+                    probe.events.append(.measure(item.id))
+                    return Self.rowHeight
+                }
+                .prepare { item, context in
+                    probe.events.append(.prepare(item.id))
+                    #expect(context.willMount)
+                    given[item.id, default: 0] += 1
+                    guard let slices else { return true }
+                    return given[item.id, default: 0] % slices != 0
+                }
+                .configure { row, item, _ in
+                    probe.events.append(.configure(item.id))
+                    row.revision = item.revision
+                }
+        }
+        listView.preparationRange = .points(200)
+        listView.preparationBudget.travelling = 0
+        listView.apply((0 ..< 200).map { PreparedItem(id: $0) })
+        layout(listView)
+        return listView
+    }
+
+    /// Runs travelling passes, a step each, and returns what each one did.
+    private func steps(_ listView: ListView<PreparedItem>, probe: PreparationProbe, upTo limit: Int = 60) -> [PreparationProbe.Event] {
+        var steps: [PreparationProbe.Event] = []
+        for _ in 0 ..< limit {
+            probe.events.removeAll()
+            listView.lastPreparationTravelAt = CACurrentMediaTime()
+            listView.schedulePreparation()
+            guard listView.isPreparationScheduled else { break }
+            listView.prepareRows()
+            #expect(probe.events.count == 1, "one pass took \(probe.events)")
+            steps += probe.events
+            layout(listView)
+        }
+        probe.events.removeAll()
+        return steps
+    }
+
+    @Test("what a registration prepares ahead runs in slices of its own, between the measurement and the mount")
+    func preparationRunsInSlices() {
+        let probe = PreparationProbe()
+        let listView = makeSlicedListView(slices: 3, probe: probe)
+        #expect(!probe.events.contains { if case .prepare = $0 { true } else { false } },
+                "a row the layout pass mounts is not prepared first")
+
+        #expect(steps(listView, probe: probe) == [
+            .measure(3), .prepare(3), .prepare(3), .prepare(3), .configure(3),
+            .measure(4), .prepare(4), .prepare(4), .prepare(4), .configure(4),
+        ])
+    }
+
+    @Test("a row that never says it is done is mounted after sixteen slices")
+    func preparationThatNeverEndsIsCutShort() {
+        let probe = PreparationProbe()
+        let listView = makeSlicedListView(slices: nil, probe: probe)
+        let taken = steps(listView, probe: probe, upTo: 18)
+        #expect(taken == [.measure(3)] + Array(repeating: .prepare(3), count: 16) + [.configure(3)])
+    }
+
+    @Test("a row mounted and recycled since is prepared again from the start")
+    func aRecycledRowIsPreparedAgain() {
+        let probe = PreparationProbe()
+        let listView = makeSlicedListView(slices: 2, probe: probe)
+        settle(listView)
+        probe.events.removeAll()
+
+        scroll(listView, to: 3000)
+        settle(listView)
+        scroll(listView, to: 0)
+        probe.events.removeAll()
+        settle(listView)
+        #expect(probe.events == [.prepare(3), .prepare(3), .configure(3), .prepare(4), .prepare(4), .configure(4)])
+    }
+
+    @Test("a change starts a row's preparation over")
+    func aChangeStartsPreparationOver() {
+        let probe = PreparationProbe()
+        // Rows that never say they are done, so the count is the list's own.
+        let listView = makeSlicedListView(slices: nil, probe: probe)
+        #expect(steps(listView, probe: probe, upTo: 4) == [.measure(3), .prepare(3), .prepare(3), .prepare(3)])
+
+        listView.update(PreparedItem(id: 3, revision: 1))
+        listView.preparationChangedAt[3] = CACurrentMediaTime() - 1
+        // All sixteen again, not the thirteen that were left.
+        #expect(steps(listView, probe: probe, upTo: 18)
+            == [.measure(3)] + Array(repeating: .prepare(3), count: 16) + [.configure(3)])
     }
 
     // MARK: - Ahead and behind
