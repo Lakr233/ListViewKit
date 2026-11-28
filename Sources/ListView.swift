@@ -176,11 +176,13 @@ open class ListView<Item: Identifiable & Hashable & SendableMetatype>: ListScrol
     ///
     /// Rows made ready are mounted: ``rowView(for:)`` and
     /// ``visibleRowViews`` return them, and they stay mounted until they are
-    /// a quarter of a viewport past the range. Three things are left out on
+    /// a quarter of a viewport past the range. Four things are left out on
     /// purpose. A row that changes while it is kept past the viewport is let
     /// go and made ready again once it has held still, so a reply being
     /// written is not typeset where nobody is looking. A removed one leaves
-    /// without an animation. And while the width changes the range is
+    /// without an animation. A ``rowAnimator`` is not handed one until it
+    /// comes within the animator's reach of the viewport, so it arrives as a
+    /// row mounted on arrival does. And while the width changes the range is
     /// dropped altogether, since every mounted row is laid out again on each
     /// step of a resize; it comes back once the width holds.
     public final var preparationRange: ListPreparationRange = .none {

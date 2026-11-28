@@ -61,6 +61,27 @@ private final class PreparedRow: ListRowView {
     #endif
 }
 
+/// Lags every row it is handed by the same distance, and says which rows it
+/// was handed.
+@MainActor
+private final class OfferedRowsAnimator: ListRowAnimator {
+    static let lag: CGFloat = 10
+
+    var offered: Set<Int> = []
+    var maximumDisplacement: CGFloat { 50 }
+    var wantsNextFrame: Bool { false }
+
+    func willUpdate(_: ListAnimatorContext) {}
+
+    func update(row: ListRowView, at index: Int, frame _: CGRect, in _: ListAnimatorContext) {
+        offered.insert(index)
+        row.setPresentationOffset(Self.lag)
+    }
+
+    func rebase(byContentOffset _: CGFloat) {}
+    func reset() {}
+}
+
 /// Hands each item its own row back, as a list that keeps expensive rows
 /// instead of pooling them does.
 @MainActor
@@ -976,6 +997,86 @@ struct ListViewPreparationTests {
         listView.lastWidthChangeAt = 0
         settle(listView)
         #expect(mounted(listView) == [0, 1, 2, 3, 4])
+    }
+
+    // MARK: - Row animators
+
+    @Test("a row kept ready past the mounted area is not handed to the row animator")
+    func rowsKeptReadyAreNotHandedToTheAnimator() throws {
+        let animator = OfferedRowsAnimator()
+        let listView = makeListView()
+        // Pinned so a host with Reduce Motion on, as CI runners are, still animates.
+        listView.reducedMotionOverride = false
+        listView.rowAnimator = animator
+        settle(listView)
+        // The animator's reach mounts row 3; the range past it, rows 4 and 5.
+        #expect(mounted(listView) == [0, 1, 2, 3, 4, 5])
+
+        animator.offered = []
+        layout(listView)
+        #expect(animator.offered == [0, 1, 2, 3])
+        for id in 0 ... 3 {
+            #expect(try #require(listView.rowView(for: id)).presentationOffset == OfferedRowsAnimator.lag)
+        }
+        for id in 4 ... 5 {
+            #expect(try #require(listView.rowView(for: id)).presentationOffset == 0)
+        }
+    }
+
+    @Test("a row that leaves the mounted area for the range is put back where the layout has it")
+    func aRowLeavingForTheRangeGivesUpItsDisplacement() throws {
+        let animator = OfferedRowsAnimator()
+        let listView = makeListView()
+        listView.reducedMotionOverride = false
+        listView.rowAnimator = animator
+        settle(listView)
+        let leaving = try #require(listView.rowView(for: 1))
+        #expect(leaving.presentationOffset == OfferedRowsAnimator.lag)
+
+        // The mounted area is now 350 to 750: rows 0 to 2 are behind it,
+        // and the range keeps them.
+        animator.offered = []
+        scroll(listView, to: 400)
+        #expect(listView.rowView(for: 1) === leaving)
+        #expect(leaving.presentationOffset == 0)
+        #expect(animator.offered == [3, 4, 5, 6, 7])
+
+        // Back within the animator's reach, it is handed over again.
+        animator.offered = []
+        scroll(listView, to: 100)
+        #expect(animator.offered.contains(1))
+        #expect(leaving.presentationOffset == OfferedRowsAnimator.lag)
+    }
+
+    @Test("the bounce forgets a row that leaves for the range, and meets it again at rest")
+    func theBounceMeetsAReturningRowAtRest() throws {
+        let listView = makeListView(count: 200)
+        listView.reducedMotionOverride = false
+        listView.rowAnimator = ListBouncyAnimator()
+        settle(listView)
+        let bounce = try #require(listView.rowAnimator as? ListBouncyAnimator)
+        let first = try #require(listView.rowView(for: 0))
+        // The bounce reaches 200 points, so rows 0 to 4 are its own; rows 5
+        // and 6 are only kept ready, and it has never seen them.
+        #expect(mounted(listView) == [0, 1, 2, 3, 4, 5, 6])
+        #expect(Set(bounce.board.attachments.keys) == Set(try (0 ... 4).map { try #require(listView.rowView(for: $0)).mountID }))
+
+        // 300 points of travel stretch every row the bounce holds. Row 0 is
+        // behind the mounted area by then, kept by the range.
+        scroll(listView, to: 300)
+        #expect(listView.rowView(for: 0) === first)
+        #expect(first.presentationOffset == 0)
+        #expect(bounce.board.attachments[first.mountID] == nil)
+        let neighbour = try #require(listView.rowView(for: 1))
+        #expect(neighbour.presentationOffset != 0, "the rows still in the mounted area were stretched")
+
+        // Coming back, it is a row the bounce has not met: at rest, beside
+        // rows that are still unwinding.
+        scroll(listView, to: 250)
+        #expect(listView.rowView(for: 0) === first)
+        #expect(bounce.board.attachments[first.mountID] != nil)
+        #expect(first.presentationOffset == 0)
+        #expect(neighbour.presentationOffset != 0)
     }
 
     // MARK: - Subclasses
