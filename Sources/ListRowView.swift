@@ -30,6 +30,11 @@
         /// Which showing of an item this is. See ``ListRowView/beginMount()``.
         var mountID = 0
 
+        /// Whether the row animator has been handed this row since it was
+        /// mounted or last left the mounted area, and so may hold state for
+        /// it.
+        var isOfferedToRowAnimator = false
+
         /// Called before this row is filled in, including the first time and
         /// including a row already on screen. Clear transient state here:
         /// text, images, menus, callbacks, in-flight requests. Must be
@@ -90,6 +95,11 @@
         /// Which showing of an item this is. See ``ListRowView/beginMount()``.
         var mountID = 0
 
+        /// Whether the row animator has been handed this row since it was
+        /// mounted or last left the mounted area, and so may hold state for
+        /// it.
+        var isOfferedToRowAnimator = false
+
         /// Called before this row is filled in, including the first time and
         /// including a row already on screen. Clear transient state here:
         /// text, images, menus, callbacks, in-flight requests. Must be
@@ -141,5 +151,6 @@ extension ListRowView {
     func beginMount() {
         Self.lastMountID &+= 1
         mountID = Self.lastMountID
+        isOfferedToRowAnimator = false
     }
 }

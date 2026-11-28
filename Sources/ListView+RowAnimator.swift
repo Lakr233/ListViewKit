@@ -218,9 +218,16 @@ extension ListView {
         let wasRunning = isDrivingRowAnimator
         isDrivingRowAnimator = true
         defer { isDrivingRowAnimator = wasRunning }
+        // Read once: the answer is the same for every row of the pass.
+        let keepsRowsReady = isPreparing
         withoutListAnimation {
             for (identifier, entry) in visibleRows {
                 guard let index = indexByID[identifier] else { continue }
+                if keepsRowsReady, isKeptOnlyForPreparation(entry.view, at: index, identifier: identifier) {
+                    leaveRowToItsPlacement(entry.view)
+                    continue
+                }
+                entry.view.isOfferedToRowAnimator = true
                 animator.update(
                     row: entry.view,
                     at: index,
@@ -229,6 +236,30 @@ extension ListView {
                 )
             }
         }
+    }
+
+    /// Keeps a row the list only holds ready out of the animator's hands.
+    ///
+    /// Such a row stands further from the viewport than the animator may
+    /// displace one, so nothing it did to the row could be seen, and without
+    /// a ``preparationRange`` the row would not be mounted to be offered at
+    /// all. Offering it anyway cost a call and a transform per row per frame
+    /// for several screens of rows, and it changed what the reader saw: an
+    /// animator that grades its effect by distance had been stretching the
+    /// row the whole time it waited, and the row came into view carrying
+    /// that stretch where a row mounted on arrival comes in at rest.
+    ///
+    /// So it is left where the layout put it and the animator forgets it,
+    /// which makes its arrival in the mounted area the same event a mount
+    /// is. Reached only by rows that are not animated, so the two checks
+    /// are all a pass pays for one.
+    private func leaveRowToItsPlacement(_ row: ListRowView) {
+        guard row.presentationOffset != 0 || row.isOfferedToRowAnimator else { return }
+        if row.presentationOffset != 0 {
+            setRowPresentationOffset(0, on: row)
+        }
+        row.isOfferedToRowAnimator = false
+        forgetRowAnimation(of: row)
     }
 
     /// Returns a row to its placement, for when it stops being displaced by

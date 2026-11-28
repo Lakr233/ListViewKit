@@ -307,13 +307,16 @@ Rows made ready are mounted: `rowView(for:)` and `visibleRowViews` return them,
 while `indicesForVisibleRows` still reports the viewport. They stay mounted
 until they are a quarter of a viewport past the range, so the range is also
 how much the list keeps: `.viewports(ahead: 3, behind: 1)` holds five screens
-of rows where the default holds one. Three things are left out on purpose:
+of rows where the default holds one. Four things are left out on purpose:
 
 - A row that changes while it is kept past the viewport is recycled, and made
   ready again once it has held still for a quarter of a second. A reply being
   written is not typeset where nobody is looking.
 - A row removed there leaves without an animation, as one that was never
   mounted does.
+- A `rowAnimator` is not handed a row there. The row stands further from the
+  viewport than the animator may displace one, and it is handed over once it
+  comes within that distance, at rest, as a row mounted on arrival is.
 - While the width changes the range is dropped: every mounted row is laid out
   again on each step of a resize, and rows kept past the viewport would
   multiply exactly that. It comes back once the width has held still.

@@ -47,6 +47,12 @@ public protocol ListRowAnimator {
     /// change and rows mounted moments ago. `frame` is where the list placed
     /// the row, which is also ``ListRowView/placedFrame``.
     ///
+    /// One kind of mounted row is left out: a row the list only keeps ready
+    /// past the mounted area (``ListView/preparationRange``). It stands
+    /// further from the viewport than ``maximumDisplacement``, and it is
+    /// handed over from the pass in which it comes within that distance, as
+    /// a row mounted there would be.
+    ///
     /// Not called inside the list's own animations: a displacement is
     /// rewritten every frame and has nothing to interpolate towards.
     func update(row: ListRowView, at index: Int, frame: CGRect, in context: ListAnimatorContext)
